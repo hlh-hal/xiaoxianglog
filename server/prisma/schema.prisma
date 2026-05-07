@@ -1,0 +1,295 @@
+// Prisma Schema - 小象日志数据库
+// 使用 SQLite 作为 MVP 阶段数据库，可通过修改 datasource 迁移到 PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// 1. 用户表
+// ============================================
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  nickname     String
+  passwordHash String   @map("password_hash")
+  avatarUrl    String?  @map("avatar_url")
+  bio          String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // 关联
+  entries       DiaryEntry[]
+  templates     DiaryTemplate[]
+  editHistories EditHistory[]
+  chatSessions  ChatSession[]
+  customFonts   CustomFont[]
+  posts         CommunityPost[]
+  postLikes     PostLike[]
+  postComments  PostComment[]
+  postCommentLikes PostCommentLike[]
+
+  // 排行榜点赞
+  receivedLeaderboardLikes LeaderboardLike[] @relation("ReceivedLeaderboardLikes")
+  givenLeaderboardLikes    LeaderboardLike[] @relation("GivenLeaderboardLikes")
+
+  // 好友关系（作为发起者）
+  sentRequests     Friendship[] @relation("Requester")
+  // 好友关系（作为接收者）
+  receivedRequests Friendship[] @relation("Addressee")
+
+  // 通知（作为接收者）
+  notifications     Notification[] @relation("NotifReceiver")
+  // 通知（作为发送者）
+  sentNotifications Notification[] @relation("NotifSender")
+
+  @@map("users")
+}
+
+// ============================================
+// 2. 日记条目表
+// ============================================
+model DiaryEntry {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  title       String?
+  content     String   @default("")
+  diaryDate   String   @map("diary_date") // 格式: YYYY-MM-DD
+  status      String   @default("active") // active | draft | trashed
+  trashReason String?  @map("trash_reason") // deleted | abandoned
+  trashedAt   DateTime? @map("trashed_at")
+  isPinned    Boolean  @default(false) @map("is_pinned")
+  isHidden    Boolean  @default(false) @map("is_hidden")
+  mood        String?
+  weather     String?
+  tags        String?  // JSON 字符串: ["tag1", "tag2"]
+  themeId     String?  @map("theme_id")
+  images      String?  // JSON 字符串: ["url1", "url2"]
+  syncVersion Int      @default(0) @map("sync_version") // 乐观锁
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // 关联
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  histories EditHistory[]
+  posts     CommunityPost[]
+
+  @@index([userId, status])
+  @@index([userId, diaryDate])
+  @@map("diary_entries")
+}
+
+// ============================================
+// 3. 日记模板表
+// ============================================
+model DiaryTemplate {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id") // NULL = 系统模板
+  title     String
+  content   String
+  isSystem  Boolean  @default(false) @map("is_system")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("diary_templates")
+}
+
+// ============================================
+// 4. 编辑历史表
+// ============================================
+model EditHistory {
+  id      String   @id @default(uuid())
+  entryId String   @map("entry_id")
+  userId  String   @map("user_id")
+  content String
+  images  String?  // JSON 字符串
+  summary String?
+  savedAt DateTime @default(now()) @map("saved_at")
+
+  entry DiaryEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([entryId, savedAt])
+  @@map("edit_histories")
+}
+
+// ============================================
+// 5. AI 聊天会话表
+// ============================================
+model ChatSession {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  title     String?
+  styleId   String?  @map("style_id")
+  pinned    Boolean  @default(false)
+  messages  String   @default("[]") // JSON 字符串: ChatMessage[]
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAt])
+  @@map("chat_sessions")
+}
+
+// ============================================
+// 6. 自定义字体表
+// ============================================
+model CustomFont {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  label      String
+  fontFamily String   @map("font_family")
+  fileUrl    String   @map("file_url")
+  fileName   String?  @map("file_name")
+  fileSize   Int?     @map("file_size")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("custom_fonts")
+}
+
+// ============================================
+// 7. 社区帖子表
+// ============================================
+model CommunityPost {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  entryId   String?  @map("entry_id") // 关联的日记（可选）
+  content   String
+  images    String?  // JSON 字符串
+  viewCount Int      @default(0) @map("view_count")
+  readCount Int      @default(0) @map("read_count")
+  status    String   @default("published") // published | hidden | deleted
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entry    DiaryEntry?   @relation(fields: [entryId], references: [id], onDelete: SetNull)
+  likes    PostLike[]
+  comments PostComment[]
+
+  @@index([createdAt])
+  @@index([userId])
+  @@map("community_posts")
+}
+
+// ============================================
+// 8. 帖子点赞表
+// ============================================
+model PostLike {
+  id        String   @id @default(uuid())
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId]) // 防止重复点赞
+  @@map("post_likes")
+}
+
+// ============================================
+// 9. 帖子评论表
+// ============================================
+model PostComment {
+  id        String   @id @default(uuid())
+  postId    String   @map("post_id")
+  userId    String   @map("user_id")
+  content   String
+  parentId  String?  @map("parent_id") // 楼中楼回复
+  likes     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  post   CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent PostComment?  @relation("CommentReplies", fields: [parentId], references: [id])
+  replies PostComment[] @relation("CommentReplies")
+  likedBy PostCommentLike[]
+
+  @@index([postId, createdAt])
+  @@map("post_comments")
+}
+
+// ============================================
+// 10. 评论点赞表
+// ============================================
+model PostCommentLike {
+  id        String   @id @default(uuid())
+  commentId String   @map("comment_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  comment PostComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId])
+  @@index([userId])
+  @@map("post_comment_likes")
+}
+
+// ============================================
+// 11. 好友关系表
+// ============================================
+model Friendship {
+  id          String   @id @default(uuid())
+  requesterId String  @map("requester_id")
+  addresseeId String  @map("addressee_id")
+  status      String  @default("pending") // pending | accepted | declined | blocked
+  note        String? // 申请附言
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  requester User @relation("Requester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee User @relation("Addressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, addresseeId])
+  @@index([addresseeId, status])
+  @@map("friendships")
+}
+
+// ============================================
+// 11. 通知表
+// ============================================
+model Notification {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")     // 接收者
+  fromUserId String?  @map("from_user_id") // 发送者
+  type       String   // friend_request | like | comment | poke | system
+  content    String?
+  refPostId  String?  @map("ref_post_id")
+  refDiaryId String?  @map("ref_diary_id")
+  isRead     Boolean  @default(false) @map("is_read")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  receiver User  @relation("NotifReceiver", fields: [userId], references: [id], onDelete: Cascade)
+  sender   User? @relation("NotifSender", fields: [fromUserId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isRead, createdAt])
+  @@map("notifications")
+}
+
+// ============================================
+// 12. 排行榜点赞表
+// ============================================
+model LeaderboardLike {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")      // 被点赞人
+  fromUserId String   @map("from_user_id") // 点赞人
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user     User @relation("ReceivedLeaderboardLikes", fields: [userId], references: [id], onDelete: Cascade)
+  fromUser User @relation("GivenLeaderboardLikes", fields: [fromUserId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fromUserId]) // 同一人对另一人只能点赞一次
+  @@map("leaderboard_likes")
+}

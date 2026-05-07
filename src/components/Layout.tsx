@@ -1,0 +1,704 @@
+import React, { useState, useEffect } from 'react';
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { 
+  Menu, Search, MoreVertical, BookOpen, Compass, User, 
+  Image as ImageIcon, Footprints, History, Moon, Sun, Cloud, 
+  Trash2, Settings, HelpCircle, Plus, ChevronLeft, ChevronRight,
+  Check, X
+} from 'lucide-react';
+import { cn } from '../lib/utils';
+import { startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, isToday, addMonths, subMonths, format } from 'date-fns';
+import { zhCN } from 'date-fns/locale';
+import { motion, AnimatePresence } from 'motion/react';
+import { diaryService } from '../services/diaryService';
+import { getDailyQuote } from '../utils/quotes';
+import { useTheme } from '../contexts/ThemeContext';
+import { useAuth } from '../contexts/AuthContext';
+import { UserAvatar } from './UserAvatar';
+
+export type ListStyle = 'timeline' | 'card_flow' | 'briefing' | 'magazine';
+
+export default function Layout() {
+  const { isDark, toggleTheme } = useTheme();
+  const { user } = useAuth();
+  const isLoggedIn = !!user;
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const [isDrawerOpen, setIsDrawerOpen] = useState(() => {
+    const state = location.state as any;
+    return !!(state && state.drawerOpen);
+  });
+  const [disableDrawerTransition, setDisableDrawerTransition] = useState(false);
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const lastDrawerOpenTime = React.useRef<number>(0);
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [journalDates, setJournalDates] = useState<Set<string>>(new Set());
+
+  // Menu and List Style State
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isStyleSheetOpen, setIsStyleSheetOpen] = useState(false);
+  const [listStyle, setListStyle] = useState<ListStyle>(() => {
+    return (localStorage.getItem('diary_list_style') as ListStyle) || 'timeline';
+  });
+
+  const handleCloseDrawer = () => {
+    setIsDrawerOpen(false);
+    const state = location.state as any;
+    if (state && state.drawerOpen) {
+      const newState = { ...state };
+      delete newState.drawerOpen;
+      navigate(location.pathname + location.search + location.hash, {
+        replace: true,
+        state: Object.keys(newState).length > 0 ? newState : null
+      });
+    }
+  };
+
+  const toggleDrawer = () => {
+    if (isDrawerOpen) {
+      handleCloseDrawer();
+    } else {
+      setIsDrawerOpen(true);
+    }
+  };
+  const toggleCalendar = () => setIsCalendarOpen(!isCalendarOpen);
+  const closeDrawer = () => handleCloseDrawer();
+
+  const handleNavClick = (e: React.MouseEvent, path: string) => {
+    if (location.pathname === path) {
+      e.preventDefault();
+      handleCloseDrawer();
+    }
+  };
+
+  const handleAvatarClick = () => {
+    // Let the route change close the drawer if it's a new page
+    handleCloseDrawer();
+    
+    if (isLoggedIn) {
+      navigate('/profile/edit');
+    } else {
+      navigate('/login');
+    }
+  };
+
+  // Header 区域颜色
+  const drawerHeaderColors = {
+    bg: isDark ? '#1C1C1E' : '#FFFFFF',
+    border: isDark ? '#3A3A3C' : '#F2F2F7',
+    appName: isDark ? '#F2F2F7' : '#1C1C1E',
+    quote: isDark ? '#636366' : '#A1A1A6',
+    avatarBg: isDark ? '#3A3A3C' : '#F2F2F7',
+    avatarIcon: isDark ? '#8E8E93' : '#A1A1A6',
+  };
+
+  // 抽屉打开时锁定 body 滚动
+  useEffect(() => {
+    if (isDrawerOpen) {
+      document.body.style.overflow = 'hidden';
+      document.body.style.touchAction = 'none';
+    } else {
+      document.body.style.overflow = '';
+      document.body.style.touchAction = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+      document.body.style.touchAction = '';
+    };
+  }, [isDrawerOpen]);
+
+  // Ensure drawer and menus map state on navigation without visual flash
+  React.useLayoutEffect(() => {
+    const state = location.state as any;
+    const shouldOpenFromSession = sessionStorage.getItem('openDrawerOnNextMount') === 'true';
+    if (shouldOpenFromSession) sessionStorage.removeItem('openDrawerOnNextMount');
+
+    if (shouldOpenFromSession || (state && state.drawerOpen)) {
+      setDisableDrawerTransition(true);
+      setIsDrawerOpen(true);
+      lastDrawerOpenTime.current = Date.now();
+      
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setDisableDrawerTransition(false);
+        });
+      });
+    } else {
+      setIsDrawerOpen(false);
+    }
+    setIsMenuOpen(false);
+    setIsStyleSheetOpen(false);
+  }, [location.pathname, location.state]);
+
+  useEffect(() => {
+    if (isCalendarOpen) {
+      diaryService.getActiveEntries().then(data => {
+        const dates = new Set(data.map(j => format(new Date(j.diaryDate), 'yyyy-MM-dd')));
+        setJournalDates(dates);
+      });
+    }
+  }, [isCalendarOpen]);
+
+  const handleDragEnd = (e: any, info: any) => {
+    if (info.offset.x > 50) {
+      setCurrentMonth(subMonths(currentMonth, 1));
+    } else if (info.offset.x < -50) {
+      setCurrentMonth(addMonths(currentMonth, 1));
+    }
+  };
+
+  const handleStyleChange = (style: ListStyle) => {
+    setListStyle(style);
+    localStorage.setItem('diary_list_style', style);
+    setIsStyleSheetOpen(false);
+  };
+
+  const monthStart = startOfMonth(currentMonth);
+  const monthEnd = endOfMonth(monthStart);
+  const startDate = startOfWeek(monthStart, { weekStartsOn: 1 });
+  const endDate = endOfWeek(monthEnd, { weekStartsOn: 1 });
+  const days = eachDayOfInterval({ start: startDate, end: endDate });
+
+  const navItems = [
+    { path: '/', icon: BookOpen, label: '首页' },
+    { path: '/community', icon: Compass, label: '日志圈' },
+    { path: '/profile', icon: User, label: '我的' },
+  ];
+
+  const styleOptions: { id: ListStyle; name: string; preview: string }[] = [
+    { id: 'timeline', name: '时间轴模式', preview: 'bg-surface-container-high border-l-2 border-primary' },
+    { id: 'card_flow', name: '卡片流模式', preview: 'bg-surface-container-high rounded-xl' },
+    { id: 'briefing', name: '简报模式', preview: 'bg-surface-container-high border-b border-outline-variant/30' },
+    { id: 'magazine', name: '杂志模式', preview: 'bg-surface-container-high rounded-xl overflow-hidden' },
+  ];
+
+  return (
+    <div className="min-h-screen bg-surface text-on-surface font-body selection:bg-secondary-container">
+      {/* Paper Texture Overlay */}
+      <div className="fixed inset-0 paper-texture z-[-1]"></div>
+
+      {/* Top App Bar (Only on Home) */}
+      {location.pathname === '/' && (
+        <header 
+          className="sticky top-0 left-0 w-full z-40 flex items-center justify-between bg-surface/80 backdrop-blur-md"
+          style={{
+            minHeight: '56px',
+            paddingTop: 'max(env(safe-area-inset-top), 12px)',
+            paddingBottom: '10px',
+            paddingLeft: '16px',
+            paddingRight: '16px',
+          }}
+        >
+          <div className="flex items-center">
+            <button 
+              onClick={toggleDrawer}
+              className="hover:bg-surface-container-high transition-colors duration-300"
+              style={{
+                width: '40px',
+                height: '40px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '10px',
+              }}
+            >
+              <Menu className="w-6 h-6 text-primary" />
+            </button>
+          </div>
+          
+          <div 
+            onClick={toggleCalendar}
+            className="flex items-center justify-center gap-1.5 rounded-full border border-outline-variant/30 bg-surface-container-lowest/50 cursor-pointer hover:bg-surface-container-lowest transition-all duration-300 active:scale-95 shadow-sm"
+            style={{
+              height: '36px',
+              padding: '0 16px',
+              minWidth: '72px',
+            }}
+          >
+            <h1 className="font-headline font-medium tracking-tight text-base text-primary">
+              {format(currentMonth, 'M月', { locale: zhCN })}
+            </h1>
+          </div>
+
+          <div className="flex items-center gap-1 relative">
+            <button 
+              onClick={() => navigate('/search')}
+              className="hover:bg-surface-container-high transition-colors duration-300"
+              style={{
+                width: '40px',
+                height: '40px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '10px',
+              }}
+            >
+              <Search className="w-5 h-5 text-primary" />
+            </button>
+            <button 
+              onClick={() => navigate('/ai-chat')}
+              className="hover:bg-surface-container-high transition-colors duration-300 relative group"
+              style={{
+                width: '40px',
+                height: '40px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '10px',
+              }}
+            >
+              <svg 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2" 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                className="w-5 h-5 text-primary transition-transform duration-300 group-hover:scale-110"
+              >
+                {/* Floating small spark */}
+                <path 
+                  d="M6 3 C6 3.5 6.5 4 7 4 C6.5 4 6 4.5 6 5 C6 4.5 5.5 4 5 4 C5.5 4 6 3.5 6 3 Z" 
+                  fill="currentColor" 
+                  stroke="none" 
+                  className="animate-pulse"
+                  style={{ animationDelay: '0.8s', animationDuration: '3s' }}
+                />
+                
+                {/* Letter A */}
+                <path d="M4 20L9 7L14 20" />
+                <path d="M5.5 15.5H12.5" />
+                
+                {/* Letter i */}
+                <path d="M19 20V12" />
+                
+                {/* Sparkle replacing dot of 'i' */}
+                <path 
+                  d="M19 5 C19 6.5 20 7.5 21.5 7.5 C20 7.5 19 8.5 19 10 C19 8.5 18 7.5 16.5 7.5 C18 7.5 19 6.5 19 5 Z" 
+                  fill="currentColor" 
+                  stroke="none" 
+                  className="animate-pulse" 
+                  style={{ transformOrigin: '19px 7.5px', animationDuration: '2s' }}
+                />
+              </svg>
+            </button>
+            <button 
+              onClick={() => setIsMenuOpen(true)}
+              className="hover:bg-surface-container-high transition-colors duration-300"
+              style={{
+                width: '40px',
+                height: '40px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '10px',
+              }}
+            >
+              <MoreVertical className="w-5 h-5 text-primary" />
+            </button>
+
+            {/* Floating Dropdown Menu */}
+            <AnimatePresence>
+              {isMenuOpen && (
+                <>
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="fixed inset-0 z-[80]" 
+                    onClick={() => setIsMenuOpen(false)}
+                  ></motion.div>
+                  <motion.div 
+                    initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                    transition={{ duration: 0.15, ease: "easeOut" }}
+                    className="absolute top-12 right-0 w-44 bg-surface-container-lowest rounded-2xl shadow-xl z-[90] py-1 border border-outline-variant/20 overflow-hidden origin-top-right"
+                  >
+                    <div className="flex flex-col">
+                      <button 
+                        onClick={() => { setIsMenuOpen(false); navigate('/settings'); }}
+                        className="flex items-center px-4 py-3.5 hover:bg-surface-container active:bg-surface-container-high transition-colors duration-200"
+                      >
+                        <span className="font-headline text-[15px] text-on-surface">设置</span>
+                      </button>
+                      <div className="h-[1px] bg-outline-variant/20 mx-4"></div>
+                      <button 
+                        onClick={() => { setIsMenuOpen(false); setIsStyleSheetOpen(true); }}
+                        className="flex items-center px-4 py-3.5 hover:bg-surface-container active:bg-surface-container-high transition-colors duration-200"
+                      >
+                        <span className="font-headline text-[15px] text-on-surface">列表样式</span>
+                      </button>
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+        </header>
+      )}
+
+      {/* Calendar Overlay */}
+      <AnimatePresence>
+        {isCalendarOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex flex-col items-center pt-[72px]"
+          >
+            <div 
+              className="absolute inset-0 bg-on-surface/20 -z-10"
+              onClick={toggleCalendar}
+            ></div>
+            <motion.div 
+              initial={{ y: -20, opacity: 0, scale: 0.95 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: -20, opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+              className="w-[90%] max-w-md bg-surface-container-lowest rounded-2xl shadow-[0_20px_40px_rgba(47,52,46,0.06)] p-6"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <button onClick={() => setCurrentMonth(subMonths(currentMonth, 1))} className="p-2 hover:bg-surface-container rounded-full transition-colors">
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                <span className="text-lg font-medium tracking-tight">{format(currentMonth, 'yyyy年M月', { locale: zhCN })}</span>
+                <button onClick={() => setCurrentMonth(addMonths(currentMonth, 1))} className="p-2 hover:bg-surface-container rounded-full transition-colors">
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              </div>
+              
+              <div className="grid grid-cols-7 mb-2">
+                <div className="text-center text-xs text-on-surface-variant py-2">一</div>
+                <div className="text-center text-xs text-on-surface-variant py-2">二</div>
+                <div className="text-center text-xs text-on-surface-variant py-2">三</div>
+                <div className="text-center text-xs text-on-surface-variant py-2">四</div>
+                <div className="text-center text-xs text-on-surface-variant py-2">五</div>
+                <div className="text-center text-xs text-on-surface-variant py-2">六</div>
+                <div className="text-center text-xs text-on-surface-variant py-2 text-error/60">日</div>
+              </div>
+              
+              <motion.div 
+                drag="x"
+                dragConstraints={{ left: 0, right: 0 }}
+                dragElastic={0.2}
+                onDragEnd={handleDragEnd}
+                className="grid grid-cols-7 gap-y-1"
+              >
+                {days.map(day => {
+                  const isSelected = selectedDate && isSameDay(day, selectedDate);
+                  const isTodayDate = isToday(day);
+                  const hasEntry = journalDates.has(format(day, 'yyyy-MM-dd'));
+                  const isCurrentMonth = isSameMonth(day, currentMonth);
+
+                  return (
+                    <div 
+                      key={day.toString()} 
+                      className="h-12 flex flex-col items-center justify-center relative cursor-pointer"
+                      onClick={() => {
+                        if (isSelected) {
+                          setSelectedDate(null);
+                        } else {
+                          setSelectedDate(day);
+                        }
+                        setIsCalendarOpen(false);
+                      }}
+                    >
+                      {isSelected && <div className="absolute inset-0 m-1.5 bg-primary rounded-full"></div>}
+                      {!isSelected && isTodayDate && <div className="absolute inset-0 m-1.5 bg-primary-container rounded-full"></div>}
+                      
+                      <span className={cn(
+                        "text-sm relative z-10",
+                        !isCurrentMonth && "text-outline-variant/40",
+                        isSelected && "text-on-primary",
+                        !isSelected && isTodayDate && "text-on-primary-container font-bold"
+                      )}>
+                        {format(day, 'd')}
+                      </span>
+                      
+                      {hasEntry && (
+                        <div className={cn(
+                          "w-1 h-1 rounded-full mt-0.5 relative z-10",
+                          isSelected ? "bg-on-primary/60" : "bg-primary/40"
+                        )}></div>
+                      )}
+                    </div>
+                  );
+                })}
+              </motion.div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Drawer Overlay */}
+      {isDrawerOpen && (
+        <div 
+          className="fixed inset-0 bg-on-surface/20 z-50 md:hidden animate-in fade-in duration-300"
+          onClick={(e) => {
+            // Prevent ghost clicks
+            if (Date.now() - lastDrawerOpenTime.current < 400) {
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+            toggleDrawer();
+          }}
+          onTouchMove={(e) => e.preventDefault()}
+          style={{ touchAction: 'none' }}
+        ></div>
+      )}
+
+      {/* Navigation Drawer */}
+      <aside className={cn(
+        "fixed inset-y-0 left-0 z-[60] w-72 h-full rounded-r-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] flex flex-col ease-in-out",
+        !disableDrawerTransition && "transition-transform duration-500",
+        isDrawerOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+      )} style={{ 
+        backgroundColor: drawerHeaderColors.bg, 
+        borderRight: `1px solid ${drawerHeaderColors.border}`,
+        overscrollBehavior: 'contain',
+        WebkitOverflowScrolling: 'touch'
+      }}>
+        
+        {/* 抽屉顶部 Header 区域 */}
+        <div style={{
+          padding: '36px 20px 20px',  // 减少顶部留白，状态栏高度够用即可
+          borderBottom: `1px solid ${drawerHeaderColors.border}`,
+          marginBottom: '8px',
+        }}>
+
+          {/* 第一行：APP名称 + 头像 */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: '10px',
+          }}>
+
+            {/* 左侧：APP名称 */}
+            <span style={{
+              fontSize: '20px',
+              fontWeight: '700',
+              color: drawerHeaderColors.appName,
+              fontFamily: 'inherit',
+              letterSpacing: '-0.3px',
+            }}>
+              小象日志
+            </span>
+
+            {/* 右侧：头像按钮 */}
+            <button
+              onClick={handleAvatarClick}
+              style={{
+                width: '44px',
+                height: '44px',
+                borderRadius: '50%',
+                overflow: 'hidden',
+                backgroundColor: drawerHeaderColors.avatarBg,
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              {isLoggedIn ? (
+                <UserAvatar
+                  src={user?.avatarUrl}
+                  name={user?.nickname || '我'}
+                  className="w-11 h-11 rounded-full"
+                  fallbackClassName="bg-[#E8F0E3] flex items-center justify-center text-[#446733]"
+                />
+              ) : (
+                <span
+                  className="material-symbols-outlined"
+                  style={{ fontSize: '26px', color: drawerHeaderColors.avatarIcon, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <User size={26} />
+                </span>
+              )}
+            </button>
+
+          </div>
+
+          {/* 第二行：每日寄语 */}
+          <p style={{
+            fontSize: '12px',
+            color: drawerHeaderColors.quote,
+            fontStyle: 'italic',
+            lineHeight: '1.5',
+            margin: 0,
+            paddingRight: '48px',  // 不与头像重叠
+            overflow: 'hidden',
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+          }}>
+            "{getDailyQuote()}"
+          </p>
+
+        </div>
+
+        <nav 
+          className="flex flex-col gap-1 overflow-y-auto pr-6 py-2"
+          onTouchMove={(e) => e.stopPropagation()}
+        >
+          <Link to="/gallery" state={{ fromDrawer: true }} onClick={(e) => handleNavClick(e, '/gallery')} className="flex items-center gap-4 text-on-surface px-10 py-3.5 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
+            <ImageIcon className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
+            <span>图库</span>
+          </Link>
+          <Link to="/walk" state={{ fromDrawer: true }} onClick={(e) => handleNavClick(e, '/walk')} className="flex items-center gap-4 text-on-surface px-10 py-3.5 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
+            <Footprints className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
+            <span>漫步</span>
+          </Link>
+          <Link to="/on-this-day" state={{ fromDrawer: true }} onClick={(e) => handleNavClick(e, '/on-this-day')} className="flex items-center gap-4 text-on-surface px-10 py-3.5 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
+            <History className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
+            <span>那年今日</span>
+          </Link>
+
+          <div className="my-6 mx-10 h-px bg-outline-variant/20"></div>
+
+          <button onClick={toggleTheme} className="flex items-center gap-4 text-on-surface px-10 py-3 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
+            {isDark ? (
+              <Sun className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
+            ) : (
+              <Moon className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
+            )}
+            <span className="text-[15px]">{isDark ? '日间模式' : '夜间模式'}</span>
+            {isDark && <span className="ml-auto text-[13px] text-outline-variant pr-4">开启中</span>}
+          </button>
+          <button className="flex items-center gap-4 text-on-surface px-10 py-3 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
+            <Cloud className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
+            <span className="text-[15px]">云盘管理</span>
+          </button>
+          <Link to="/trash" state={{ fromDrawer: true }} onClick={(e) => handleNavClick(e, '/trash')} className="flex items-center gap-4 text-on-surface px-10 py-3 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
+            <Trash2 className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
+            <span className="text-[15px]">回收站</span>
+          </Link>
+          <Link to="/settings" state={{ fromDrawer: true }} onClick={(e) => handleNavClick(e, '/settings')} className="flex items-center gap-4 text-on-surface px-10 py-3 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
+            <Settings className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
+            <span className="text-[15px]">设置</span>
+          </Link>
+          <Link to="/help" state={{ fromDrawer: true }} onClick={(e) => handleNavClick(e, '/help')} className="flex items-center gap-4 text-on-surface px-10 py-3 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
+            <HelpCircle className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
+            <span className="text-[15px]">帮助</span>
+          </Link>
+        </nav>
+      </aside>
+
+      {/* Main Content */}
+      <main className={cn("md:ml-72 transition-all duration-500 min-h-screen flex flex-col relative", ['/', '/community', '/profile'].includes(location.pathname) ? "pb-[72px]" : "pb-0")}>
+        <div className="flex-1 w-full flex flex-col">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={location.pathname}
+              initial={false}
+              className="flex-1 flex flex-col"
+            >
+              <Outlet context={{ selectedDate, listStyle, openDrawer: () => setIsDrawerOpen(true), closeDrawer: handleCloseDrawer, toggleDrawer }} />
+            </motion.div>
+          </AnimatePresence>
+        </div>
+      </main>
+
+      {/* List Style Bottom Sheet */}
+      <AnimatePresence>
+        {isStyleSheetOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-end justify-center bg-black/40" 
+            onClick={() => setIsStyleSheetOpen(false)}
+          >
+            <motion.div 
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="bg-surface w-full max-w-md rounded-t-3xl flex flex-col overflow-hidden shadow-2xl"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex justify-center pt-3 pb-2">
+                <div className="w-12 h-1.5 bg-outline-variant/50 rounded-full"></div>
+              </div>
+              <div className="flex items-center justify-between px-6 py-2 border-b border-surface-container-high">
+                <h3 className="font-headline font-semibold text-lg text-on-surface">列表样式</h3>
+                <button onClick={() => setIsStyleSheetOpen(false)} className="p-2 -mr-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6 grid grid-cols-2 gap-4">
+                {styleOptions.map((option) => (
+                  <button
+                    key={option.id}
+                    onClick={() => handleStyleChange(option.id)}
+                    className={cn(
+                      "flex flex-col items-center gap-3 p-4 rounded-2xl border-2 transition-all duration-200",
+                      listStyle === option.id 
+                        ? "border-primary bg-primary/5" 
+                        : "border-surface-container hover:border-primary/30 hover:bg-surface-container-low"
+                    )}
+                  >
+                    <div className={cn("w-full h-20 flex items-center justify-center", option.preview)}>
+                      {/* Abstract preview shapes */}
+                      <div className="w-3/4 h-1/2 bg-outline-variant/20 rounded"></div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-[15px]">{option.name}</span>
+                      {listStyle === option.id && <Check className="w-4 h-4 text-primary" />}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Floating Action Button (only on home) */}
+      {location.pathname === '/' && (
+        <button 
+          onClick={() => {
+            sessionStorage.removeItem('timeline_scroll');
+            navigate('/editor');
+          }}
+          className="fixed bottom-28 right-6 w-14 h-14 rounded-2xl bg-primary text-white shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] flex items-center justify-center hover:bg-primary-dim active:scale-90 transition-all z-[40]"
+        >
+          <Plus className="w-8 h-8" />
+        </button>
+      )}
+
+      {/* Bottom Navigation Bar */}
+      {['/', '/community', '/profile'].includes(location.pathname) && (
+        <nav 
+          className="fixed bottom-0 left-0 w-full md:w-[calc(100%-18rem)] md:ml-72 flex justify-around items-center px-4 bg-surface/90 backdrop-blur-xl z-50 rounded-t-[24px] shadow-[0_-10px_40px_rgba(0,0,0,0.03)] border-t border-outline-variant/10"
+          style={{ paddingTop: '6px', paddingBottom: 'env(safe-area-inset-bottom)' }}
+        >
+          {navItems.map((item) => {
+            const isActive = location.pathname === item.path;
+            const Icon = item.icon;
+            return (
+              <Link 
+                key={item.path}
+                to={item.path}
+                className={cn(
+                  "flex flex-col items-center justify-center px-5 py-1 transition-colors duration-300",
+                  isActive ? "text-primary" : "text-outline hover:text-primary"
+                )}
+              >
+                <Icon className={cn("w-[22px] h-[22px] mb-[2px]", isActive && "fill-current")} />
+                <span className="font-sans font-normal text-[11px] tracking-wide">{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
+      )}
+    </div>
+  );
+}
