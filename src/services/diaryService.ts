@@ -5,6 +5,7 @@
  */
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import { api, isAuthenticated } from './apiClient';
+import { localVaultService, VaultSyncResult } from './localVaultService';
 
 export type EntryStatus = 'active' | 'draft' | 'trashed';
 
@@ -29,6 +30,9 @@ export interface DiaryEntry {
   backgroundId?: string;
   themeId?: string | null;
   syncVersion?: number;
+  vaultPath?: string;
+  vaultTrashPath?: string;
+  attachmentPaths?: string[];
 }
 
 export interface DiaryTemplate {
@@ -155,6 +159,47 @@ function withTimeout<T>(promise: Promise<T>, ms = 4000): Promise<T> {
 let activeEntriesCache: DiaryEntry[] | null = null;
 let syncTimeout: any = null;
 
+async function applyVaultSyncResult(entry: DiaryEntry, result: VaultSyncResult | null): Promise<DiaryEntry> {
+  if (!result) return entry;
+
+  const syncedEntry: DiaryEntry = {
+    ...entry,
+    vaultPath: result.vaultPath,
+    vaultTrashPath: result.vaultTrashPath,
+    attachmentPaths: result.attachmentPaths,
+  };
+  const db = await initDB();
+  await db.put('entries', syncedEntry);
+  return syncedEntry;
+}
+
+async function syncEntryToVault(entry: DiaryEntry): Promise<DiaryEntry> {
+  try {
+    return await applyVaultSyncResult(entry, await localVaultService.syncEntry(entry));
+  } catch (error) {
+    console.warn('Sync entry to local vault failed:', error);
+    return entry;
+  }
+}
+
+async function moveVaultEntryToTrash(entry: DiaryEntry): Promise<DiaryEntry> {
+  try {
+    return await applyVaultSyncResult(entry, await localVaultService.moveEntryToTrash(entry));
+  } catch (error) {
+    console.warn('Move local vault entry to trash failed:', error);
+    return entry;
+  }
+}
+
+async function restoreVaultEntry(entry: DiaryEntry): Promise<DiaryEntry> {
+  try {
+    return await applyVaultSyncResult(entry, await localVaultService.restoreEntry(entry));
+  } catch (error) {
+    console.warn('Restore local vault entry failed:', error);
+    return entry;
+  }
+}
+
 export const diaryService = {
   getCachedActiveEntries(): DiaryEntry[] | null {
     return activeEntriesCache;
@@ -213,6 +258,7 @@ export const diaryService = {
           await tx.store.put(entry);
         }
         await tx.done;
+        await Promise.all(pullData.entries.map(entry => syncEntryToVault(entry)));
         activeEntriesCache = null; // Invalidate cache
       }
       
@@ -287,9 +333,10 @@ export const diaryService = {
 
   async createEntry(data: Omit<DiaryEntry, 'id' | 'createdAt' | 'updatedAt' | 'status'> & { id?: string; status?: EntryStatus; createdAt?: string; updatedAt?: string }): Promise<DiaryEntry> {
     const now = new Date().toISOString();
-    const entry: DiaryEntry = { ...data, id: data.id || crypto.randomUUID(), createdAt: data.createdAt || now, updatedAt: data.updatedAt || now, status: data.status || 'active' };
+    let entry: DiaryEntry = { ...data, id: data.id || crypto.randomUUID(), createdAt: data.createdAt || now, updatedAt: data.updatedAt || now, status: data.status || 'active' };
     const db = await initDB(); 
     await db.put('entries', entry);
+    entry = await syncEntryToVault(entry);
     activeEntriesCache = null; 
     this.triggerSync();
     return entry;
@@ -299,8 +346,9 @@ export const diaryService = {
     const db = await initDB();
     const entry = await db.get('entries', id);
     if (!entry) return undefined;
-    const updatedEntry = { ...entry, ...patch, updatedAt: new Date().toISOString() };
+    let updatedEntry = { ...entry, ...patch, updatedAt: new Date().toISOString() };
     await db.put('entries', updatedEntry);
+    updatedEntry = await syncEntryToVault(updatedEntry);
     activeEntriesCache = null; 
     this.triggerSync();
     return updatedEntry;
@@ -314,6 +362,7 @@ export const diaryService = {
       entry.trashReason = reason; 
       entry.trashedAt = new Date().toISOString(); 
       await db.put('entries', entry); 
+      await moveVaultEntryToTrash(entry);
       activeEntriesCache = null; 
       this.triggerSync();
     }
@@ -328,6 +377,7 @@ export const diaryService = {
       delete entry.trashedAt; 
       entry.updatedAt = new Date().toISOString(); // Update timestamp to trigger push
       await db.put('entries', entry); 
+      await restoreVaultEntry(entry);
       activeEntriesCache = null; 
       this.triggerSync();
     }
@@ -335,12 +385,15 @@ export const diaryService = {
 
   async permanentlyDeleteEntry(id: string): Promise<void> {
     if (useApi()) { try { await api.delete(`/diary/entries/${id}/permanent`); } catch (e) { console.warn('后端永久删除失败:', e); } }
+    await localVaultService.deleteEntryFiles(id).catch(error => console.warn('Delete local vault entry failed:', error));
     const db = await initDB(); await db.delete('entries', id);
   },
 
   async clearTrash(): Promise<void> {
     if (useApi()) { try { await api.post('/diary/trash/clear'); } catch (e) { console.warn('后端清空回收站失败:', e); } }
     const db = await initDB();
+    const trashedEntries = await db.getAllFromIndex('entries', 'by-status', 'trashed');
+    await Promise.all(trashedEntries.map(entry => localVaultService.deleteEntryFiles(entry.id).catch(error => console.warn('Delete local vault trash entry failed:', error))));
     const tx = db.transaction('entries', 'readwrite');
     const index = tx.store.index('by-status');
     let cursor = await index.openCursor('trashed');
@@ -436,6 +489,48 @@ export const diaryService = {
   async deleteChatSession(id: string): Promise<void> {
     if (useApi()) { try { await api.delete(`/chat/sessions/${id}`); } catch (e) { console.warn('后端删除会话失败:', e); } }
     const db = await initDB(); await db.delete('chatSessions', id);
+  },
+
+  async restoreEntriesFromVault(): Promise<{ successCount: number; failCount: number }> {
+    const vaultEntries = await localVaultService.readEntriesFromVault();
+    const db = await initDB();
+    const existingEntries = await db.getAll('entries');
+    const existingIds = new Set(existingEntries.map(entry => entry.id));
+    const existingVaultPaths = new Set(existingEntries.map(entry => entry.vaultPath).filter(Boolean));
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const vaultEntry of vaultEntries) {
+      try {
+        if (!vaultEntry.id && existingVaultPaths.has(vaultEntry.vaultPath)) {
+          continue;
+        }
+
+        const id = vaultEntry.id || crypto.randomUUID();
+        const existing = existingIds.has(id) ? await db.get('entries', id) : undefined;
+        const now = new Date().toISOString();
+        const entry: DiaryEntry = {
+          ...(existing || {}),
+          id,
+          title: vaultEntry.title,
+          content: vaultEntry.content,
+          images: existing?.images || [],
+          createdAt: existing?.createdAt || now,
+          updatedAt: now,
+          diaryDate: vaultEntry.diaryDate,
+          status: 'active',
+          vaultPath: vaultEntry.vaultPath,
+        };
+        await db.put('entries', entry);
+        successCount += 1;
+      } catch (error) {
+        console.warn('Restore local vault entry failed:', error);
+        failCount += 1;
+      }
+    }
+
+    activeEntriesCache = null;
+    return { successCount, failCount };
   },
 
   // 自定义字体（纯本地）

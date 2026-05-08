@@ -2,7 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { ArrowLeft, ChevronRight, Lightbulb, Loader2, MessageSquare, X } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { authService } from '../services/authService';
+import { diaryService } from '../services/diaryService';
 import { AppSettings, FontSettings, settingsService } from '../services/settingsService';
+import { localVaultService, VaultStatus } from '../services/localVaultService';
 import { FontToolbar } from '../components/FontToolbar';
 import {
   exportDiariesToMarkdown,
@@ -33,6 +35,7 @@ export default function Settings() {
   const [isLoading, setIsLoading] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [importData, setImportData] = useState<ParsedEntry[] | null>(null);
+  const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
   const [permissionFeatureName, setPermissionFeatureName] = useState('通知功能');
   const [pendingNotificationToggle, setPendingNotificationToggle] = useState<PendingNotificationToggle | null>(null);
   const [notifyEnabled, setNotifyEnabled] = useState(
@@ -45,6 +48,12 @@ export default function Settings() {
   const showToast = (message: string) => {
     setToastMessage(message);
     window.setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const refreshVaultStatus = async () => {
+    const status = await localVaultService.getVaultStatus();
+    setVaultStatus(status);
+    return status;
   };
 
   const updateSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
@@ -65,6 +74,10 @@ export default function Settings() {
     setFontSettings(newSettings);
     settingsService.saveFontSettings(newSettings);
   };
+
+  useEffect(() => {
+    refreshVaultStatus().catch(error => console.warn('Failed to load local vault status:', error));
+  }, []);
 
   useEffect(() => {
     if (getBrowserNotificationPermission() !== 'denied') return;
@@ -162,6 +175,44 @@ export default function Settings() {
     } catch (error) {
       console.error(error);
       showToast('导出失败，请稍后重试');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleChooseVaultDirectory = async () => {
+    if (!localVaultService.isSupported()) {
+      showToast('当前环境不是 Android App，无法选择 Documents 本地文件夹');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const status = await localVaultService.chooseVaultDirectory();
+      setVaultStatus(status);
+      showToast(status.available ? '本地日志文件夹已开启' : '文件夹授权未完成');
+    } catch (error: any) {
+      console.error(error);
+      showToast(error?.message || '选择本地日志文件夹失败');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRestoreFromVault = async () => {
+    setIsLoading(true);
+    try {
+      const status = await refreshVaultStatus();
+      if (!status.available) {
+        showToast('请先选择本地日志文件夹');
+        return;
+      }
+
+      const result = await diaryService.restoreEntriesFromVault();
+      showToast(`已从本地文件夹恢复 ${result.successCount} 篇日志${result.failCount ? `，失败 ${result.failCount} 篇` : ''}`);
+    } catch (error: any) {
+      console.error(error);
+      showToast(error?.message || '从本地日志文件夹恢复失败');
     } finally {
       setIsLoading(false);
     }
@@ -422,6 +473,37 @@ export default function Settings() {
               </div>
               <Toggle checked={settings.autoAdjustTime} onChange={(value) => updateSetting('autoAdjustTime', value)} />
             </div>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <SectionTitle title="本地日志" />
+          <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(47,52,46,0.02)] overflow-hidden">
+            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-surface-container/50">
+              <div className="flex flex-col items-start gap-1 min-w-0">
+                <span className="text-[15px] font-medium">Documents 保存位置</span>
+                <span className="text-xs text-on-surface-variant truncate max-w-[240px]">
+                  {vaultStatus?.available
+                    ? (vaultStatus.displayPath || '已授权本地文件夹')
+                    : localVaultService.isSupported()
+                      ? '尚未开启 Documents 本地保存'
+                      : '仅 Android App 支持'}
+                </span>
+              </div>
+              <button
+                onClick={handleChooseVaultDirectory}
+                className="shrink-0 px-3 py-1.5 rounded-full bg-primary text-white text-sm font-medium active:scale-95 transition-transform"
+              >
+                {vaultStatus?.available ? '重新选择' : '选择'}
+              </button>
+            </div>
+            <button
+              onClick={handleRestoreFromVault}
+              className="w-full flex items-center justify-between px-5 py-4 active:bg-surface-container-low transition-colors"
+            >
+              <span className="text-[15px] font-medium">从本地日志文件夹恢复索引</span>
+              <ChevronRight className="w-5 h-5 text-outline-variant" />
+            </button>
           </div>
         </section>
 

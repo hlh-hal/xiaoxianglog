@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import { htmlToMarkdown } from './htmlToMarkdown';
 import { downloadTextFile } from './exportFile';
 import { inferDateWithAI, parseWholeMarkdownWithAI } from './inferDateWithAI';
+import { localVaultService } from '../services/localVaultService';
 
 export interface ParsedEntry {
   title: string;
@@ -42,7 +43,11 @@ export const exportDiariesToMarkdown = async (): Promise<number> => {
     mdContent += '\n\n\n';
   });
 
-  downloadTextFile(`小象日记备份-${today}.md`, mdContent.trim(), 'text/markdown;charset=utf-8');
+  const filename = `小象日志备份-${today}.md`;
+  const savedToVault = await localVaultService.exportBackup(filename, mdContent.trim()).catch(() => false);
+  if (!savedToVault) {
+    downloadTextFile(filename, mdContent.trim(), 'text/markdown;charset=utf-8');
+  }
   return entries.length;
 };
 

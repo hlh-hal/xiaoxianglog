@@ -1,5 +1,31 @@
+import TurndownService from 'turndown';
+import { gfm } from 'turndown-plugin-gfm';
+
+let turndownService: TurndownService | null = null;
+
+function getTurndownService(): TurndownService {
+  if (!turndownService) {
+    turndownService = new TurndownService({
+      headingStyle: 'atx',
+      bulletListMarker: '-',
+      codeBlockStyle: 'fenced',
+    });
+    turndownService.use(gfm);
+  }
+  return turndownService;
+}
+
 export function htmlToMarkdown(html: string): string {
   if (!html) return '';
+  try {
+    return getTurndownService()
+      .turndown(html)
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  } catch (error) {
+    console.warn('Turndown conversion failed, falling back to basic conversion:', error);
+  }
+
   let text = html;
 
   // 处理换行标签
