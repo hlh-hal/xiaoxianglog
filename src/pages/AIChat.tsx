@@ -405,10 +405,9 @@ export default function AIChat() {
       responseTimedOut = true;
       abortControllerRef.current?.abort();
     }, requestTimeoutMs);
+    let fullReply = '';
 
     try {
-      let fullReply = '';
-
       await sendToAI(apiMessages, (chunk) => {
         fullReply += chunk;
         setMessages(prev => {
@@ -480,35 +479,23 @@ export default function AIChat() {
 
       if (error.name === 'AbortError') {
         console.log('Chat aborted');
-        setMessages(prev => {
-          const newMsgs = [...prev];
-          const lastIdx = newMsgs.length - 1;
-          if (lastIdx >= 0 && newMsgs[lastIdx].role === 'assistant') {
-            newMsgs[lastIdx] = {
-              ...newMsgs[lastIdx],
-              content: fallbackContent,
-              rawText: fullReply || fallbackContent,
-              isStreaming: false,
-            };
-          }
-          return newMsgs;
-        });
       } else {
         console.error(error);
-        setMessages(prev => {
-          const newMsgs = [...prev];
-          const lastIdx = newMsgs.length - 1;
-          if (lastIdx >= 0 && newMsgs[lastIdx].role === 'assistant') {
-            newMsgs[lastIdx] = {
-              ...newMsgs[lastIdx],
-              content: fallbackContent,
-              rawText: fullReply || fallbackContent,
-              isStreaming: false,
-            };
-          }
-          return newMsgs;
-        });
       }
+
+      setMessages(prev => {
+        const newMsgs = [...prev];
+        const lastIdx = newMsgs.length - 1;
+        if (lastIdx >= 0 && newMsgs[lastIdx].role === 'assistant') {
+          newMsgs[lastIdx] = {
+            ...newMsgs[lastIdx],
+            content: fallbackContent,
+            rawText: fullReply || fallbackContent,
+            isStreaming: false,
+          };
+        }
+        return newMsgs;
+      });
     } finally {
       window.clearTimeout(timeoutId);
       abortControllerRef.current = null;
@@ -657,7 +644,7 @@ export default function AIChat() {
             }}
           >
             <span>{MODEL_LIST.find(m => m.id === selectedModel)?.label || '选择模型'}</span>
-            <span style={{ fontSize: 10 }}>⌄</span>
+            <span style={{ fontSize: 14, lineHeight: 1 }}>›</span>
           </div>
         </div>
 
@@ -1162,7 +1149,7 @@ export default function AIChat() {
                 {currentStyle.name}
               </span>
             </div>
-            <span style={{ fontSize: '13px', color: '#A1A1A6' }}>更改 ⌄</span>
+            <span style={{ fontSize: '13px', color: '#A1A1A6' }}>更改 ›</span>
           </button>
         </div>
 

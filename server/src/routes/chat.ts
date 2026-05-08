@@ -21,6 +21,23 @@ type ProviderConfig = {
 const XIAOMI_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
 const XIAOMI_API_KEY = 'tp-c9v2y0ra8n4swaaqsuvmigzr5dau0vhg2c2y32jmj0cmjc6o';
 const XIAOMI_MODEL = 'mimo-v2.5';
+const PRIMARY_PROVIDER_TIMEOUT_MS = Number(process.env.AI_PRIMARY_TIMEOUT_MS || 2500);
+const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS || 45000);
+
+class ProviderError extends Error {
+  status?: number;
+  body?: string;
+
+  constructor(message: string, options?: { status?: number; body?: string; cause?: unknown }) {
+    super(message);
+    this.name = 'ProviderError';
+    this.status = options?.status;
+    this.body = options?.body;
+    if (options?.cause) {
+      this.cause = options.cause;
+    }
+  }
+}
 
 function parseMessages(value: string) {
   try {
@@ -66,20 +83,96 @@ function isFallbackEnabled() {
   return process.env.AI_ENABLE_FALLBACK !== 'false';
 }
 
+function getProviderTimeoutMs(provider: ProviderConfig): number {
+  return provider.name === 'cpamc' ? PRIMARY_PROVIDER_TIMEOUT_MS : AI_REQUEST_TIMEOUT_MS;
+}
+
 async function requestCompletion(provider: ProviderConfig, messages: ChatMessage[]) {
   const cleanBaseUrl = provider.baseUrl.replace(/\/$/, '');
-  return fetch(`${cleanBaseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
-    },
-    body: JSON.stringify({
-      model: provider.model,
-      messages,
-      stream: true,
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), getProviderTimeoutMs(provider));
+
+  try {
+    return await fetch(`${cleanBaseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        messages,
+        stream: true,
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw new ProviderError('AI provider request failed', { cause: error });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function requestProvider(provider: ProviderConfig, messages: ChatMessage[], startedAt: number) {
+  console.log(
+    `[ai] request requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model} baseUrl=${provider.baseUrl}`,
+  );
+
+  const response = await requestCompletion(provider, messages);
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unknown error');
+    throw new ProviderError('AI provider returned an error', {
+      status: response.status,
+      body: errorText,
+    });
+  }
+
+  console.log(
+    `[ai] provider_ready requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model} elapsedMs=${Date.now() - startedAt}`,
+  );
+  return response;
+}
+
+function logProviderError(prefix: string, provider: ProviderConfig, startedAt: number, error: unknown) {
+  if (error instanceof ProviderError) {
+    console.warn(
+      `[ai] ${prefix} requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model} status=${error.status ?? 'exception'} elapsedMs=${Date.now() - startedAt} body=${JSON.stringify(error.body || error.message)}`,
+      error.cause || '',
+    );
+    return;
+  }
+
+  console.warn(
+    `[ai] ${prefix} requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model} status=exception elapsedMs=${Date.now() - startedAt}`,
+    error,
+  );
+}
+
+async function requestWithFallback(primary: ProviderConfig, messages: ChatMessage[], startedAt: number) {
+  const fallbackEnabled = primary.name !== 'xiaomi-mimo' && isFallbackEnabled();
+
+  try {
+    return await requestProvider(primary, messages, startedAt);
+  } catch (primaryError) {
+    logProviderError('primary_failed', primary, startedAt, primaryError);
+
+    if (!fallbackEnabled) {
+      throw primaryError;
+    }
+
+    const fallback = getFallbackConfig();
+    try {
+      const response = await requestProvider(fallback, messages, startedAt);
+      console.warn(
+        `[ai] fallback_succeeded requestedModel=${primary.requestedModel} fallbackProvider=${fallback.name} fallbackModel=${fallback.model} elapsedMs=${Date.now() - startedAt}`,
+      );
+      return response;
+    } catch (fallbackError) {
+      logProviderError('fallback_failed', fallback, startedAt, fallbackError);
+      throw fallbackError;
+    }
+  }
 }
 
 async function pipeStream(response: globalThis.Response, res: Response) {
@@ -94,14 +187,32 @@ async function pipeStream(response: globalThis.Response, res: Response) {
   }
 
   const decoder = new TextDecoder();
+  let closed = false;
+  const cancelUpstream = () => {
+    closed = true;
+    reader.cancel().catch(() => undefined);
+  };
+
+  res.on('close', cancelUpstream);
+
   try {
     while (true) {
+      if (closed || res.destroyed || res.writableEnded) break;
       const { done, value } = await reader.read();
       if (done) break;
-      res.write(decoder.decode(value, { stream: true }));
+      if (!closed && !res.destroyed && !res.writableEnded) {
+        res.write(decoder.decode(value, { stream: true }));
+      }
+    }
+  } catch (error) {
+    if (!closed) {
+      console.warn('[ai] stream_pipe_failed', error);
     }
   } finally {
-    res.end();
+    res.off('close', cancelUpstream);
+    if (!res.destroyed && !res.writableEnded) {
+      res.end();
+    }
   }
 }
 
@@ -203,77 +314,16 @@ router.post('/message', async (req: Request, res: Response) => {
   }
 
   const primary = getProviderConfig(modelId);
-  const fallbackEnabled = primary.name !== 'xiaomi-mimo' && isFallbackEnabled();
   const startedAt = Date.now();
 
   try {
-    console.log(
-      `[ai] request requestedModel=${primary.requestedModel} provider=${primary.name} targetModel=${primary.model} baseUrl=${primary.baseUrl}`,
-    );
-    let response = await requestCompletion(primary, messages);
-
-    if (!response.ok && fallbackEnabled) {
-      const errorText = await response.text().catch(() => '');
-      console.warn(
-        `[ai] primary_failed requestedModel=${primary.requestedModel} provider=${primary.name} targetModel=${primary.model} status=${response.status} elapsedMs=${Date.now() - startedAt} fallback=true body=${JSON.stringify(errorText)}`,
-      );
-
-      const fallback = getFallbackConfig();
-      response = await requestCompletion(fallback, messages);
-
-      if (response.ok) {
-        console.warn(
-          `[ai] fallback_succeeded requestedModel=${primary.requestedModel} fallbackProvider=${fallback.name} fallbackModel=${fallback.model} elapsedMs=${Date.now() - startedAt}`,
-        );
-      } else {
-        const fallbackErrorText = await response.text().catch(() => 'Unknown error');
-        console.error(
-          `[ai] fallback_failed requestedModel=${primary.requestedModel} fallbackProvider=${fallback.name} fallbackModel=${fallback.model} status=${response.status} elapsedMs=${Date.now() - startedAt} body=${JSON.stringify(fallbackErrorText)}`,
-        );
-        res.status(response.status).json({ error: `AI 服务错误: ${fallbackErrorText}` });
-        return;
-      }
-    }
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Unknown error');
-      console.error(
-        `[ai] request_failed requestedModel=${primary.requestedModel} provider=${primary.name} targetModel=${primary.model} status=${response.status} elapsedMs=${Date.now() - startedAt} body=${JSON.stringify(errorText)}`,
-      );
-      res.status(response.status).json({ error: `AI 服务错误: ${errorText}` });
-      return;
-    }
-
+    const response = await requestWithFallback(primary, messages, startedAt);
     await pipeStream(response, res);
   } catch (err: any) {
     console.error(
       `[ai] request_exception requestedModel=${primary.requestedModel} provider=${primary.name} targetModel=${primary.model} elapsedMs=${Date.now() - startedAt}`,
       err,
     );
-
-    if (fallbackEnabled) {
-      try {
-        const fallback = getFallbackConfig();
-        const fallbackResponse = await requestCompletion(fallback, messages);
-        if (fallbackResponse.ok) {
-          console.warn(
-            `[ai] fallback_succeeded_after_exception requestedModel=${primary.requestedModel} fallbackProvider=${fallback.name} fallbackModel=${fallback.model} elapsedMs=${Date.now() - startedAt}`,
-          );
-          await pipeStream(fallbackResponse, res);
-          return;
-        }
-
-        const fallbackErrorText = await fallbackResponse.text().catch(() => 'Unknown error');
-        console.error(
-          `[ai] fallback_failed_after_exception requestedModel=${primary.requestedModel} fallbackProvider=${fallback.name} fallbackModel=${fallback.model} status=${fallbackResponse.status} elapsedMs=${Date.now() - startedAt} body=${JSON.stringify(fallbackErrorText)}`,
-        );
-      } catch (fallbackErr) {
-        console.error(
-          `[ai] fallback_exception requestedModel=${primary.requestedModel} elapsedMs=${Date.now() - startedAt}`,
-          fallbackErr,
-        );
-      }
-    }
 
     if (!res.headersSent) {
       res.status(500).json({ error: 'AI 服务暂时不可用' });

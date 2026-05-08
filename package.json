@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev:all": "node scripts/dev-all.cjs",
     "build": "vite build",
     "preview": "vite preview",
     "android:sync": "npm run build && cap sync android",

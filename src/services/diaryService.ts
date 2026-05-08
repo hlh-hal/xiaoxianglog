@@ -159,6 +159,16 @@ function withTimeout<T>(promise: Promise<T>, ms = 4000): Promise<T> {
 let activeEntriesCache: DiaryEntry[] | null = null;
 let syncTimeout: any = null;
 
+function parseEntryTime(value?: string): number {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function getEntryChangeTime(entry: DiaryEntry): number {
+  return Math.max(parseEntryTime(entry.updatedAt), parseEntryTime(entry.trashedAt));
+}
+
 async function applyVaultSyncResult(entry: DiaryEntry, result: VaultSyncResult | null): Promise<DiaryEntry> {
   if (!result) return entry;
 
@@ -254,12 +264,20 @@ export const diaryService = {
       
       if (pullData.entries && pullData.entries.length > 0) {
         const tx = db.transaction('entries', 'readwrite');
+        const acceptedEntries: DiaryEntry[] = [];
         for (const entry of pullData.entries) {
+          const localEntry = await tx.store.get(entry.id);
+          if (localEntry && getEntryChangeTime(localEntry) > getEntryChangeTime(entry)) {
+            continue;
+          }
           await tx.store.put(entry);
+          acceptedEntries.push(entry);
         }
         await tx.done;
-        await Promise.all(pullData.entries.map(entry => syncEntryToVault(entry)));
-        activeEntriesCache = null; // Invalidate cache
+        await Promise.all(acceptedEntries.map(entry => syncEntryToVault(entry)));
+        if (acceptedEntries.length > 0) {
+          activeEntriesCache = null; // Invalidate cache
+        }
       }
       
       if (pullData.serverTime) {
@@ -271,10 +289,8 @@ export const diaryService = {
       const allLocal = await db.getAll('entries');
       const toPush = lastPush 
         ? allLocal.filter(e => {
-            const upTime = new Date(e.updatedAt).getTime();
-            const trTime = e.trashedAt ? new Date(e.trashedAt).getTime() : 0;
             const pushTime = new Date(lastPush).getTime();
-            return upTime > pushTime || trTime > pushTime;
+            return getEntryChangeTime(e) > pushTime;
           })
         : allLocal;
 
@@ -358,9 +374,11 @@ export const diaryService = {
     const db = await initDB();
     const entry = await db.get('entries', id);
     if (entry) { 
+      const now = new Date().toISOString();
       entry.status = 'trashed'; 
       entry.trashReason = reason; 
-      entry.trashedAt = new Date().toISOString(); 
+      entry.trashedAt = now; 
+      entry.updatedAt = now;
       await db.put('entries', entry); 
       await moveVaultEntryToTrash(entry);
       activeEntriesCache = null; 
