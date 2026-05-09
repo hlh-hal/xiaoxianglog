@@ -135,16 +135,29 @@ export async function apiStreamRequest(
 ): Promise<void> {
   const url = `${API_BASE}${path}`;
   const token = getAccessToken();
+  const requestBody = JSON.stringify(body);
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+  const requestStream = () => {
+    const currentToken = getAccessToken();
+    return fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(currentToken ? { 'Authorization': `Bearer ${currentToken}` } : {}),
+      },
+      body: requestBody,
+      signal,
+    });
+  };
+
+  let res = await requestStream();
+
+  if (res.status === 401 && token) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      res = await requestStream();
+    }
+  }
 
   if (!res.ok) {
     const errorText = await res.text().catch(() => '未知错误');

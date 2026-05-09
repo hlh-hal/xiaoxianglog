@@ -87,17 +87,17 @@ router.get('/', async (req: Request, res: Response) => {
 
     const counts = await Promise.all(
       allUserIds.map(async (uid) => {
-        const entries = await prisma.diaryEntry.findMany({
+        const monthCount = await prisma.diaryEntry.count({
           where: {
             userId: uid,
             status: 'active',
+            isHidden: false,
             diaryDate: { startsWith: currentYearMonth },
           },
-          select: { diaryDate: true },
         });
         return {
           userId: uid,
-          monthCount: new Set(entries.map(entry => entry.diaryDate.slice(0, 10))).size,
+          monthCount,
         };
       })
     );

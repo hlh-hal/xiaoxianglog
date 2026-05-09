@@ -159,18 +159,13 @@ export default function Leaderboard() {
           const currentYear = now.getFullYear();
           const currentMonth = now.getMonth();
           const localEntries = await diaryService.getActiveEntries();
-          const localEntryDays = new Set(
-            localEntries
-              .filter(entry => {
-                const entryDate = new Date(entry.diaryDate);
-                return entryDate.getFullYear() === currentYear && entryDate.getMonth() === currentMonth;
-              })
-              .map(entry => entry.diaryDate.slice(0, 10))
-          );
-          localMonthCount = localEntryDays.size;
+          localMonthCount = localEntries.filter(entry => {
+            const entryDate = new Date(entry.diaryDate);
+            return entryDate.getFullYear() === currentYear && entryDate.getMonth() === currentMonth;
+          }).length;
         }
 
-        const normalizedUsers = allUsers.length > 0 || !user?.userId
+        const normalizedUsers = (allUsers.length > 0 || !user?.userId
           ? allUsers.map(item => item.isCurrentUser
               ? { ...item, monthCount: localMonthCount }
               : item
@@ -182,7 +177,7 @@ export default function Leaderboard() {
               monthCount: localMonthCount,
               likes: 0,
               isCurrentUser: true,
-            }];
+            }]).sort((a, b) => b.monthCount - a.monthCount);
         setUsers(normalizedUsers);
 
         const initialLikes: Record<string, boolean> = {};

@@ -87,7 +87,7 @@ export default function Profile() {
 
       let totalWords = 0;
       let totalPhotos = 0;
-      const monthEntryDays = new Set<string>();
+      let monthEntries = 0;
 
       activeEntries.forEach((entry) => {
         const text = stripMarkdown(entry.content || '');
@@ -96,7 +96,7 @@ export default function Profile() {
 
         const entryDate = new Date(entry.diaryDate);
         if (entryDate.getFullYear() === currentYear && entryDate.getMonth() === currentMonth) {
-          monthEntryDays.add(entry.diaryDate.slice(0, 10));
+          monthEntries += 1;
         }
       });
 
@@ -131,7 +131,7 @@ export default function Profile() {
         totalWords,
         totalPhotos,
         totalLikes,
-        monthEntries: monthEntryDays.size,
+        monthEntries,
         leaderboardRank,
       };
 

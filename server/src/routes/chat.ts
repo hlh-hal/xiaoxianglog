@@ -21,8 +21,9 @@ type ProviderConfig = {
 const XIAOMI_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
 const XIAOMI_API_KEY = 'tp-c9v2y0ra8n4swaaqsuvmigzr5dau0vhg2c2y32jmj0cmjc6o';
 const XIAOMI_MODEL = 'mimo-v2.5';
-const PRIMARY_PROVIDER_TIMEOUT_MS = Number(process.env.AI_PRIMARY_TIMEOUT_MS || 2500);
 const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS || 45000);
+const PRIMARY_PROVIDER_TIMEOUT_MS = Number(process.env.AI_PRIMARY_TIMEOUT_MS || AI_REQUEST_TIMEOUT_MS);
+const THINKING_PROVIDER_TIMEOUT_MS = Number(process.env.AI_THINKING_TIMEOUT_MS || 120000);
 
 class ProviderError extends Error {
   status?: number;
@@ -84,6 +85,10 @@ function isFallbackEnabled() {
 }
 
 function getProviderTimeoutMs(provider: ProviderConfig): number {
+  if (provider.name === 'cpamc' && provider.requestedModel.includes('Thinking')) {
+    return THINKING_PROVIDER_TIMEOUT_MS;
+  }
+
   return provider.name === 'cpamc' ? PRIMARY_PROVIDER_TIMEOUT_MS : AI_REQUEST_TIMEOUT_MS;
 }
 
