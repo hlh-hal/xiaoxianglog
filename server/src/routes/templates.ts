@@ -4,6 +4,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { paramString } from '../utils/request.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -45,7 +46,7 @@ router.post('/', async (req: Request, res: Response) => {
         res.status(404).json({ error: '模板不存在' });
         return;
       }
-      const updated = await prisma.diaryTemplate.findUnique({ where: { id } });
+      const updated = await prisma.diaryTemplate.findFirst({ where: { id: String(id), userId: req.user!.userId } });
       res.json(updated);
     } else {
       // 创建
@@ -63,7 +64,7 @@ router.post('/', async (req: Request, res: Response) => {
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const result = await prisma.diaryTemplate.deleteMany({
-      where: { id: req.params.id, userId: req.user!.userId, isSystem: false },
+      where: { id: paramString(req, 'id'), userId: req.user!.userId, isSystem: false },
     });
     if (result.count === 0) {
       res.status(404).json({ error: '模板不存在或无法删除系统模板' });

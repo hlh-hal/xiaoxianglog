@@ -1,6 +1,8 @@
-﻿import { Router, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { rateLimit, userOrIpKey } from '../middleware/rateLimit.js';
+import { paramString } from '../utils/request.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -18,12 +20,25 @@ type ProviderConfig = {
   requestedModel: string;
 };
 
-const XIAOMI_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
-const XIAOMI_API_KEY = 'tp-c9v2y0ra8n4swaaqsuvmigzr5dau0vhg2c2y32jmj0cmjc6o';
-const XIAOMI_MODEL = 'mimo-v2.5';
+const XIAOMI_BASE_URL = process.env.XIAOMI_BASE_URL || 'https://token-plan-cn.xiaomimimo.com/v1';
+const XIAOMI_API_KEY = process.env.XIAOMI_API_KEY || '';
+const XIAOMI_MODEL = process.env.XIAOMI_MODEL || 'mimo-v2.5';
 const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS || 45000);
 const PRIMARY_PROVIDER_TIMEOUT_MS = Number(process.env.AI_PRIMARY_TIMEOUT_MS || AI_REQUEST_TIMEOUT_MS);
 const THINKING_PROVIDER_TIMEOUT_MS = Number(process.env.AI_THINKING_TIMEOUT_MS || 120000);
+const MAX_USER_AI_CONCURRENCY = Number(process.env.AI_MAX_USER_CONCURRENCY || 1);
+const MAX_GLOBAL_AI_CONCURRENCY = Number(process.env.AI_MAX_GLOBAL_CONCURRENCY || 8);
+
+const chatRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.AI_RATE_LIMIT_PER_MINUTE || 12),
+  keyPrefix: 'ai-chat',
+  keyGenerator: userOrIpKey,
+  message: 'AI 请求太频繁，请稍后再试',
+});
+
+const activeAiByUser = new Map<string, number>();
+let activeAiGlobal = 0;
 
 class ProviderError extends Error {
   status?: number;
@@ -46,6 +61,20 @@ function parseMessages(value: string) {
   } catch {
     return [];
   }
+}
+
+function normalizeMessages(messages: unknown): ChatMessage[] | null {
+  if (!Array.isArray(messages) || messages.length === 0 || messages.length > 50) return null;
+
+  const normalized = messages.map((message) => {
+    const role = (message as ChatMessage)?.role;
+    const content = String((message as ChatMessage)?.content || '').slice(0, 12000);
+    if (!['system', 'user', 'assistant'].includes(role) || !content.trim()) return null;
+    return { role, content } as ChatMessage;
+  });
+
+  if (normalized.some((message) => message === null)) return null;
+  return normalized as ChatMessage[];
 }
 
 function getProviderConfig(modelId?: string): ProviderConfig {
@@ -81,7 +110,7 @@ function getFallbackConfig(): ProviderConfig {
 }
 
 function isFallbackEnabled() {
-  return process.env.AI_ENABLE_FALLBACK !== 'false';
+  return process.env.AI_ENABLE_FALLBACK !== 'false' && !!XIAOMI_API_KEY;
 }
 
 function getProviderTimeoutMs(provider: ProviderConfig): number {
@@ -92,7 +121,35 @@ function getProviderTimeoutMs(provider: ProviderConfig): number {
   return provider.name === 'cpamc' ? PRIMARY_PROVIDER_TIMEOUT_MS : AI_REQUEST_TIMEOUT_MS;
 }
 
-async function requestCompletion(provider: ProviderConfig, messages: ChatMessage[]) {
+function acquireAiSlot(userId: string) {
+  const userActive = activeAiByUser.get(userId) || 0;
+  if (activeAiGlobal >= MAX_GLOBAL_AI_CONCURRENCY || userActive >= MAX_USER_AI_CONCURRENCY) {
+    return null;
+  }
+
+  activeAiGlobal += 1;
+  activeAiByUser.set(userId, userActive + 1);
+
+  return () => {
+    activeAiGlobal = Math.max(0, activeAiGlobal - 1);
+    const nextUserActive = Math.max(0, (activeAiByUser.get(userId) || 1) - 1);
+    if (nextUserActive === 0) {
+      activeAiByUser.delete(userId);
+    } else {
+      activeAiByUser.set(userId, nextUserActive);
+    }
+  };
+}
+
+async function requestCompletion(provider: ProviderConfig, messages: ChatMessage[], stream: boolean, options?: {
+  temperature?: number;
+  maxTokens?: number;
+  responseFormat?: unknown;
+}) {
+  if (!provider.apiKey) {
+    throw new ProviderError('AI provider API key is not configured', { status: 503 });
+  }
+
   const cleanBaseUrl = provider.baseUrl.replace(/\/$/, '');
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), getProviderTimeoutMs(provider));
@@ -102,12 +159,15 @@ async function requestCompletion(provider: ProviderConfig, messages: ChatMessage
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
+        Authorization: `Bearer ${provider.apiKey}`,
       },
       body: JSON.stringify({
         model: provider.model,
         messages,
-        stream: true,
+        max_tokens: options?.maxTokens,
+        temperature: options?.temperature,
+        response_format: options?.responseFormat,
+        stream,
       }),
       signal: controller.signal,
     });
@@ -120,10 +180,10 @@ async function requestCompletion(provider: ProviderConfig, messages: ChatMessage
 
 async function requestProvider(provider: ProviderConfig, messages: ChatMessage[], startedAt: number) {
   console.log(
-    `[ai] request requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model} baseUrl=${provider.baseUrl}`,
+    `[ai] request requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model}`,
   );
 
-  const response = await requestCompletion(provider, messages);
+  const response = await requestCompletion(provider, messages, true);
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => 'Unknown error');
@@ -238,7 +298,7 @@ router.get('/sessions', async (req: Request, res: Response) => {
 
 router.get('/sessions/:id', async (req: Request, res: Response) => {
   try {
-    const sessionId = String(req.params.id || '');
+    const sessionId = paramString(req, 'id');
     const session = await prisma.chatSession.findFirst({
       where: { id: sessionId, userId: req.user!.userId },
     });
@@ -255,28 +315,29 @@ router.get('/sessions/:id', async (req: Request, res: Response) => {
 router.post('/sessions', async (req: Request, res: Response) => {
   try {
     const { id, title, styleId, pinned, messages } = req.body;
+    const safeMessages = Array.isArray(messages) ? messages.slice(0, 200) : [];
 
     if (id) {
       const data = {
-        ...(title !== undefined && { title }),
-        ...(styleId !== undefined && { styleId }),
-        ...(pinned !== undefined && { pinned }),
-        ...(messages !== undefined && { messages: JSON.stringify(messages) }),
+        ...(title !== undefined && { title: String(title).slice(0, 80) }),
+        ...(styleId !== undefined && { styleId: String(styleId).slice(0, 40) }),
+        ...(pinned !== undefined && { pinned: Boolean(pinned) }),
+        ...(messages !== undefined && { messages: JSON.stringify(safeMessages) }),
       };
       const result = await prisma.chatSession.updateMany({
-        where: { id, userId: req.user!.userId },
+        where: { id: String(id), userId: req.user!.userId },
         data,
       });
       const session = result.count > 0
-        ? await prisma.chatSession.findFirst({ where: { id, userId: req.user!.userId } })
+        ? await prisma.chatSession.findFirst({ where: { id: String(id), userId: req.user!.userId } })
         : await prisma.chatSession.create({
             data: {
-              id,
+              id: String(id),
               userId: req.user!.userId,
-              title: title || '新对话',
-              styleId,
-              pinned: pinned || false,
-              messages: JSON.stringify(messages || []),
+              title: String(title || '新对话').slice(0, 80),
+              styleId: styleId ? String(styleId).slice(0, 40) : undefined,
+              pinned: Boolean(pinned),
+              messages: JSON.stringify(safeMessages),
             },
           });
       res.json(session ? { ...session, messages: parseMessages(session.messages) } : null);
@@ -286,10 +347,10 @@ router.post('/sessions', async (req: Request, res: Response) => {
     const session = await prisma.chatSession.create({
       data: {
         userId: req.user!.userId,
-        title: title || '新对话',
-        styleId,
-        pinned: pinned || false,
-        messages: JSON.stringify(messages || []),
+        title: String(title || '新对话').slice(0, 80),
+        styleId: styleId ? String(styleId).slice(0, 40) : undefined,
+        pinned: Boolean(pinned),
+        messages: JSON.stringify(safeMessages),
       },
     });
     res.status(201).json({ ...session, messages: parseMessages(session.messages) });
@@ -300,7 +361,7 @@ router.post('/sessions', async (req: Request, res: Response) => {
 
 router.delete('/sessions/:id', async (req: Request, res: Response) => {
   try {
-    const sessionId = String(req.params.id || '');
+    const sessionId = paramString(req, 'id');
     await prisma.chatSession.deleteMany({
       where: { id: sessionId, userId: req.user!.userId },
     });
@@ -310,11 +371,24 @@ router.delete('/sessions/:id', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/message', async (req: Request, res: Response) => {
-  const { messages, modelId } = req.body as { messages?: ChatMessage[]; modelId?: string };
+router.post('/complete', chatRateLimit, async (req: Request, res: Response) => {
+  const { messages, modelId, temperature, maxTokens, responseFormat } = req.body as {
+    messages?: ChatMessage[];
+    modelId?: string;
+    temperature?: number;
+    maxTokens?: number;
+    responseFormat?: unknown;
+  };
+  const normalizedMessages = normalizeMessages(messages);
 
-  if (!Array.isArray(messages) || messages.length === 0) {
+  if (!normalizedMessages) {
     res.status(400).json({ error: '消息不能为空' });
+    return;
+  }
+
+  const release = acquireAiSlot(req.user!.userId);
+  if (!release) {
+    res.status(429).json({ error: 'AI 正在忙，请稍后再试' });
     return;
   }
 
@@ -322,7 +396,52 @@ router.post('/message', async (req: Request, res: Response) => {
   const startedAt = Date.now();
 
   try {
-    const response = await requestWithFallback(primary, messages, startedAt);
+    const response = await requestCompletion(primary, normalizedMessages, false, {
+      temperature,
+      maxTokens,
+      responseFormat,
+    });
+
+    if (!response.ok) {
+      throw new ProviderError('AI provider returned an error', {
+        status: response.status,
+        body: await response.text().catch(() => ''),
+      });
+    }
+
+    const data = await response.json();
+    res.json({ content: data.choices?.[0]?.message?.content || '' });
+  } catch (err: any) {
+    console.error(
+      `[ai] complete_exception requestedModel=${primary.requestedModel} provider=${primary.name} targetModel=${primary.model} elapsedMs=${Date.now() - startedAt}`,
+      err,
+    );
+    res.status(500).json({ error: 'AI 服务暂时不可用' });
+  } finally {
+    release();
+  }
+});
+
+router.post('/message', chatRateLimit, async (req: Request, res: Response) => {
+  const { messages, modelId } = req.body as { messages?: ChatMessage[]; modelId?: string };
+  const normalizedMessages = normalizeMessages(messages);
+
+  if (!normalizedMessages) {
+    res.status(400).json({ error: '消息不能为空' });
+    return;
+  }
+
+  const release = acquireAiSlot(req.user!.userId);
+  if (!release) {
+    res.status(429).json({ error: 'AI 正在忙，请稍后再试' });
+    return;
+  }
+
+  const primary = getProviderConfig(modelId);
+  const startedAt = Date.now();
+
+  try {
+    const response = await requestWithFallback(primary, normalizedMessages, startedAt);
     await pipeStream(response, res);
   } catch (err: any) {
     console.error(
@@ -333,6 +452,8 @@ router.post('/message', async (req: Request, res: Response) => {
     if (!res.headersSent) {
       res.status(500).json({ error: 'AI 服务暂时不可用' });
     }
+  } finally {
+    release();
   }
 });
 

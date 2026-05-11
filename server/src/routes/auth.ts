@@ -15,9 +15,33 @@ import fs from 'fs/promises';
 import path from 'path';
 import prisma from '../lib/prisma.js';
 import { requireAuth, generateTokens, verifyRefreshToken, AuthPayload } from '../middleware/auth.js';
+import { emailIpKey, rateLimit, userOrIpKey } from '../middleware/rateLimit.js';
 
 const router = Router();
 type VerifyType = 'register' | 'reset';
+
+const authWriteLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 12,
+  keyPrefix: 'auth-write',
+  keyGenerator: emailIpKey,
+  message: '请求太频繁，请 15 分钟后再试',
+});
+
+const emailCodeLimit = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 3,
+  keyPrefix: 'email-code',
+  keyGenerator: emailIpKey,
+  message: '验证码发送太频繁，请稍后再试',
+});
+
+const accountDeleteLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  keyPrefix: 'account-delete',
+  keyGenerator: userOrIpKey,
+});
 
 type CodeRecord = {
   email: string;
@@ -156,7 +180,7 @@ async function sendVerificationEmail(email: string, code: string, type: VerifyTy
 }
 
 // 发送邮箱验证码
-router.post('/send-code', async (req: Request, res: Response) => {
+router.post('/send-code', emailCodeLimit, async (req: Request, res: Response) => {
   try {
     cleanupExpiredVerificationData();
     const email = normalizeEmail(req.body.email);
@@ -201,7 +225,7 @@ router.post('/send-code', async (req: Request, res: Response) => {
 });
 
 // 校验邮箱验证码
-router.post('/verify-code', async (req: Request, res: Response) => {
+router.post('/verify-code', authWriteLimit, async (req: Request, res: Response) => {
   try {
     cleanupExpiredVerificationData();
     const email = normalizeEmail(req.body.email);
@@ -247,7 +271,7 @@ router.post('/verify-code', async (req: Request, res: Response) => {
 });
 
 // 注册
-router.post('/register', async (req: Request, res: Response) => {
+router.post('/register', authWriteLimit, async (req: Request, res: Response) => {
   try {
     const email = normalizeEmail(req.body.email);
     const { nickname, password, verificationToken } = req.body;
@@ -290,7 +314,7 @@ router.post('/register', async (req: Request, res: Response) => {
 });
 
 // 登录
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', authWriteLimit, async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -393,7 +417,7 @@ router.put('/me', requireAuth, async (req: Request, res: Response) => {
 });
 
 // 重置密码（简化版：直接通过邮箱 + 新密码重置）
-router.post('/forgot-password', async (req: Request, res: Response) => {
+router.post('/forgot-password', authWriteLimit, async (req: Request, res: Response) => {
   try {
     const email = normalizeEmail(req.body.email);
     const { newPassword, verificationToken } = req.body;
@@ -426,7 +450,7 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
 });
 
 // 注销账号
-router.delete('/me', requireAuth, async (req: Request, res: Response) => {
+router.delete('/me', requireAuth, accountDeleteLimit, async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
 

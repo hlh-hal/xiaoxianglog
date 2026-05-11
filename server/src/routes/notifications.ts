@@ -4,6 +4,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { paramString, queryString } from '../utils/request.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -12,7 +13,7 @@ router.use(requireAuth);
 router.get('/', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const type = req.query.type as string; // 'friend_request' | 'like,comment,poke'
+    const type = queryString(req, 'type'); // 'friend_request' | 'like,comment,poke'
 
     const where: any = { userId };
     if (type) {
@@ -65,7 +66,7 @@ router.post('/read-all', async (req: Request, res: Response) => {
 router.post('/:id/read', async (req: Request, res: Response) => {
   try {
     await prisma.notification.updateMany({
-      where: { id: req.params.id, userId: req.user!.userId },
+      where: { id: paramString(req, 'id'), userId: req.user!.userId },
       data: { isRead: true },
     });
     res.json({ message: '已标记已读' });

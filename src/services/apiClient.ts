@@ -3,7 +3,8 @@
  * 统一处理 HTTP 请求、JWT Token 管理、自动刷新
  */
 
-const API_BASE = '/api';
+const configuredApiBase = import.meta.env.VITE_API_BASE_URL || '/api';
+const API_BASE = configuredApiBase.replace(/\/$/, '');
 
 // Token 存储键
 const ACCESS_TOKEN_KEY = 'xiang_access_token';
@@ -36,6 +37,17 @@ export function clearTokens(): void {
   localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
+export function apiUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+export function assetUrl(path: string): string {
+  if (!path || /^https?:\/\//i.test(path) || path.startsWith('data:')) return path;
+  const baseWithoutApi = API_BASE.replace(/\/api$/, '');
+  return `${baseWithoutApi}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 /**
  * 是否已登录
  */
@@ -57,7 +69,7 @@ async function refreshAccessToken(): Promise<boolean> {
     if (!refreshToken) return false;
 
     try {
-      const res = await fetch(`${API_BASE}/auth/refresh`, {
+      const res = await fetch(apiUrl('/auth/refresh'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken }),
@@ -88,7 +100,7 @@ export async function apiRequest<T = any>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${API_BASE}${path}`;
+  const url = apiUrl(path);
 
   const headers: Record<string, string> = {
     ...(options.headers as Record<string, string> || {}),
@@ -133,7 +145,7 @@ export async function apiStreamRequest(
   onChunk: (chunk: string) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const url = `${API_BASE}${path}`;
+  const url = apiUrl(path);
   const token = getAccessToken();
   const requestBody = JSON.stringify(body);
 
@@ -222,17 +234,18 @@ export async function uploadImages(files: File[]): Promise<string[]> {
     method: 'POST',
     body: formData,
   });
-  return result.urls;
+  return result.urls.map(assetUrl);
 }
 
 export async function uploadFont(file: File): Promise<{ url: string; fileName: string; fileSize: number }> {
   const formData = new FormData();
   formData.append('font', file);
 
-  return apiRequest('/upload/fonts', {
+  const result = await apiRequest<{ url: string; fileName: string; fileSize: number }>('/upload/fonts', {
     method: 'POST',
     body: formData,
   });
+  return { ...result, url: assetUrl(result.url) };
 }
 
 // === 便捷方法 ===

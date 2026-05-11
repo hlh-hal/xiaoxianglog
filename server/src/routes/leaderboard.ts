@@ -4,6 +4,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { paramString } from '../utils/request.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -148,8 +149,21 @@ router.get('/', async (req: Request, res: Response) => {
 // 排行榜点赞/取消点赞
 router.post('/:id/like', async (req: Request, res: Response) => {
   try {
-    const targetUserId = req.params.id;
+    const targetUserId = paramString(req, 'id');
     const fromUserId = req.user!.userId;
+    if (targetUserId === fromUserId) {
+      res.status(400).json({ error: '不能给自己点赞' });
+      return;
+    }
+
+    const target = await prisma.user.findUnique({
+      where: { id: targetUserId },
+      select: { id: true },
+    });
+    if (!target) {
+      res.status(404).json({ error: '用户不存在' });
+      return;
+    }
 
     const existing = await prisma.leaderboardLike.findUnique({
       where: { userId_fromUserId: { userId: targetUserId, fromUserId } }

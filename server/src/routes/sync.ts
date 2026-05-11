@@ -1,26 +1,24 @@
-/**
- * 数据同步路由
- * 用于客户端离线后恢复在线时的数据同步
- */
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { stringArray } from '../utils/request.js';
 
 const router = Router();
 router.use(requireAuth);
 
-// 拉取服务端更新（增量同步）
 router.get('/pull', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const since = req.query.since as string; // ISO 时间戳
-
+    const since = typeof req.query.since === 'string' ? req.query.since : '';
     const where: any = { userId };
     if (since) {
-      where.updatedAt = { gt: new Date(since) };
+      const sinceDate = new Date(since);
+      if (!Number.isNaN(sinceDate.getTime())) {
+        where.updatedAt = { gt: sinceDate };
+      }
     }
 
-    const entries = await prisma.diaryEntry.findMany({ where });
+    const entries = await prisma.diaryEntry.findMany({ where, take: 1000 });
 
     res.json({
       entries: entries.map(e => ({
@@ -36,13 +34,12 @@ router.get('/pull', async (req: Request, res: Response) => {
   }
 });
 
-// 推送本地修改到服务端（批量）
 router.post('/push', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
     const { entries } = req.body;
 
-    if (!Array.isArray(entries)) {
+    if (!Array.isArray(entries) || entries.length > 100) {
       res.status(400).json({ error: '无效的数据格式' });
       return;
     }
@@ -50,58 +47,58 @@ router.post('/push', async (req: Request, res: Response) => {
     const results: { id: string; status: 'created' | 'updated' | 'conflict' }[] = [];
 
     for (const entry of entries) {
+      const id = String(entry.id || '');
+      if (!id) continue;
+
       const existing = await prisma.diaryEntry.findFirst({
-        where: { id: entry.id, userId },
+        where: { id, userId },
       });
 
       if (existing) {
-        // 乐观锁冲突检测
-        if (entry.syncVersion !== undefined && existing.syncVersion > entry.syncVersion) {
-          results.push({ id: entry.id, status: 'conflict' });
+        if (entry.syncVersion !== undefined && existing.syncVersion > Number(entry.syncVersion)) {
+          results.push({ id, status: 'conflict' });
           continue;
         }
 
-        // 更新
         await prisma.diaryEntry.update({
           where: { id: existing.id },
           data: {
             title: entry.title,
-            content: entry.content,
+            content: String(entry.content || '').slice(0, 200000),
             diaryDate: entry.diaryDate,
             status: entry.status,
             mood: entry.mood,
             weather: entry.weather,
-            tags: entry.tags ? JSON.stringify(entry.tags) : null,
+            tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
             themeId: entry.themeId,
-            images: entry.images ? JSON.stringify(entry.images) : null,
-            isPinned: entry.isPinned,
-            isHidden: entry.isHidden,
+            images: entry.images ? JSON.stringify(stringArray(entry.images, 20, 2000)) : null,
+            isPinned: Boolean(entry.isPinned),
+            isHidden: Boolean(entry.isHidden),
             trashReason: entry.trashReason,
             trashedAt: entry.trashedAt ? new Date(entry.trashedAt) : null,
             syncVersion: { increment: 1 },
           },
         });
-        results.push({ id: entry.id, status: 'updated' });
+        results.push({ id, status: 'updated' });
       } else {
-        // 创建
         await prisma.diaryEntry.create({
           data: {
-            id: entry.id,
+            id,
             userId,
             title: entry.title,
-            content: entry.content || '',
+            content: String(entry.content || '').slice(0, 200000),
             diaryDate: entry.diaryDate || new Date().toISOString().split('T')[0],
             status: entry.status || 'active',
             mood: entry.mood,
             weather: entry.weather,
-            tags: entry.tags ? JSON.stringify(entry.tags) : null,
+            tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
             themeId: entry.themeId,
-            images: entry.images ? JSON.stringify(entry.images) : null,
-            isPinned: entry.isPinned || false,
-            isHidden: entry.isHidden || false,
+            images: entry.images ? JSON.stringify(stringArray(entry.images, 20, 2000)) : null,
+            isPinned: Boolean(entry.isPinned),
+            isHidden: Boolean(entry.isHidden),
           },
         });
-        results.push({ id: entry.id, status: 'created' });
+        results.push({ id, status: 'created' });
       }
     }
 

@@ -8,6 +8,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
 import { api } from '../services/apiClient';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -478,7 +479,7 @@ export default function PostDetail() {
           <div className="break-words" style={{ fontFamily: 'var(--diary-font-family)' }}>
             <Markdown 
               remarkPlugins={[remarkGfm, remarkBreaks]}
-              rehypePlugins={[rehypeRaw]}
+              rehypePlugins={[rehypeRaw, rehypeSanitize]}
             >
               {post.content}
             </Markdown>

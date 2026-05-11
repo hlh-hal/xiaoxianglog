@@ -1,18 +1,15 @@
-/**
- * 编辑历史路由
- */
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { paramString, stringArray } from '../utils/request.js';
 
 const router = Router();
 router.use(requireAuth);
 
-// 获取某篇日记的编辑历史
 router.get('/:entryId', async (req: Request, res: Response) => {
   try {
     const histories = await prisma.editHistory.findMany({
-      where: { entryId: req.params.entryId, userId: req.user!.userId },
+      where: { entryId: paramString(req, 'entryId'), userId: req.user!.userId },
       orderBy: { savedAt: 'desc' },
       take: 50,
     });
@@ -20,12 +17,11 @@ router.get('/:entryId', async (req: Request, res: Response) => {
       ...h,
       images: h.images ? JSON.parse(h.images) : [],
     })));
-  } catch (err: any) {
+  } catch {
     res.status(500).json({ error: '获取编辑历史失败' });
   }
 });
 
-// 保存编辑历史
 router.post('/', async (req: Request, res: Response) => {
   try {
     const { entryId, content, images } = req.body;
@@ -34,18 +30,28 @@ router.post('/', async (req: Request, res: Response) => {
       return;
     }
 
-    const summary = content.substring(0, 50) + (content.length > 50 ? '...' : '');
+    const entry = await prisma.diaryEntry.findFirst({
+      where: { id: String(entryId), userId: req.user!.userId },
+      select: { id: true },
+    });
+    if (!entry) {
+      res.status(404).json({ error: '日记不存在' });
+      return;
+    }
+
+    const safeContent = String(content).slice(0, 200000);
+    const summary = safeContent.substring(0, 50) + (safeContent.length > 50 ? '...' : '');
     const history = await prisma.editHistory.create({
       data: {
-        entryId,
+        entryId: entry.id,
         userId: req.user!.userId,
-        content,
-        images: images ? JSON.stringify(images) : null,
+        content: safeContent,
+        images: images ? JSON.stringify(stringArray(images, 20, 2000)) : null,
         summary,
       },
     });
     res.status(201).json(history);
-  } catch (err: any) {
+  } catch {
     res.status(500).json({ error: '保存编辑历史失败' });
   }
 });

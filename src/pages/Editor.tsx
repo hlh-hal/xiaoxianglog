@@ -24,7 +24,7 @@ import { createRoot } from 'react-dom/client';
 import { motion, AnimatePresence } from 'motion/react';
 import ImageViewer from '../components/ImageViewer';
 
-const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: DiaryEntry | { diaryDate: number }, theme: DiaryTheme, htmlContent: string, images: string[] }) => {
+export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: DiaryEntry | { diaryDate: number }, theme: DiaryTheme, htmlContent: string, images: string[] }) => {
   const date = new Date(entry.diaryDate);
   const day = date.getDate();
   const yearMonth = `${date.getFullYear()}.${String(date.getMonth()+1).padStart(2,'0')}`;

@@ -11,7 +11,10 @@
     "android:sync": "npm run build && cap sync android",
     "android:open": "cap open android",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:exploration": "tsx tests/exports/exploration.test.ts",
+    "test:preservation": "tsx tests/exports/preservation.test.ts",
+    "test:preservation:verify": "tsx tests/exports/preservation.verify.test.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.2",

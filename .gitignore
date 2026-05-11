@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+.vscode/
+server/prisma/data/*.db-shm
+server/prisma/data/*.db-wal

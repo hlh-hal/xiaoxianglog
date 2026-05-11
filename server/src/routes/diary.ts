@@ -13,6 +13,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { paramString, positiveInt, queryString, stringArray } from '../utils/request.js';
 
 const router = Router();
 
@@ -23,9 +24,9 @@ router.use(requireAuth);
 router.get('/entries', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const status = (req.query.status as string) || 'active';
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
+    const status = queryString(req, 'status') || 'active';
+    const page = positiveInt(req.query.page, 1, 1000);
+    const limit = positiveInt(req.query.limit, 50, 50);
     const offset = (page - 1) * limit;
 
     const where: any = { userId, status };
@@ -66,7 +67,7 @@ router.get('/entries', async (req: Request, res: Response) => {
 router.get('/entries/:id', async (req: Request, res: Response) => {
   try {
     const entry = await prisma.diaryEntry.findFirst({
-      where: { id: req.params.id, userId: req.user!.userId },
+      where: { id: paramString(req, 'id'), userId: req.user!.userId },
     });
     if (!entry) {
       res.status(404).json({ error: '日记不存在' });
@@ -99,9 +100,9 @@ router.post('/entries', async (req: Request, res: Response) => {
         status: status || 'active',
         mood,
         weather,
-        tags: tags ? JSON.stringify(tags) : null,
+        tags: tags ? JSON.stringify(stringArray(tags)) : null,
         themeId,
-        images: images ? JSON.stringify(images) : null,
+        images: images ? JSON.stringify(stringArray(images, 20, 2000)) : null,
         isPinned: isPinned || false,
         isHidden: isHidden || false,
       },
@@ -122,12 +123,13 @@ router.post('/entries', async (req: Request, res: Response) => {
 router.put('/entries/:id', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
+    const entryId = paramString(req, 'id');
     const { title, content, diaryDate, status, mood, weather, tags, themeId, images, isPinned, isHidden, syncVersion } = req.body;
 
     // 乐观锁检测
     if (syncVersion !== undefined) {
       const existing = await prisma.diaryEntry.findFirst({
-        where: { id: req.params.id, userId },
+        where: { id: entryId, userId },
       });
       if (existing && existing.syncVersion > syncVersion) {
         res.status(409).json({ error: '数据冲突，请刷新后重试', serverVersion: existing.syncVersion });
@@ -136,7 +138,7 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
     }
 
     const entry = await prisma.diaryEntry.updateMany({
-      where: { id: req.params.id, userId },
+      where: { id: entryId, userId },
       data: {
         ...(title !== undefined && { title }),
         ...(content !== undefined && { content }),
@@ -144,9 +146,9 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
         ...(status !== undefined && { status }),
         ...(mood !== undefined && { mood }),
         ...(weather !== undefined && { weather }),
-        ...(tags !== undefined && { tags: JSON.stringify(tags) }),
+        ...(tags !== undefined && { tags: JSON.stringify(stringArray(tags)) }),
         ...(themeId !== undefined && { themeId }),
-        ...(images !== undefined && { images: JSON.stringify(images) }),
+        ...(images !== undefined && { images: JSON.stringify(stringArray(images, 20, 2000)) }),
         ...(isPinned !== undefined && { isPinned }),
         ...(isHidden !== undefined && { isHidden }),
         syncVersion: { increment: 1 },
@@ -158,7 +160,7 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
       return;
     }
 
-    const updated = await prisma.diaryEntry.findFirst({ where: { id: req.params.id, userId } });
+    const updated = await prisma.diaryEntry.findFirst({ where: { id: entryId, userId } });
     res.json({
       ...updated,
       tags: updated?.tags ? JSON.parse(updated.tags) : [],
@@ -173,9 +175,9 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
 // 移入回收站
 router.delete('/entries/:id', async (req: Request, res: Response) => {
   try {
-    const reason = (req.query.reason as string) || 'deleted';
+    const reason = queryString(req, 'reason') || 'deleted';
     const result = await prisma.diaryEntry.updateMany({
-      where: { id: req.params.id, userId: req.user!.userId },
+      where: { id: paramString(req, 'id'), userId: req.user!.userId },
       data: {
         status: 'trashed',
         trashReason: reason,
@@ -197,7 +199,7 @@ router.delete('/entries/:id', async (req: Request, res: Response) => {
 router.post('/entries/:id/restore', async (req: Request, res: Response) => {
   try {
     const result = await prisma.diaryEntry.updateMany({
-      where: { id: req.params.id, userId: req.user!.userId, status: 'trashed' },
+      where: { id: paramString(req, 'id'), userId: req.user!.userId, status: 'trashed' },
       data: {
         status: 'active',
         trashReason: null,
@@ -219,7 +221,7 @@ router.post('/entries/:id/restore', async (req: Request, res: Response) => {
 router.delete('/entries/:id/permanent', async (req: Request, res: Response) => {
   try {
     const result = await prisma.diaryEntry.deleteMany({
-      where: { id: req.params.id, userId: req.user!.userId },
+      where: { id: paramString(req, 'id'), userId: req.user!.userId },
     });
     if (result.count === 0) {
       res.status(404).json({ error: '日记不存在' });
@@ -248,7 +250,7 @@ router.post('/trash/clear', async (req: Request, res: Response) => {
 // 搜索日记
 router.get('/search', async (req: Request, res: Response) => {
   try {
-    const keyword = (req.query.q as string) || '';
+    const keyword = queryString(req, 'q');
     if (!keyword.trim()) {
       res.json({ entries: [] });
       return;

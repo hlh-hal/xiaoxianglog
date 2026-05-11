@@ -1,30 +1,69 @@
-/**
- * 社区帖子路由
- * GET    /api/community/posts     - 获取帖子列表
- * GET    /api/community/posts/:id - 获取单个帖子详情
- * POST   /api/community/posts     - 发表帖子
- * DELETE /api/community/posts/:id - 删除帖子
- * POST   /api/community/posts/:id/like   - 点赞/取消点赞
- * GET    /api/community/posts/:id/comments - 获取评论
- * POST   /api/community/posts/:id/comments - 发表评论
- */
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
+import { cleanText, paramString, positiveInt, queryString, stringArray } from '../utils/request.js';
 
 const router = Router();
 
-// 获取帖子列表（推荐/好友）
+function parseJsonArray(value?: string | null) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function sanitizePublicHtml(value: unknown) {
+  const allowedTags = new Set([
+    'p', 'br', 'strong', 'em', 's', 'u', 'blockquote', 'ul', 'ol', 'li',
+    'h1', 'h2', 'h3', 'code', 'pre', 'span', 'mark',
+  ]);
+
+  return String(value || '')
+    .slice(0, 20000)
+    .replace(/<\s*(script|style|iframe|object|embed|link|meta)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+    .replace(/\s+on[a-z]+\s*=\s*(['"]).*?\1/gi, '')
+    .replace(/\s+on[a-z]+\s*=\s*[^\s>]+/gi, '')
+    .replace(/\s+(href|src)\s*=\s*(['"])\s*javascript:.*?\2/gi, '')
+    .replace(/<\/?([a-z][a-z0-9-]*)(?:\s[^>]*)?>/gi, (tag, tagName: string) => {
+      const normalized = tagName.toLowerCase();
+      if (!allowedTags.has(normalized)) return '';
+      return tag.startsWith('</') ? `</${normalized}>` : `<${normalized}>`;
+    })
+    .trim();
+}
+
+function formatPost(post: any, likedByMe = false) {
+  return {
+    id: post.id,
+    user: {
+      id: post.user.id,
+      name: post.user.nickname,
+      avatar: post.user.avatarUrl,
+      bio: post.user.bio,
+      time: post.createdAt ? formatTime(post.createdAt) : undefined,
+    },
+    content: post.content,
+    images: parseJsonArray(post.images),
+    viewCount: post.viewCount,
+    readCount: post.readCount,
+    likes: post._count?.likes || 0,
+    comments: post._count?.comments || 0,
+    likedByMe,
+    createdAt: post.createdAt.toISOString(),
+  };
+}
+
 router.get('/posts', optionalAuth, async (req: Request, res: Response) => {
   try {
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 20;
-    const tab = (req.query.tab as string) || 'recommend';
+    const page = positiveInt(req.query.page, 1, 1000);
+    const limit = positiveInt(req.query.limit, 20, 50);
+    const tab = queryString(req, 'tab') || 'recommend';
     const offset = (page - 1) * limit;
+    const where: any = { status: 'published' };
 
-    let where: any = { status: 'published' };
-
-    // 好友 Tab：只显示好友的帖子
     if (tab === 'friends' && req.user) {
       const friendships = await prisma.friendship.findMany({
         where: {
@@ -37,7 +76,6 @@ router.get('/posts', optionalAuth, async (req: Request, res: Response) => {
       const friendIds = friendships.map(f =>
         f.requesterId === req.user!.userId ? f.addresseeId : f.requesterId
       );
-      // 也包含自己的帖子
       friendIds.push(req.user.userId);
       where.userId = { in: friendIds };
     }
@@ -56,9 +94,8 @@ router.get('/posts', optionalAuth, async (req: Request, res: Response) => {
       prisma.communityPost.count({ where }),
     ]);
 
-    // 如果用户已登录，标记哪些帖子被当前用户点过赞
     let likedPostIds: Set<string> = new Set();
-    if (req.user) {
+    if (req.user && posts.length > 0) {
       const likes = await prisma.postLike.findMany({
         where: { userId: req.user.userId, postId: { in: posts.map(p => p.id) } },
         select: { postId: true },
@@ -66,50 +103,30 @@ router.get('/posts', optionalAuth, async (req: Request, res: Response) => {
       likedPostIds = new Set(likes.map(l => l.postId));
     }
 
-    const result = posts.map(p => ({
-      id: p.id,
-      user: {
-        id: p.user.id,
-        name: p.user.nickname,
-        avatar: p.user.avatarUrl,
-        bio: p.user.bio,
-        time: formatTime(p.createdAt),
-      },
-      content: p.content,
-      images: p.images ? JSON.parse(p.images) : [],
-      viewCount: p.viewCount,
-      readCount: p.readCount,
-      likes: p._count.likes,
-      comments: p._count.comments,
-      likedByMe: likedPostIds.has(p.id),
-      createdAt: p.createdAt.toISOString(),
-    }));
-
-    res.json({ posts: result, total, page, limit });
+    res.json({ posts: posts.map(p => formatPost(p, likedPostIds.has(p.id))), total, page, limit });
   } catch (err: any) {
     console.error('获取帖子列表失败:', err);
     res.status(500).json({ error: '获取失败' });
   }
 });
 
-// 获取单个帖子详情
 router.get('/posts/:id', optionalAuth, async (req: Request, res: Response) => {
   try {
-    const post = await prisma.communityPost.findUnique({
-      where: { id: req.params.id },
+    const postId = paramString(req, 'id');
+    const post = await prisma.communityPost.findFirst({
+      where: { id: postId, status: 'published' },
       include: {
         user: { select: { id: true, nickname: true, avatarUrl: true, bio: true } },
         _count: { select: { likes: true, comments: true } },
       },
     });
-    if (!post || post.status !== 'published') {
+    if (!post) {
       res.status(404).json({ error: '帖子不存在' });
       return;
     }
 
-    // 增加浏览量
     await prisma.communityPost.update({
-      where: { id: req.params.id },
+      where: { id: postId },
       data: { viewCount: { increment: 1 } },
     });
 
@@ -121,7 +138,6 @@ router.get('/posts/:id', optionalAuth, async (req: Request, res: Response) => {
       likedByMe = !!like;
     }
 
-    // 获取点赞者列表
     const likedUsers = await prisma.postLike.findMany({
       where: { postId: post.id },
       include: { user: { select: { id: true, nickname: true, avatarUrl: true } } },
@@ -130,26 +146,12 @@ router.get('/posts/:id', optionalAuth, async (req: Request, res: Response) => {
     });
 
     res.json({
-      id: post.id,
-      user: {
-        id: post.user.id,
-        name: post.user.nickname,
-        avatar: post.user.avatarUrl,
-        bio: post.user.bio,
-      },
-      content: post.content,
-      images: post.images ? JSON.parse(post.images) : [],
-      viewCount: post.viewCount + 1,
-      readCount: post.readCount,
-      likes: post._count.likes,
-      comments: post._count.comments,
-      likedByMe,
+      ...formatPost({ ...post, viewCount: post.viewCount + 1 }, likedByMe),
       likedUsers: likedUsers.map(l => ({
         id: l.user.id,
         name: l.user.nickname,
         avatar: l.user.avatarUrl,
       })),
-      createdAt: post.createdAt.toISOString(),
     });
   } catch (err: any) {
     console.error('获取帖子详情失败:', err);
@@ -157,45 +159,52 @@ router.get('/posts/:id', optionalAuth, async (req: Request, res: Response) => {
   }
 });
 
-// 发表帖子
 router.post('/posts', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { content, images, entryId } = req.body;
-    if (!content && (!images || images.length === 0)) {
+    const content = sanitizePublicHtml(req.body.content);
+    const images = stringArray(req.body.images, 9, 2000);
+    const entryId = req.body.entryId ? String(req.body.entryId) : undefined;
+
+    if (!content && images.length === 0) {
       res.status(400).json({ error: '请输入内容或添加图片' });
       return;
+    }
+
+    if (entryId) {
+      const entry = await prisma.diaryEntry.findFirst({
+        where: { id: entryId, userId: req.user!.userId },
+        select: { id: true },
+      });
+      if (!entry) {
+        res.status(403).json({ error: '无权分享该日记' });
+        return;
+      }
     }
 
     const post = await prisma.communityPost.create({
       data: {
         userId: req.user!.userId,
-        content: content || '',
-        images: images ? JSON.stringify(images) : null,
+        content,
+        images: images.length > 0 ? JSON.stringify(images) : null,
         entryId,
       },
       include: {
-        user: { select: { id: true, nickname: true, avatarUrl: true } },
+        user: { select: { id: true, nickname: true, avatarUrl: true, bio: true } },
+        _count: { select: { likes: true, comments: true } },
       },
     });
 
-    res.status(201).json({
-      id: post.id,
-      user: { id: post.user.id, name: post.user.nickname, avatar: post.user.avatarUrl },
-      content: post.content,
-      images: post.images ? JSON.parse(post.images) : [],
-      createdAt: post.createdAt.toISOString(),
-    });
+    res.status(201).json(formatPost(post));
   } catch (err: any) {
     console.error('发表帖子失败:', err);
     res.status(500).json({ error: '发表失败' });
   }
 });
 
-// 删除帖子
 router.delete('/posts/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const result = await prisma.communityPost.updateMany({
-      where: { id: req.params.id, userId: req.user!.userId },
+      where: { id: paramString(req, 'id'), userId: req.user!.userId },
       data: { status: 'deleted' },
     });
     if (result.count === 0) {
@@ -203,59 +212,72 @@ router.delete('/posts/:id', requireAuth, async (req: Request, res: Response) => 
       return;
     }
     res.json({ message: '已删除' });
-  } catch (err: any) {
+  } catch {
     res.status(500).json({ error: '删除失败' });
   }
 });
 
-// 点赞/取消点赞
 router.post('/posts/:id/like', requireAuth, async (req: Request, res: Response) => {
   try {
-    const postId = req.params.id;
+    const postId = paramString(req, 'id');
     const userId = req.user!.userId;
+    const post = await prisma.communityPost.findFirst({
+      where: { id: postId, status: 'published' },
+      select: { id: true, userId: true },
+    });
+    if (!post) {
+      res.status(404).json({ error: '帖子不存在' });
+      return;
+    }
 
     const existing = await prisma.postLike.findUnique({
       where: { postId_userId: { postId, userId } },
     });
 
     if (existing) {
-      // 取消点赞
       await prisma.postLike.delete({ where: { id: existing.id } });
       res.json({ liked: false });
-    } else {
-      // 点赞
-      await prisma.postLike.create({ data: { postId, userId } });
-
-      // 如果点的不是自己的帖子，发送通知
-      const post = await prisma.communityPost.findUnique({ where: { id: postId } });
-      if (post && post.userId !== userId) {
-        await prisma.notification.create({
-          data: {
-            userId: post.userId,
-            fromUserId: userId,
-            type: 'like',
-            refPostId: postId,
-          },
-        });
-      }
-
-      res.json({ liked: true });
+      return;
     }
+
+    await prisma.postLike.create({ data: { postId, userId } });
+    if (post.userId !== userId) {
+      await prisma.notification.create({
+        data: {
+          userId: post.userId,
+          fromUserId: userId,
+          type: 'like',
+          refPostId: postId,
+        },
+      });
+    }
+
+    res.json({ liked: true });
   } catch (err: any) {
     console.error('点赞操作失败:', err);
     res.status(500).json({ error: '操作失败' });
   }
 });
 
-// 获取评论列表
 router.get('/posts/:id/comments', optionalAuth, async (req: Request, res: Response) => {
   try {
+    const postId = paramString(req, 'id');
+    const post = await prisma.communityPost.findFirst({
+      where: { id: postId, status: 'published' },
+      select: { id: true },
+    });
+    if (!post) {
+      res.status(404).json({ error: '帖子不存在' });
+      return;
+    }
+
     const comments = await prisma.postComment.findMany({
-      where: { postId: req.params.id },
+      where: { postId },
       include: {
         user: { select: { id: true, nickname: true, avatarUrl: true } },
       },
       orderBy: { createdAt: 'asc' },
+      take: 200,
     });
 
     let likedCommentIds: Set<string> = new Set();
@@ -279,22 +301,31 @@ router.get('/posts/:id/comments', optionalAuth, async (req: Request, res: Respon
       likedByMe: likedCommentIds.has(c.id),
       createdAt: c.createdAt.toISOString(),
     })));
-  } catch (err: any) {
+  } catch {
     res.status(500).json({ error: '获取评论失败' });
   }
 });
 
-// 发表评论
 router.post('/posts/:id/comments', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { content, parentId } = req.body;
-    if (!content?.trim()) {
+    const postId = paramString(req, 'id');
+    const userId = req.user!.userId;
+    const content = cleanText(req.body.content, 1000);
+    const parentId = req.body.parentId ? String(req.body.parentId) : null;
+
+    if (!content) {
       res.status(400).json({ error: '评论内容不能为空' });
       return;
     }
 
-    const postId = req.params.id;
-    const userId = req.user!.userId;
+    const post = await prisma.communityPost.findFirst({
+      where: { id: postId, status: 'published' },
+      select: { id: true, userId: true },
+    });
+    if (!post) {
+      res.status(404).json({ error: '帖子不存在' });
+      return;
+    }
 
     const comment = await prisma.postComment.create({
       data: { postId, userId, content, parentId },
@@ -303,9 +334,7 @@ router.post('/posts/:id/comments', requireAuth, async (req: Request, res: Respon
       },
     });
 
-    // 发送通知给帖子作者
-    const post = await prisma.communityPost.findUnique({ where: { id: postId } });
-    if (post && post.userId !== userId) {
+    if (post.userId !== userId) {
       await prisma.notification.create({
         data: {
           userId: post.userId,
@@ -325,15 +354,14 @@ router.post('/posts/:id/comments', requireAuth, async (req: Request, res: Respon
       likes: comment.likes,
       createdAt: comment.createdAt.toISOString(),
     });
-  } catch (err: any) {
+  } catch {
     res.status(500).json({ error: '评论失败' });
   }
 });
 
-// 评论点赞/取消点赞
 router.post('/comments/:id/like', requireAuth, async (req: Request, res: Response) => {
   try {
-    const commentId = req.params.id as string;
+    const commentId = paramString(req, 'id');
     const userId = req.user!.userId;
 
     const result = await prisma.$transaction(async (tx) => {
@@ -373,12 +401,11 @@ router.post('/comments/:id/like', requireAuth, async (req: Request, res: Respons
     }
 
     res.json(result);
-  } catch (err: any) {
+  } catch {
     res.status(500).json({ error: '操作失败' });
   }
 });
 
-// 辅助函数：时间格式化
 function formatTime(date: Date): string {
   const diff = Date.now() - date.getTime();
   const min = Math.floor(diff / 60000);

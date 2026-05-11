@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
-import { MOCK_FRIENDS, Friend } from '../data/friends';
+import { MOCK_FRIENDS } from '../data/friends';
 import { api } from '../services/apiClient';
 
 interface Friend {

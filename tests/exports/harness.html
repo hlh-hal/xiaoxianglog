@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=375, initial-scale=1.0" />
+    <title>Export Harness</title>
+  </head>
+  <body>
+    <div id="harness-root"></div>
+    <!--
+      Vite 的 dev server 会把任意 .html 作为独立入口处理，
+      我们在这里引入 harness 的 TS 脚本；它会往 window 上挂
+      __runExportHarness 以便 Puppeteer 从外部调用。
+    -->
+    <script type="module" src="/tests/exports/harness.tsx"></script>
+  </body>
+</html>

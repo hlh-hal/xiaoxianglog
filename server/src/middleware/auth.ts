@@ -3,8 +3,20 @@
  */
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import type { Secret, SignOptions } from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'xiaoxiang-jwt-secret';
+function getJwtSecret(name: string, fallback?: string): Secret {
+  const value = process.env[name] || fallback;
+  if (process.env.NODE_ENV === 'production' && (!value || value.length < 32)) {
+    throw new Error(`${name} must be set to at least 32 characters in production`);
+  }
+  if (!value) {
+    throw new Error(`${name} is not configured`);
+  }
+  return value;
+}
+
+const JWT_SECRET = getJwtSecret('JWT_SECRET', process.env.NODE_ENV === 'production' ? undefined : 'xiaoxiang-dev-jwt-secret-change-me');
 
 export interface AuthPayload {
   userId: string;
@@ -62,13 +74,19 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
  * 生成 JWT Token
  */
 export function generateTokens(payload: AuthPayload) {
+  const accessOptions: SignOptions = {
+    expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as SignOptions['expiresIn'],
+  };
+  const refreshOptions: SignOptions = {
+    expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || '30d') as SignOptions['expiresIn'],
+  };
+
   const accessToken = jwt.sign(payload, JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    ...accessOptions,
   });
 
-  const refreshToken = jwt.sign(payload, process.env.JWT_REFRESH_SECRET || JWT_SECRET, {
-    expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
-  });
+  const refreshSecret = getJwtSecret('JWT_REFRESH_SECRET', JWT_SECRET.toString());
+  const refreshToken = jwt.sign(payload, refreshSecret, refreshOptions);
 
   return { accessToken, refreshToken };
 }
@@ -78,7 +96,7 @@ export function generateTokens(payload: AuthPayload) {
  */
 export function verifyRefreshToken(token: string): AuthPayload | null {
   try {
-    return jwt.verify(token, process.env.JWT_REFRESH_SECRET || JWT_SECRET) as AuthPayload;
+    return jwt.verify(token, getJwtSecret('JWT_REFRESH_SECRET', JWT_SECRET.toString())) as AuthPayload;
   } catch {
     return null;
   }
