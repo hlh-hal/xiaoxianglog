@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
 import { cleanText, paramString, positiveInt, queryString, stringArray } from '../utils/request.js';
+import { deleteStoredUrls } from '../lib/objectStorage.js';
 
 const router = Router();
 
@@ -203,6 +204,10 @@ router.post('/posts', requireAuth, async (req: Request, res: Response) => {
 
 router.delete('/posts/:id', requireAuth, async (req: Request, res: Response) => {
   try {
+    const post = await prisma.communityPost.findFirst({
+      where: { id: paramString(req, 'id'), userId: req.user!.userId },
+      select: { images: true },
+    });
     const result = await prisma.communityPost.updateMany({
       where: { id: paramString(req, 'id'), userId: req.user!.userId },
       data: { status: 'deleted' },
@@ -211,6 +216,7 @@ router.delete('/posts/:id', requireAuth, async (req: Request, res: Response) => 
       res.status(404).json({ error: '帖子不存在' });
       return;
     }
+    await deleteStoredUrls(post?.images ? JSON.parse(post.images) : []);
     res.json({ message: '已删除' });
   } catch {
     res.status(500).json({ error: '删除失败' });

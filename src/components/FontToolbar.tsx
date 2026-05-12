@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { settingsService, FontSettings, CustomFont, PRESET_FONTS } from '../services/settingsService';
 import { diaryService, StoredFont } from '../services/diaryService';
+import { createClientId } from '../utils/id';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface FontToolbarProps {
@@ -113,7 +114,7 @@ export const FontToolbar: React.FC<FontToolbarProps> = ({ fontSettings, onChange
       const arrayBuffer = await file.arrayBuffer();
 
       // 4. 生成唯一字体名（避免冲突）
-      const fontId = crypto.randomUUID();
+      const fontId = createClientId();
       const fontFamilyName = `custom-font-${fontId.slice(0, 8)}`;
 
       // 5. 使用 FontFace API 动态注册字体
@@ -503,5 +504,4 @@ export const FontToolbar: React.FC<FontToolbarProps> = ({ fontSettings, onChange
     </div>
   );
 };
-
 

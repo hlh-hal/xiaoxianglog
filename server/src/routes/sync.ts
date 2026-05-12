@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { stringArray } from '../utils/request.js';
@@ -50,55 +51,71 @@ router.post('/push', async (req: Request, res: Response) => {
       const id = String(entry.id || '');
       if (!id) continue;
 
-      const existing = await prisma.diaryEntry.findFirst({
-        where: { id, userId },
-      });
+      try {
+        const existing = await prisma.diaryEntry.findUnique({
+          where: { id },
+        });
 
-      if (existing) {
-        if (entry.syncVersion !== undefined && existing.syncVersion > Number(entry.syncVersion)) {
+        if (existing) {
+          if (existing.userId !== userId) {
+            results.push({ id, status: 'conflict' });
+            continue;
+          }
+
+          if (entry.syncVersion !== undefined && existing.syncVersion > Number(entry.syncVersion)) {
+            results.push({ id, status: 'conflict' });
+            continue;
+          }
+
+          await prisma.diaryEntry.update({
+            where: { id: existing.id },
+            data: {
+              title: entry.title,
+              content: String(entry.content || '').slice(0, 200000),
+              diaryDate: entry.diaryDate,
+              status: entry.status,
+              mood: entry.mood,
+              weather: entry.weather,
+              tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
+              themeId: entry.themeId,
+              images: entry.images ? JSON.stringify(stringArray(entry.images, 20, 2000)) : null,
+              isPinned: Boolean(entry.isPinned),
+              isHidden: Boolean(entry.isHidden),
+              trashReason: entry.trashReason,
+              trashedAt: entry.trashedAt ? new Date(entry.trashedAt) : null,
+              syncVersion: { increment: 1 },
+            },
+          });
+          results.push({ id, status: 'updated' });
+        } else {
+          await prisma.diaryEntry.create({
+            data: {
+              id,
+              userId,
+              title: entry.title,
+              content: String(entry.content || '').slice(0, 200000),
+              diaryDate: entry.diaryDate || new Date().toISOString().split('T')[0],
+              status: entry.status || 'active',
+              mood: entry.mood,
+              weather: entry.weather,
+              tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
+              themeId: entry.themeId,
+              images: entry.images ? JSON.stringify(stringArray(entry.images, 20, 2000)) : null,
+              isPinned: Boolean(entry.isPinned),
+              isHidden: Boolean(entry.isHidden),
+              trashReason: entry.trashReason,
+              trashedAt: entry.trashedAt ? new Date(entry.trashedAt) : null,
+            },
+          });
+          results.push({ id, status: 'created' });
+        }
+      } catch (err: any) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
           results.push({ id, status: 'conflict' });
           continue;
         }
 
-        await prisma.diaryEntry.update({
-          where: { id: existing.id },
-          data: {
-            title: entry.title,
-            content: String(entry.content || '').slice(0, 200000),
-            diaryDate: entry.diaryDate,
-            status: entry.status,
-            mood: entry.mood,
-            weather: entry.weather,
-            tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
-            themeId: entry.themeId,
-            images: entry.images ? JSON.stringify(stringArray(entry.images, 20, 2000)) : null,
-            isPinned: Boolean(entry.isPinned),
-            isHidden: Boolean(entry.isHidden),
-            trashReason: entry.trashReason,
-            trashedAt: entry.trashedAt ? new Date(entry.trashedAt) : null,
-            syncVersion: { increment: 1 },
-          },
-        });
-        results.push({ id, status: 'updated' });
-      } else {
-        await prisma.diaryEntry.create({
-          data: {
-            id,
-            userId,
-            title: entry.title,
-            content: String(entry.content || '').slice(0, 200000),
-            diaryDate: entry.diaryDate || new Date().toISOString().split('T')[0],
-            status: entry.status || 'active',
-            mood: entry.mood,
-            weather: entry.weather,
-            tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
-            themeId: entry.themeId,
-            images: entry.images ? JSON.stringify(stringArray(entry.images, 20, 2000)) : null,
-            isPinned: Boolean(entry.isPinned),
-            isHidden: Boolean(entry.isHidden),
-          },
-        });
-        results.push({ id, status: 'created' });
+        throw err;
       }
     }
 

@@ -4,7 +4,9 @@ import { useTheme } from '../contexts/ThemeContext';
 import { diaryService, ChatMessage, ChatSession } from '../services/diaryService';
 import { buildDiaryContext } from '../services/diaryContext';
 import { sendMessage as sendToAI, AI_STYLES } from '../services/aiService';
+import { isAuthenticated } from '../services/apiClient';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
+import { createClientId } from '../utils/id';
 import Markdown from 'react-markdown';
 import { CanvasIcon, IconStyle } from '../components/CanvasIcon';
 
@@ -34,6 +36,10 @@ function getTimeoutMessage(modelId: string) {
   }
 
   return 'AI 响应超时，请稍后再试。';
+}
+
+function createId() {
+  return createClientId();
 }
 
 export default function AIChat() {
@@ -295,7 +301,7 @@ export default function AIChat() {
           const fileMessage = `[文件: ${file.name}]\n\n${truncated}${text.length > 8000 ? '\n...(内容过长，已截断)' : ''}`;
           
           setAttachments(prev => [...prev, {
-            id: crypto.randomUUID(),
+            id: createId(),
             type: 'file',
             name: `📄 ${file.name}`,
             content: fileMessage
@@ -340,7 +346,7 @@ export default function AIChat() {
       
       const nameSuffix = todayEntries.length > 1 ? `-${index + 1}` : '';
       return {
-        id: crypto.randomUUID(),
+        id: createId(),
         type: 'diary' as const,
         name: `今日日记(${today})${nameSuffix}`,
         content: `【今日日记（${today}）】\n${cleanContent}`
@@ -379,6 +385,19 @@ export default function AIChat() {
     const displayUserText = displayAttachmentText ? `${displayAttachmentText}\n\n${userText}`.trim() : userText;
     
     setAttachments([]);
+
+    if (!isAuthenticated()) {
+      setInput('');
+      setMessages(prev => [
+        ...prev,
+        { role: 'user', content: displayUserText, rawText: finalUserText },
+        { role: 'assistant', content: '需要登录后才可使用哦。', rawText: '需要登录后才可使用哦。' },
+      ]);
+      setSystemHint('需要登录后才可使用哦。');
+      setTimeout(() => setSystemHint(null), 3000);
+      return;
+    }
+
     setIsLoading(true);
 
     const newUserMsg: ChatMessage = { role: 'user', content: displayUserText, rawText: finalUserText };
@@ -450,7 +469,7 @@ export default function AIChat() {
       
       if (!currentSession) {
         currentSession = {
-          id: crypto.randomUUID(),
+          id: createId(),
           title: userText.substring(0, 15) + (userText.length > 15 ? '...' : ''),
           styleId: currentStyleId,
           messages: [newUserMsg, finalAssistantMsg],
@@ -471,11 +490,14 @@ export default function AIChat() {
 
     } catch (error: any) {
       const partialReply = extractAnswer(fullReply);
+      const errorMessage = String(error?.message || '');
       const fallbackContent = responseTimedOut
         ? getTimeoutMessage(selectedModel)
         : error.name === 'AbortError'
           ? (partialReply || '已停止生成。')
-          : 'AI 服务暂时不可用，请稍后再试。';
+          : /未登录|请登录|Unauthorized|HTTP 401|401/.test(errorMessage)
+            ? '需要登录后才可使用哦。'
+            : 'AI 服务暂时不可用，请稍后再试。';
 
       if (error.name === 'AbortError') {
         console.log('Chat aborted');

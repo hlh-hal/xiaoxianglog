@@ -14,6 +14,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { paramString, positiveInt, queryString, stringArray } from '../utils/request.js';
+import { deleteStoredUrls } from '../lib/objectStorage.js';
 
 const router = Router();
 
@@ -175,6 +176,10 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
 // 移入回收站
 router.delete('/entries/:id', async (req: Request, res: Response) => {
   try {
+    const entry = await prisma.diaryEntry.findFirst({
+      where: { id: paramString(req, 'id'), userId: req.user!.userId },
+      select: { images: true },
+    });
     const reason = queryString(req, 'reason') || 'deleted';
     const result = await prisma.diaryEntry.updateMany({
       where: { id: paramString(req, 'id'), userId: req.user!.userId },
@@ -220,6 +225,10 @@ router.post('/entries/:id/restore', async (req: Request, res: Response) => {
 // 永久删除
 router.delete('/entries/:id/permanent', async (req: Request, res: Response) => {
   try {
+    const entry = await prisma.diaryEntry.findFirst({
+      where: { id: paramString(req, 'id'), userId: req.user!.userId },
+      select: { images: true },
+    });
     const result = await prisma.diaryEntry.deleteMany({
       where: { id: paramString(req, 'id'), userId: req.user!.userId },
     });
@@ -227,6 +236,7 @@ router.delete('/entries/:id/permanent', async (req: Request, res: Response) => {
       res.status(404).json({ error: '日记不存在' });
       return;
     }
+    await deleteStoredUrls(entry?.images ? JSON.parse(entry.images) : []);
     res.json({ message: '已永久删除' });
   } catch (err: any) {
     console.error('永久删除失败:', err);
@@ -237,9 +247,14 @@ router.delete('/entries/:id/permanent', async (req: Request, res: Response) => {
 // 清空回收站
 router.post('/trash/clear', async (req: Request, res: Response) => {
   try {
+    const trashedEntries = await prisma.diaryEntry.findMany({
+      where: { userId: req.user!.userId, status: 'trashed' },
+      select: { images: true },
+    });
     const result = await prisma.diaryEntry.deleteMany({
       where: { userId: req.user!.userId, status: 'trashed' },
     });
+    await deleteStoredUrls(trashedEntries.flatMap(entry => entry.images ? JSON.parse(entry.images) : []));
     res.json({ message: `已清空 ${result.count} 条` });
   } catch (err: any) {
     console.error('清空回收站失败:', err);

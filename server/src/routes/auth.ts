@@ -11,9 +11,10 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
-import fs from 'fs/promises';
-import path from 'path';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import prisma from '../lib/prisma.js';
+import { deleteStoredUrls } from '../lib/objectStorage.js';
 import { requireAuth, generateTokens, verifyRefreshToken, AuthPayload } from '../middleware/auth.js';
 import { emailIpKey, rateLimit, userOrIpKey } from '../middleware/rateLimit.js';
 
@@ -454,7 +455,7 @@ router.delete('/me', requireAuth, accountDeleteLimit, async (req: Request, res: 
   try {
     const userId = req.user!.userId;
 
-    const [user, entries, posts, customFonts] = await Promise.all([
+    const [user, entries, posts, editHistories, customFonts] = await Promise.all([
       prisma.user.findUnique({
         where: { id: userId },
         select: { avatarUrl: true },
@@ -466,6 +467,10 @@ router.delete('/me', requireAuth, accountDeleteLimit, async (req: Request, res: 
       prisma.communityPost.findMany({
         where: { userId },
         select: { id: true, images: true },
+      }),
+      prisma.editHistory.findMany({
+        where: { userId },
+        select: { images: true },
       }),
       prisma.customFont.findMany({
         where: { userId },
@@ -484,6 +489,7 @@ router.delete('/me', requireAuth, accountDeleteLimit, async (req: Request, res: 
       user.avatarUrl,
       ...entries.flatMap(entry => parseJsonStringArray(entry.images)),
       ...posts.flatMap(post => parseJsonStringArray(post.images)),
+      ...editHistories.flatMap(history => parseJsonStringArray(history.images)),
       ...customFonts.map(font => font.fileUrl),
     ].filter((item): item is string => !!item);
 
@@ -561,7 +567,7 @@ router.delete('/me', requireAuth, accountDeleteLimit, async (req: Request, res: 
       };
     });
 
-    await deleteUploadedFiles(uploadUrls);
+    await deleteStoredUrls(uploadUrls);
     res.json({ message: '账号已注销，用户数据已删除', deleted });
   } catch (err: any) {
     console.error('注销账号失败:', err);

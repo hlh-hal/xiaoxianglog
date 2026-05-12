@@ -18,6 +18,7 @@ import html2canvas from 'html2canvas';
 import { useTheme } from '../contexts/ThemeContext';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
 import { useAuth } from '../contexts/AuthContext';
+import { sanitizeModernColors, measureExportCard, pickExportScale, decodeErrorReason } from '../utils/exportImage';
 import { DiaryTheme, allThemes } from '../types/theme';
 import { api, getAccessToken } from '../services/apiClient';
 import { createRoot } from 'react-dom/client';
@@ -531,21 +532,43 @@ export default function Editor() {
 
       // 额外等待一下以确保布局稳定
       await new Promise(r => setTimeout(r, 200));
-      
-      const canvas = await html2canvas(el, {
-        useCORS: true,
-        allowTaint: false,
-        scale: 2,
-        backgroundColor: null,
-        logging: false,
-        width: 375,
-        windowWidth: 375,
-      });
+
+      // bugfix: diary-export-long-text-fails (Requirement 2.1)
+      // 1) 主修：先把 oklch/oklab/lab/lch 归一化成 rgb，避免 html2canvas 解析失败；
+      // 2) 次级防线：按卡片高度挑 scale（默认 2，过高时降级），防止物理 canvas 超限；
+      // 3) 无论 html2canvas 成功失败，finally 里都要 restoreColors() 回滚 inline style。
+      const { cardH } = measureExportCard(el);
+      const scale = pickExportScale(cardH);
+      const restoreColors = sanitizeModernColors(el);
+
+      let canvas: HTMLCanvasElement;
+      try {
+        canvas = await html2canvas(el, {
+          useCORS: true,
+          allowTaint: false,
+          scale,
+          backgroundColor: null,
+          logging: false,
+          width: 375,
+          windowWidth: 375,
+        });
+      } finally {
+        restoreColors();
+      }
+
+      // bugfix: diary-export-long-text-fails (Task 3.4，Requirement 2.3 预留)
+      // 次级防线兜底：若 html2canvas 返回的 canvas 是空的 / toDataURL 返回 "data:,"，
+      // 说明物理 canvas 尺寸 / 面积触及浏览器上限（iOS Safari 4096px、Android WebView 更低），
+      // 抛出含 "canvas size" 的错误走 decodeErrorReason → 'oversize' → 对应的 toast。
+      const dataUrl = canvas.toDataURL('image/png');
+      if (canvas.width === 0 || canvas.height === 0 || dataUrl === 'data:,') {
+        throw new Error(
+          `canvas size exceeded safe limit (width=${canvas.width}, height=${canvas.height})`
+        );
+      }
 
       root.unmount();
       document.body.removeChild(wrapper);
-
-      const dataUrl = canvas.toDataURL('image/png');
 
       // 兼容 Capacitor 原生 App 环境
       const cap = (window as any).Capacitor;
@@ -575,7 +598,16 @@ export default function Editor() {
       }
     } catch (error) {
       console.error('导出图片失败:', error);
-      showToast('导出图片失败，请重试');
+      const reason = decodeErrorReason(error);
+      if (reason === 'unsupported_color') {
+        showToast('暂时无法导出该内容，请稍后重试');
+      } else if (reason === 'oversize') {
+        showToast('日志内容较多，请精简或拆分后再导出');
+      } else if (reason === 'io') {
+        showToast('保存失败，请检查存储权限');
+      } else {
+        showToast('导出图片失败，请重试');
+      }
       root.unmount();
       if (document.body.contains(wrapper)) {
         document.body.removeChild(wrapper);
@@ -1055,6 +1087,34 @@ export default function Editor() {
     color: selectedTheme.textColor,
   } : { ...bgStyle, color: contrastColor, minHeight: '100dvh' };
 
+  const editorChromeHeight = 'calc(64px + env(safe-area-inset-top))';
+  const editorContentTopPadding = 'calc(96px + env(safe-area-inset-top))';
+  const editorContentBottomPadding = showThemeBar
+    ? 'calc(220px + env(safe-area-inset-bottom))'
+    : 'calc(160px + env(safe-area-inset-bottom))';
+  const editorTopFadeMask = [
+    'linear-gradient(to bottom',
+    'transparent 0px',
+    'transparent calc(64px + env(safe-area-inset-top))',
+    'rgba(0, 0, 0, 0.35) calc(76px + env(safe-area-inset-top))',
+    '#000 calc(92px + env(safe-area-inset-top))',
+    '#000 100%)',
+  ].join(', ');
+  const navStyle: React.CSSProperties = {
+    height: editorChromeHeight,
+    paddingTop: 'env(safe-area-inset-top)',
+    ...(selectedTheme ? { backgroundColor: selectedTheme.toolbarColor, color: selectedTheme.textColor } : {}),
+  };
+  const editorScrollStyle: React.CSSProperties = {
+    ...(selectedTheme ? { backgroundColor: selectedTheme.paperColor || 'transparent' } : {}),
+    paddingTop: editorContentTopPadding,
+    paddingBottom: editorContentBottomPadding,
+    WebkitOverflowScrolling: 'touch',
+    WebkitMaskImage: editorTopFadeMask,
+    maskImage: editorTopFadeMask,
+    transition: 'padding-bottom 0.3s ease',
+  };
+
   const handleToggleMark = (markType: 'bold' | 'highlight') => {
     if (!editor) return;
     const { empty } = editor.state.selection;
@@ -1135,10 +1195,10 @@ export default function Editor() {
       
       {/* Top Navigation Bar */}
       <nav 
-        className={`fixed top-0 w-full z-50 px-4 h-16 flex justify-between items-center ${
+        className={`fixed top-0 w-full z-50 px-4 flex justify-between items-center ${
           selectedTheme?.toolbarColor === 'transparent' ? '' : 'backdrop-blur-xl'
         } ${!selectedTheme ? (isDarkBg ? 'bg-black/20 text-white' : 'bg-surface/80 text-on-surface') : ''}`}
-        style={selectedTheme ? { backgroundColor: selectedTheme.toolbarColor, color: selectedTheme.textColor } : undefined}
+        style={navStyle}
       >
         <div className="flex items-center">
           <button 
@@ -1285,13 +1345,9 @@ export default function Editor() {
         </div>
       </nav>
 
-      <main 
-        className="pt-[80px] px-8 max-w-xl mx-auto relative z-10"
-        style={{
-          ...(selectedTheme ? { backgroundColor: selectedTheme.paperColor || 'transparent', minHeight: '100vh' } : {}),
-          paddingBottom: showThemeBar ? 'calc(120px + env(safe-area-inset-bottom))' : '0px',
-          transition: 'padding-bottom 0.3s ease'
-        }}
+      <main
+        className="fixed inset-x-0 top-0 bottom-0 z-10 overflow-y-auto overscroll-contain"
+        style={editorScrollStyle}
         onClick={() => {
           if (showThemeBar) {
             setShowThemeBar(false);
@@ -1310,6 +1366,7 @@ export default function Editor() {
       >
         <div
           id="diary-content-export"
+          className="px-8 max-w-xl mx-auto"
         >
           <div style={{ position: 'relative', zIndex: 1 }}>
             <section 

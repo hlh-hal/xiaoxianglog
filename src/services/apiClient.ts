@@ -172,8 +172,10 @@ export async function apiStreamRequest(
   }
 
   if (!res.ok) {
-    const errorText = await res.text().catch(() => '未知错误');
-    throw new Error(`AI 服务错误: ${errorText}`);
+    const errorData = await res.json().catch(async () => ({
+      error: await res.text().catch(() => '请求失败'),
+    }));
+    throw new Error(errorData.error || `HTTP ${res.status}`);
   }
 
   const reader = res.body!.getReader();

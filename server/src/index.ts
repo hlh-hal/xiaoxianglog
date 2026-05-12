@@ -18,6 +18,7 @@ import notificationRoutes from './routes/notifications.js';
 import leaderboardRoutes from './routes/leaderboard.js';
 import uploadRoutes from './routes/upload.js';
 import syncRoutes from './routes/sync.js';
+import { configureSqlite } from './lib/prisma.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,6 +26,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const BODY_LIMIT_BYTES = 50 * 1024 * 1024;
+
+await configureSqlite();
 
 function parseRequestBody(req: express.Request, res: express.Response, next: express.NextFunction) {
   const method = req.method.toUpperCase();

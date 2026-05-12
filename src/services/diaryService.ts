@@ -6,6 +6,7 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import { api, isAuthenticated } from './apiClient';
 import { localVaultService, VaultSyncResult } from './localVaultService';
+import { createClientId } from '../utils/id';
 
 export type EntryStatus = 'active' | 'draft' | 'trashed';
 
@@ -349,7 +350,7 @@ export const diaryService = {
 
   async createEntry(data: Omit<DiaryEntry, 'id' | 'createdAt' | 'updatedAt' | 'status'> & { id?: string; status?: EntryStatus; createdAt?: string; updatedAt?: string }): Promise<DiaryEntry> {
     const now = new Date().toISOString();
-    let entry: DiaryEntry = { ...data, id: data.id || crypto.randomUUID(), createdAt: data.createdAt || now, updatedAt: data.updatedAt || now, status: data.status || 'active' };
+    let entry: DiaryEntry = { ...data, id: data.id || createClientId(), createdAt: data.createdAt || now, updatedAt: data.updatedAt || now, status: data.status || 'active' };
     const db = await initDB(); 
     await db.put('entries', entry);
     entry = await syncEntryToVault(entry);
@@ -432,7 +433,7 @@ export const diaryService = {
     const db = await initDB(); const now = new Date().toISOString();
     let t: DiaryTemplate;
     if (template.id) { const ex = await db.get('templates', template.id); t = ex ? { ...ex, ...template, updatedAt: now } : { ...template, id: template.id, createdAt: now, updatedAt: now }; }
-    else { t = { ...template, id: crypto.randomUUID(), createdAt: now, updatedAt: now }; }
+    else { t = { ...template, id: createClientId(), createdAt: now, updatedAt: now }; }
     await db.put('templates', t); return t;
   },
 
@@ -453,7 +454,7 @@ export const diaryService = {
     if (useApi()) { try { await withTimeout(api.post('/history', history)); return; } catch (e) { console.warn('后端保存历史失败:', e); } }
     const db = await initDB();
     const c = history.content || '';
-    const newH: EditHistory = { ...history, id: crypto.randomUUID(), summary: c.substring(0, 50) + (c.length > 50 ? '...' : '') };
+    const newH: EditHistory = { ...history, id: createClientId(), summary: c.substring(0, 50) + (c.length > 50 ? '...' : '') };
     await db.put('history', newH);
   },
 
@@ -524,7 +525,7 @@ export const diaryService = {
           continue;
         }
 
-        const id = vaultEntry.id || crypto.randomUUID();
+        const id = vaultEntry.id || createClientId();
         const existing = existingIds.has(id) ? await db.get('entries', id) : undefined;
         const now = new Date().toISOString();
         const entry: DiaryEntry = {

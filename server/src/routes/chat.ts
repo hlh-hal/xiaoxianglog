@@ -21,8 +21,10 @@ type ProviderConfig = {
 };
 
 const XIAOMI_BASE_URL = process.env.XIAOMI_BASE_URL || 'https://token-plan-cn.xiaomimimo.com/v1';
-const XIAOMI_API_KEY = process.env.XIAOMI_API_KEY || '';
+const XIAOMI_API_KEY = process.env.XIAOMI_API_KEY || process.env.AI_API_KEY || '';
 const XIAOMI_MODEL = process.env.XIAOMI_MODEL || 'mimo-v2.5';
+const CPAMC_BASE_URL = process.env.AI_BASE_URL || process.env.CPAMC_BASE_URL || 'http://47.122.112.242:8317/v1';
+const CPAMC_API_KEY = process.env.CPAMC_API_KEY || process.env.AI_API_KEY || '';
 const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS || 45000);
 const PRIMARY_PROVIDER_TIMEOUT_MS = Number(process.env.AI_PRIMARY_TIMEOUT_MS || AI_REQUEST_TIMEOUT_MS);
 const THINKING_PROVIDER_TIMEOUT_MS = Number(process.env.AI_THINKING_TIMEOUT_MS || 120000);
@@ -92,25 +94,11 @@ function getProviderConfig(modelId?: string): ProviderConfig {
 
   return {
     name: 'cpamc',
-    baseUrl: process.env.AI_BASE_URL || 'http://127.0.0.1:8317/v1',
-    apiKey: process.env.CPAMC_API_KEY || process.env.AI_API_KEY || '',
+    baseUrl: CPAMC_BASE_URL,
+    apiKey: CPAMC_API_KEY,
     model: requestedModel,
     requestedModel,
   };
-}
-
-function getFallbackConfig(): ProviderConfig {
-  return {
-    name: 'xiaomi-mimo-fallback',
-    baseUrl: XIAOMI_BASE_URL,
-    apiKey: XIAOMI_API_KEY,
-    model: XIAOMI_MODEL,
-    requestedModel: 'xiaomi-mimo',
-  };
-}
-
-function isFallbackEnabled() {
-  return process.env.AI_ENABLE_FALLBACK !== 'false' && !!XIAOMI_API_KEY;
 }
 
 function getProviderTimeoutMs(provider: ProviderConfig): number {
@@ -145,7 +133,7 @@ async function requestCompletion(provider: ProviderConfig, messages: ChatMessage
   temperature?: number;
   maxTokens?: number;
   responseFormat?: unknown;
-}) {
+}, authMode: 'authorization' | 'api-key' = 'authorization') {
   if (!provider.apiKey) {
     throw new ProviderError('AI provider API key is not configured', { status: 503 });
   }
@@ -155,12 +143,19 @@ async function requestCompletion(provider: ProviderConfig, messages: ChatMessage
   const timeout = setTimeout(() => controller.abort(), getProviderTimeoutMs(provider));
 
   try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (authMode === 'api-key') {
+      headers['api-key'] = provider.apiKey;
+    } else {
+      headers.Authorization = `Bearer ${provider.apiKey}`;
+    }
+
     return await fetch(`${cleanBaseUrl}/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${provider.apiKey}`,
-      },
+      headers,
       body: JSON.stringify({
         model: provider.model,
         messages,
@@ -183,7 +178,15 @@ async function requestProvider(provider: ProviderConfig, messages: ChatMessage[]
     `[ai] request requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model}`,
   );
 
-  const response = await requestCompletion(provider, messages, true);
+  let response = await requestCompletion(provider, messages, true);
+
+  if (!response.ok && response.status === 401 && provider.name === 'xiaomi-mimo') {
+    const errorText = await response.text().catch(() => 'Unknown error');
+    console.warn(
+      `[ai] xiaomi_auth_retry requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model} status=401 body=${JSON.stringify(errorText)}`,
+    );
+    response = await requestCompletion(provider, messages, true, undefined, 'api-key');
+  }
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => 'Unknown error');
@@ -212,32 +215,6 @@ function logProviderError(prefix: string, provider: ProviderConfig, startedAt: n
     `[ai] ${prefix} requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model} status=exception elapsedMs=${Date.now() - startedAt}`,
     error,
   );
-}
-
-async function requestWithFallback(primary: ProviderConfig, messages: ChatMessage[], startedAt: number) {
-  const fallbackEnabled = primary.name !== 'xiaomi-mimo' && isFallbackEnabled();
-
-  try {
-    return await requestProvider(primary, messages, startedAt);
-  } catch (primaryError) {
-    logProviderError('primary_failed', primary, startedAt, primaryError);
-
-    if (!fallbackEnabled) {
-      throw primaryError;
-    }
-
-    const fallback = getFallbackConfig();
-    try {
-      const response = await requestProvider(fallback, messages, startedAt);
-      console.warn(
-        `[ai] fallback_succeeded requestedModel=${primary.requestedModel} fallbackProvider=${fallback.name} fallbackModel=${fallback.model} elapsedMs=${Date.now() - startedAt}`,
-      );
-      return response;
-    } catch (fallbackError) {
-      logProviderError('fallback_failed', fallback, startedAt, fallbackError);
-      throw fallbackError;
-    }
-  }
 }
 
 async function pipeStream(response: globalThis.Response, res: Response) {
@@ -402,6 +379,29 @@ router.post('/complete', chatRateLimit, async (req: Request, res: Response) => {
       responseFormat,
     });
 
+    if (!response.ok && response.status === 401 && primary.name === 'xiaomi-mimo') {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.warn(
+        `[ai] xiaomi_auth_retry requestedModel=${primary.requestedModel} provider=${primary.name} targetModel=${primary.model} status=401 body=${JSON.stringify(errorText)}`,
+      );
+      const altResponse = await requestCompletion(primary, normalizedMessages, false, {
+        temperature,
+        maxTokens,
+        responseFormat,
+      }, 'api-key');
+
+      if (!altResponse.ok) {
+        throw new ProviderError('AI provider returned an error', {
+          status: altResponse.status,
+          body: await altResponse.text().catch(() => ''),
+        });
+      }
+
+      const altData = await altResponse.json();
+      res.json({ content: altData.choices?.[0]?.message?.content || '' });
+      return;
+    }
+
     if (!response.ok) {
       throw new ProviderError('AI provider returned an error', {
         status: response.status,
@@ -441,7 +441,7 @@ router.post('/message', chatRateLimit, async (req: Request, res: Response) => {
   const startedAt = Date.now();
 
   try {
-    const response = await requestWithFallback(primary, normalizedMessages, startedAt);
+    const response = await requestProvider(primary, normalizedMessages, startedAt);
     await pipeStream(response, res);
   } catch (err: any) {
     console.error(
