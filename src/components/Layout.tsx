@@ -692,7 +692,7 @@ export default function Layout() {
                   isActive ? "text-primary" : "text-outline hover:text-primary"
                 )}
               >
-                <Icon className={cn("w-[22px] h-[22px] mb-[2px]", isActive && "fill-current")} />
+                <Icon className={cn("w-[22px] h-[22px] mb-[2px]", isActive && "stroke-[2.25]")} />
                 <span className="font-sans font-normal text-[11px] tracking-wide">{item.label}</span>
               </Link>
             );

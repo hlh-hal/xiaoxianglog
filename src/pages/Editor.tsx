@@ -804,6 +804,49 @@ export default function Editor() {
     }
   }, [isEditing, editor]);
 
+  // bugfix: 键盘弹出或光标移动时，把光标所在行滚动到可视区域上方，
+  // 防止短文本被输入法挡住 / 无法手动滚动露出光标的问题。
+  useEffect(() => {
+    if (!editor || !isFocused) return;
+    if (keyboardInset <= 0) return;
+
+    const scrollCaretIntoView = () => {
+      try {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0).cloneRange();
+        range.collapse(true);
+
+        // 有时折叠的 range 没有尺寸，插入一个临时节点再测量
+        let rect = range.getBoundingClientRect();
+        let probe: HTMLSpanElement | null = null;
+        if (!rect || (rect.top === 0 && rect.left === 0)) {
+          probe = document.createElement('span');
+          probe.textContent = '\u200B';
+          range.insertNode(probe);
+          rect = probe.getBoundingClientRect();
+        }
+
+        const visibleBottom = window.innerHeight - keyboardInset - 60; // 留出 60px 余量覆盖工具条
+        if (rect.bottom > visibleBottom) {
+          const main = document.querySelector('main') as HTMLElement | null;
+          if (main) {
+            main.scrollBy({ top: rect.bottom - visibleBottom + 24, behavior: 'smooth' });
+          }
+        }
+
+        if (probe && probe.parentNode) {
+          probe.parentNode.removeChild(probe);
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    const t = setTimeout(scrollCaretIntoView, 60);
+    return () => clearTimeout(t);
+  }, [editor, isFocused, keyboardInset, updateTick]);
+
   useEffect(() => {
     if (editor) {
       editor.setOptions({
@@ -1088,16 +1131,19 @@ export default function Editor() {
   } : { ...bgStyle, color: contrastColor, minHeight: '100dvh' };
 
   const editorChromeHeight = 'calc(64px + env(safe-area-inset-top))';
-  const editorContentTopPadding = 'calc(96px + env(safe-area-inset-top))';
+  const editorContentTopPadding = 'calc(76px + env(safe-area-inset-top))';
+  // bugfix: 软键盘弹出时，layout viewport 在部分安卓浏览器中不会缩小，
+  // 导致 <main> 没有溢出、完全无法滚动，短文案时光标会被输入法遮挡。
+  // 这里把 keyboardInset 加到底部 padding，确保有足够的可滚动空间把光标滚到可视区。
   const editorContentBottomPadding = showThemeBar
-    ? 'calc(220px + env(safe-area-inset-bottom))'
-    : 'calc(160px + env(safe-area-inset-bottom))';
+    ? `calc(220px + env(safe-area-inset-bottom) + ${keyboardInset}px)`
+    : `calc(160px + env(safe-area-inset-bottom) + ${keyboardInset}px)`;
   const editorTopFadeMask = [
     'linear-gradient(to bottom',
     'transparent 0px',
     'transparent calc(64px + env(safe-area-inset-top))',
-    'rgba(0, 0, 0, 0.35) calc(76px + env(safe-area-inset-top))',
-    '#000 calc(92px + env(safe-area-inset-top))',
+    'rgba(0, 0, 0, 0.35) calc(70px + env(safe-area-inset-top))',
+    '#000 calc(76px + env(safe-area-inset-top))',
     '#000 100%)',
   ].join(', ');
   const navStyle: React.CSSProperties = {
@@ -1366,7 +1412,7 @@ export default function Editor() {
       >
         <div
           id="diary-content-export"
-          className="px-8 max-w-xl mx-auto"
+          className="px-5 max-w-xl mx-auto"
         >
           <div style={{ position: 'relative', zIndex: 1 }}>
             <section 

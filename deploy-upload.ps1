@@ -2,24 +2,77 @@ param(
     [string]$Target = "all"
 )
 
-$Server = "47.122.112.242"
-$FtpUser = "hal"
-$FtpPass = "BkWPsQdnFHvb"
-$FtpPort = 21
+$ErrorActionPreference = "Stop"
+
+$Server = if ($env:XX_FTP_SERVER) { $env:XX_FTP_SERVER } else { "47.122.112.242" }
+$FtpUser = if ($env:XX_FTP_USER) { $env:XX_FTP_USER } else { "hal" }
+$FtpPass = if ($env:XX_FTP_PASS) { $env:XX_FTP_PASS } else { "8kWPsQdnFHyb" }
+$FtpPort = if ($env:XX_FTP_PORT) { [int]$env:XX_FTP_PORT } else { 21 }
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $cred = New-Object System.Net.NetworkCredential($FtpUser, $FtpPass)
+$script:TotalFailures = 0
+
+function Get-ErrorMessage {
+    param([System.Management.Automation.ErrorRecord]$ErrorRecord)
+
+    $messages = New-Object System.Collections.Generic.List[string]
+    $ex = $ErrorRecord.Exception
+    while ($null -ne $ex) {
+        if (-not [string]::IsNullOrWhiteSpace($ex.Message)) {
+            $messages.Add($ex.Message)
+        }
+        $ex = $ex.InnerException
+    }
+    return ($messages -join " | ")
+}
+
+function New-FtpRequest {
+    param(
+        [string]$RemotePath,
+        [string]$Method
+    )
+
+    $uri = "ftp://${Server}:${FtpPort}${RemotePath}"
+    $req = [System.Net.FtpWebRequest]::Create($uri)
+    $req.Method = $Method
+    $req.Credentials = $cred
+    $req.UseBinary = $true
+    $req.UsePassive = $true
+    $req.KeepAlive = $false
+    $req.Timeout = 30000
+    $req.ReadWriteTimeout = 30000
+    return $req
+}
+
+function Test-FtpLogin {
+    Write-Host "Testing FTP login: ${FtpUser}@${Server}:${FtpPort}"
+    try {
+        $req = New-FtpRequest "/" ([System.Net.WebRequestMethods+Ftp]::PrintWorkingDirectory)
+        $resp = $req.GetResponse()
+        $resp.Close()
+        Write-Host "FTP login OK" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "FTP login FAILED" -ForegroundColor Red
+        Write-Host "Reason: $(Get-ErrorMessage $_)"
+        Write-Host "Please verify FTP host, username, password, port, and whether the account is allowed to log in."
+        exit 1
+    }
+}
 
 function EnsureFtpDir {
     param([string]$dirPath)
     $parts = $dirPath.Trim('/').Split('/')
     $cur = ""
     foreach ($p in $parts) {
+        if ([string]::IsNullOrWhiteSpace($p)) {
+            continue
+        }
         $cur += "/$p"
         try {
-            $req = [System.Net.FtpWebRequest]::Create("ftp://${Server}:${FtpPort}${cur}/")
-            $req.Method = [System.Net.WebRequestMethods+Ftp]::MakeDirectory
-            $req.Credentials = $cred
-            $null = $req.GetResponse()
+            $req = New-FtpRequest "${cur}/" ([System.Net.WebRequestMethods+Ftp]::MakeDirectory)
+            $resp = $req.GetResponse()
+            $resp.Close()
         }
         catch { }
     }
@@ -27,21 +80,54 @@ function EnsureFtpDir {
 
 function UploadOneFile {
     param([string]$localPath, [string]$remotePath)
-    $uri = "ftp://${Server}:${FtpPort}${remotePath}"
-    $wc = New-Object System.Net.WebClient
-    $wc.Credentials = $cred
+
+    $remoteDir = $remotePath.Substring(0, $remotePath.LastIndexOf('/'))
+    EnsureFtpDir $remoteDir
+
+    $req = New-FtpRequest $remotePath ([System.Net.WebRequestMethods+Ftp]::UploadFile)
+    $bytes = [System.IO.File]::ReadAllBytes($localPath)
+    $req.ContentLength = $bytes.Length
+    $stream = $null
+    $resp = $null
     try {
-        $wc.UploadFile($uri, $localPath)
+        $stream = $req.GetRequestStream()
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Close()
+        $stream = $null
+        $resp = $req.GetResponse()
     }
-    catch {
-        $rd = $remotePath.Substring(0, $remotePath.LastIndexOf('/'))
-        EnsureFtpDir $rd
-        $wc2 = New-Object System.Net.WebClient
-        $wc2.Credentials = $cred
-        $wc2.UploadFile($uri, $localPath)
-        $wc2.Dispose()
+    finally {
+        if ($null -ne $stream) {
+            $stream.Close()
+        }
+        if ($null -ne $resp) {
+            $resp.Close()
+        }
     }
-    $wc.Dispose()
+}
+
+function UploadOneFileWithRetry {
+    param(
+        [string]$localPath,
+        [string]$remotePath,
+        [int]$maxAttempts = 5
+    )
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            UploadOneFile $localPath $remotePath
+            return
+        }
+        catch {
+            $lastError = $_
+            if ($attempt -ge $maxAttempts) {
+                throw $lastError
+            }
+            Write-Host " RETRY $attempt/$maxAttempts" -ForegroundColor Yellow
+            Start-Sleep -Seconds (2 * $attempt)
+        }
+    }
 }
 
 function UploadDir {
@@ -57,16 +143,20 @@ function UploadDir {
         $rp = "${remoteDir}${rel}"
         Write-Host "    [$i/$total] $($f.Name)" -NoNewline
         try {
-            UploadOneFile $f.FullName $rp
+            UploadOneFileWithRetry $f.FullName $rp
             Write-Host " OK" -ForegroundColor Green
         }
         catch {
             $fail++
             Write-Host " FAIL" -ForegroundColor Red
+            Write-Host "        Remote: $rp"
+            Write-Host "        Reason: $(Get-ErrorMessage $_)"
         }
     }
     return $fail
 }
+
+Test-FtpLogin
 
 if ($Target -eq "front" -or $Target -eq "all") {
     Write-Host "--- Upload frontend (dist) ---"
@@ -77,7 +167,8 @@ if ($Target -eq "front" -or $Target -eq "all") {
     }
     $failCount = UploadDir $dp "/dist"
     if ($failCount -gt 0) {
-        Write-Host "WARNING: $failCount files failed"
+        $script:TotalFailures += $failCount
+        Write-Host "ERROR: $failCount frontend files failed" -ForegroundColor Red
     }
     Write-Host "--- Frontend done ---"
 }
@@ -91,13 +182,33 @@ if ($Target -eq "back" -or $Target -eq "all") {
     }
     $failCount = UploadDir $sd "/xiaoxiang-server/dist"
     if ($failCount -gt 0) {
-        Write-Host "WARNING: $failCount files failed"
+        $script:TotalFailures += $failCount
+        Write-Host "ERROR: $failCount backend files failed" -ForegroundColor Red
     }
     Write-Host "--- Upload schema + package ---"
-    UploadOneFile (Join-Path $ProjectRoot "server\prisma\schema.prisma") "/xiaoxiang-server/prisma/schema.prisma"
-    UploadOneFile (Join-Path $ProjectRoot "server\package.json") "/xiaoxiang-server/package.json"
-    UploadOneFile (Join-Path $ProjectRoot "server\package-lock.json") "/xiaoxiang-server/package-lock.json"
+    foreach ($extra in @(
+        @{ Local = (Join-Path $ProjectRoot "server\prisma\schema.prisma"); Remote = "/xiaoxiang-server/prisma/schema.prisma" },
+        @{ Local = (Join-Path $ProjectRoot "server\package.json"); Remote = "/xiaoxiang-server/package.json" },
+        @{ Local = (Join-Path $ProjectRoot "server\package-lock.json"); Remote = "/xiaoxiang-server/package-lock.json" }
+    )) {
+        Write-Host "    $([System.IO.Path]::GetFileName($extra.Local))" -NoNewline
+        try {
+            UploadOneFileWithRetry $extra.Local $extra.Remote
+            Write-Host " OK" -ForegroundColor Green
+        }
+        catch {
+            $script:TotalFailures++
+            Write-Host " FAIL" -ForegroundColor Red
+            Write-Host "        Remote: $($extra.Remote)"
+            Write-Host "        Reason: $(Get-ErrorMessage $_)"
+        }
+    }
     Write-Host "--- Backend done ---"
+}
+
+if ($script:TotalFailures -gt 0) {
+    Write-Host "=== Upload finished with $script:TotalFailures failure(s) ===" -ForegroundColor Red
+    exit 1
 }
 
 Write-Host "=== All uploads complete ==="

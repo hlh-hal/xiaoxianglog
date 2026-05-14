@@ -301,7 +301,7 @@ export default function Walk() {
       </style>
 
       {/* Animated Waves Bottom */}
-      <div className="absolute bottom-0 left-0 w-full h-[120px] overflow-hidden z-0 pointer-events-none opacity-30">
+      <div className="absolute -bottom-4 md:bottom-0 left-0 w-full h-[180px] md:h-[120px] overflow-hidden z-0 pointer-events-none opacity-30">
         <svg 
           className="absolute bottom-0 w-[200%] h-full" 
           style={{ animation: 'wave 15s linear infinite' }}
@@ -363,7 +363,7 @@ export default function Walk() {
             
             const dateStr = getSafeDateStr(entry.diaryDate);
             const relativeTime = getRelativeTime(entry.diaryDate);
-            const excerpt = getExcerpt(fullContent, 200, true);
+            const excerpt = getExcerpt(fullContent, entry.coverImage ? 200 : 360, true);
 
             const offset = index - currentIndex;
             const absOffset = Math.abs(offset);
@@ -432,6 +432,7 @@ export default function Walk() {
                             display: '-webkit-box',
                             WebkitLineClamp: 8,
                             WebkitBoxOrient: 'vertical',
+                            whiteSpace: 'pre-wrap',
                           }}
                         >
                           {excerpt}
@@ -447,7 +448,7 @@ export default function Walk() {
                   ) : (
                     /* Text Only Card */
                     <div className="w-full h-full p-[24px] flex flex-col relative">
-                      <div className="w-full flex justify-between items-center mb-6">
+                      <div className="w-full flex justify-between items-center mb-4">
                         <span className="bg-surface-container-high text-on-surface-variant text-[12px] px-[10px] py-[4px] rounded-[20px]">
                           {relativeTime}
                         </span>
@@ -456,13 +457,14 @@ export default function Walk() {
                         </span>
                       </div>
                       
-                      <div className="flex-1 overflow-hidden flex flex-col justify-center">
+                      <div className="flex-1 overflow-hidden flex flex-col justify-start">
                         <p 
-                          className="text-on-surface text-[16px] leading-[1.8] font-medium text-center overflow-hidden"
+                          className="text-on-surface text-[16px] leading-[1.8] font-medium text-left overflow-hidden"
                           style={{
                             display: '-webkit-box',
-                            WebkitLineClamp: 12,
+                            WebkitLineClamp: 16,
                             WebkitBoxOrient: 'vertical',
+                            whiteSpace: 'pre-wrap',
                           }}
                         >
                           {excerpt}
