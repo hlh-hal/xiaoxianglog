@@ -509,6 +509,7 @@ export default function Layout() {
             >
               {isLoggedIn ? (
                 <UserAvatar
+                  userId={user?.userId}
                   src={user?.avatarUrl}
                   name={user?.nickname || '我'}
                   className="w-11 h-11 rounded-full"

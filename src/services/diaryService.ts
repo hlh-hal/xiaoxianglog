@@ -454,6 +454,14 @@ export const diaryService = {
     if (useApi()) { try { await withTimeout(api.post('/history', history)); return; } catch (e) { console.warn('后端保存历史失败:', e); } }
     const db = await initDB();
     const c = history.content || '';
+
+    // Deduplication: check if the most recent local history has identical content
+    const existing = await db.getAllFromIndex('history', 'by-entry', history.entryId);
+    if (existing.length > 0) {
+      const sorted = existing.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
+      if (sorted[0].content === c) return; // Skip duplicate
+    }
+
     const newH: EditHistory = { ...history, id: createClientId(), summary: c.substring(0, 50) + (c.length > 50 ? '...' : '') };
     await db.put('history', newH);
   },

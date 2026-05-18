@@ -1,6 +1,7 @@
 /**
  * Shared Prisma client.
  */
+import './env.js';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient({

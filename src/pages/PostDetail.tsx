@@ -11,6 +11,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import { api } from '../services/apiClient';
 import { useAuth } from '../contexts/AuthContext';
+import { UserAvatar } from '../components/UserAvatar';
 
 const formatTime = (isoString: string) => {
   if (!isoString) return '';
@@ -110,14 +111,22 @@ export default function PostDetail() {
       try {
         const postData = await api.get(`/community/posts/${id}`);
         setPost(postData);
-        const commentData = await api.get<any[]>(`/community/posts/${id}/comments`);
-        setComments(formatComments(commentData));
-        
-          try {
-            const friendsData = await api.get<any[]>('/friends');
-            const isFriend = (friendsData || []).some(f => f.id === postData.user.id);
-            if (isFriend) setCurrentFriendStatus('accepted');
-          } catch {}
+
+        // Load comments separately so a failure here doesn't block the post
+        try {
+          const commentData = await api.get<any[]>(`/community/posts/${id}/comments`);
+          if (Array.isArray(commentData)) {
+            setComments(formatComments(commentData));
+          }
+        } catch (commentErr) {
+          console.warn('Failed to load comments:', commentErr);
+        }
+
+        try {
+          const friendsData = await api.get<any[]>('/friends');
+          const isFriend = (friendsData || []).some(f => f.id === postData.user.id);
+          if (isFriend) setCurrentFriendStatus('accepted');
+        } catch {}
 
       } catch (e) {
         console.error(e);
@@ -259,9 +268,16 @@ export default function PostDetail() {
       setComments(prev => formatComments([...flattenComments(prev), createdComment]));
       setPost(prev => prev ? { ...prev, comments: (prev.comments || 0) + 1 } : prev);
 
-      api.get<any[]>(`/community/posts/${post.id}/comments`)
-        .then(commentData => setComments(formatComments(commentData)))
-        .catch(console.warn);
+      // Delay the background refresh slightly to ensure the server has committed the new comment
+      setTimeout(() => {
+        api.get<any[]>(`/community/posts/${post.id}/comments`)
+          .then(commentData => {
+            if (Array.isArray(commentData) && commentData.length > 0) {
+              setComments(formatComments(commentData));
+            }
+          })
+          .catch(console.warn);
+      }, 500);
 
       setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     } catch(e) {
@@ -369,18 +385,13 @@ export default function PostDetail() {
           pointerEvents: isScrolled ? 'auto' : 'none',
           overflow: 'hidden',
         }}>
-          {post.user.avatar ? (
-            <img src={post.user.avatar} style={{ width: 30, height: 30, borderRadius: '50%', objectFit: 'cover' }} alt="" referrerPolicy="no-referrer" />
-          ) : (
-            <div style={{
-              width: 30, height: 30, borderRadius: '50%',
-              backgroundColor: isDark ? '#3A3A3C' : '#E5E5EA',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              flexShrink: 0, fontSize: 16,
-            }}>
-              {post.user.name[0]}
-            </div>
-          )}
+          <UserAvatar
+            userId={post.user.id}
+            src={post.user.avatar}
+            name={post.user.name}
+            className="w-[30px] h-[30px] rounded-full"
+            fallbackClassName="bg-[#E5E5EA] dark:bg-[#3A3A3C] flex items-center justify-center text-[#6E6E73]"
+          />
           <span style={{
             fontSize: '15px', fontWeight: '600',
             color: isDark ? '#F2F2F7' : '#1C1C1E',
@@ -436,13 +447,13 @@ export default function PostDetail() {
         {/* Post Content */}
         <div className="flex justify-between items-center mb-4">
           <div className="flex gap-3 items-center">
-            {post.user.avatar ? (
-              <img src={post.user.avatar} className="w-10 h-10 rounded-full object-cover" alt="" referrerPolicy="no-referrer" />
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-medium">
-                {post.user.name[0]}
-              </div>
-            )}
+            <UserAvatar
+              userId={post.user.id}
+              src={post.user.avatar}
+              name={post.user.name}
+              className="w-10 h-10 rounded-full"
+              fallbackClassName="bg-primary/10 text-primary flex items-center justify-center font-medium"
+            />
             <div>
               <div className="font-medium text-[15px] text-on-surface leading-tight">{post.user.name}</div>
               <div className="text-[11px] text-on-surface-variant flex mt-1">
@@ -506,7 +517,7 @@ export default function PostDetail() {
             className={`pb-2 text-[14px] font-medium transition-colors ${activeTab === 'comments' ? 'text-on-surface border-b-2 border-primary' : 'text-on-surface-variant'}`}
             onClick={() => setActiveTab('comments')}
           >
-            评论 {comments.length}
+            评论 {post.comments || comments.length}
           </button>
           <button 
             className={`pb-2 text-[14px] font-medium transition-colors ${activeTab === 'likes' ? 'text-on-surface border-b-2 border-primary' : 'text-on-surface-variant'}`}
@@ -528,7 +539,13 @@ export default function PostDetail() {
                                 backgroundColor: isDark ? '#3A3A3C' : '#E5E5EA',
                                 flexShrink: 0, display: 'flex',
                                 alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                    {comment.fromUser.avatar ? <img src={comment.fromUser.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : '🐘'}
+                    <UserAvatar
+                      userId={comment.fromUser.id}
+                      src={comment.fromUser.avatar}
+                      name={comment.fromUser.name}
+                      className="w-full h-full rounded-full"
+                      fallbackClassName="bg-[#E5E5EA] dark:bg-[#3A3A3C] flex items-center justify-center text-[#6E6E73]"
+                    />
                   </div>
 
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -592,7 +609,13 @@ export default function PostDetail() {
                               backgroundColor: isDark ? '#3A3A3C' : '#E5E5EA',
                               flexShrink: 0, display: 'flex',
                               alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                  {u.avatar ? <img src={u.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : '🐘'}
+                  <UserAvatar
+                    userId={u.id}
+                    src={u.avatar}
+                    name={u.name}
+                    className="w-full h-full rounded-full"
+                    fallbackClassName="bg-[#E5E5EA] dark:bg-[#3A3A3C] flex items-center justify-center text-[#6E6E73]"
+                  />
                 </div>
                 <span className="text-[15px] text-on-surface font-medium">{u.name}</span>
               </div>
@@ -793,16 +816,13 @@ export default function PostDetail() {
               borderRadius: 12,
               marginBottom: 16,
             }}>
-              {post.user.avatar ? (
-                <img src={post.user.avatar} style={{ width: 44, height: 44, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} alt="" referrerPolicy="no-referrer" />
-              ) : (
-                <div style={{
-                  width: 44, height: 44, borderRadius: '50%',
-                  backgroundColor: isDark ? '#48484A' : '#E5E5EA',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 22, flexShrink: 0,
-                }}>🐘</div>
-              )}
+              <UserAvatar
+                userId={post.user.id}
+                src={post.user.avatar}
+                name={post.user.name}
+                className="w-[44px] h-[44px] rounded-full flex-shrink-0"
+                fallbackClassName="bg-[#E5E5EA] dark:bg-[#48484A] flex items-center justify-center text-[#6E6E73]"
+              />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 15, fontWeight: 600,
                               color: isDark ? '#F2F2F7' : '#1C1C1E',

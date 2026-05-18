@@ -18,6 +18,49 @@ const normalizeAvatarUrl = (avatarUrl?: string | null) => {
   return avatarUrl === LEGACY_DEFAULT_AVATAR_URL ? '' : (avatarUrl || '');
 };
 
+const isEmbeddedAvatar = (value?: string | null) => {
+  return !!value && /^data:/i.test(value);
+};
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('图片压缩失败'));
+    }, type, quality);
+  });
+}
+
+async function compressAvatarImage(file: File): Promise<File> {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('请选择图片文件');
+  }
+
+  const sourceUrl = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.decoding = 'async';
+    image.src = sourceUrl;
+    await image.decode();
+
+    const maxSize = 512;
+    const scale = Math.min(1, maxSize / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('图片压缩失败');
+
+    context.drawImage(image, 0, 0, width, height);
+    const blob = await canvasToBlob(canvas, 'image/jpeg', 0.82);
+    return new File([blob], 'avatar.jpg', { type: 'image/jpeg', lastModified: Date.now() });
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
+
 export default function EditProfile() {
   const navigate = useNavigate();
   const { user, updateUser, logout, deleteAccount } = useAuth();
@@ -39,10 +82,11 @@ export default function EditProfile() {
     if (!user) return;
 
     const timeoutProcess = setTimeout(async () => {
+      const nextAvatarUrl = avatarUrl.trim();
       const nextProfile = {
         nickname: nickname.trim() || user.nickname,
         bio: bio.trim(),
-        avatarUrl: avatarUrl.trim(),
+        avatarUrl: isEmbeddedAvatar(nextAvatarUrl) ? '' : nextAvatarUrl,
       };
 
       const currentBio = normalizeBio(user.bio).trim();
@@ -94,21 +138,16 @@ export default function EditProfile() {
     const file = e.target.files?.[0];
     if (file) {
       try {
-        const urls = await uploadImages([file]);
+        const uploadFile = await compressAvatarImage(file);
+        const urls = await uploadImages([uploadFile]);
         if (urls.length > 0) {
           setAvatarUrl(urls[0]);
           const updated = await authService.updateProfile({ avatarUrl: urls[0], nickname, bio });
           updateUser(updated);
         }
-      } catch {
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-          const base64 = reader.result as string;
-          setAvatarUrl(base64);
-          const updated = await authService.updateProfile({ avatarUrl: base64, nickname, bio });
-          updateUser(updated);
-        };
-        reader.readAsDataURL(file);
+      } catch (error) {
+        console.error('头像上传失败:', error);
+        alert(error instanceof Error ? error.message : '头像上传失败，请稍后再试');
       }
     }
 
@@ -140,8 +179,10 @@ export default function EditProfile() {
           />
           <div onClick={handleChangeAvatar} className="cursor-pointer active:scale-95 transition-transform">
             <UserAvatar
+              userId={user?.userId}
               src={avatarUrl}
               name={nickname || user?.nickname || '我'}
+              preferCurrentUserAvatar={false}
               className="w-24 h-24 rounded-full shrink-0 ring-4 ring-surface-container-high shadow-lg"
               fallbackClassName="bg-surface-container-high flex items-center justify-center text-outline"
             />

@@ -53,6 +53,12 @@ export default function Profile() {
 
   useEffect(() => {
     const loadUnreadCount = async () => {
+      // If notifications were already marked as read (e.g. user just visited Inbox), skip fetch and clear badge
+      if (sessionStorage.getItem('xiang_notifications_cleared') === '1') {
+        sessionStorage.removeItem('xiang_notifications_cleared');
+        setUnreadCount(0);
+        return;
+      }
       try {
         const data = await api.get<{ count?: number; unreadCount?: number }>('/notifications/unread-count');
         setUnreadCount(data.count ?? data.unreadCount ?? 0);
@@ -281,6 +287,7 @@ export default function Profile() {
           className="bg-surface-container-lowest/60 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.04)] p-6 rounded-2xl flex items-center gap-4 group cursor-pointer hover:bg-surface-container-lowest transition-all duration-500"
         >
           <UserAvatar
+            userId={user?.userId}
             src={user?.avatarUrl}
             name={user?.nickname || '我'}
             className="w-16 h-16 rounded-full flex-shrink-0 ring-1 ring-black/5 shadow-sm"

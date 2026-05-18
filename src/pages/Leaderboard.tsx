@@ -167,7 +167,7 @@ export default function Leaderboard() {
 
         const normalizedUsers = (allUsers.length > 0 || !user?.userId
           ? allUsers.map(item => item.isCurrentUser
-              ? { ...item, monthCount: localMonthCount }
+              ? { ...item, monthCount: localMonthCount, avatar: user?.avatarUrl || item.avatar }
               : item
             )
           : [{
@@ -337,13 +337,13 @@ export default function Leaderboard() {
 
                 {/* Avatar */}
                 <div className="w-[40px] h-[40px] rounded-full flex-shrink-0 mr-3 flex items-center justify-center overflow-hidden" style={{ backgroundColor: isDark ? '#3A3A3C' : '#E5E5EA' }}>
-                  {u.avatar ? (
-                    <img src={u.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                  ) : u.isCurrentUser ? (
-                    <span className="text-xl">🐘</span>
-                  ) : (
-                    <span className="text-sm font-medium text-[#6E6E73]">{u.name.slice(0, 1)}</span>
-                  )}
+                  <UserAvatar
+                    userId={u.id}
+                    src={u.avatar}
+                    name={u.name}
+                    className="w-full h-full rounded-full"
+                    fallbackClassName="bg-[#E5E5EA] dark:bg-[#3A3A3C] flex items-center justify-center text-[#6E6E73]"
+                  />
                 </div>
 
                 {/* Name */}
@@ -534,7 +534,13 @@ export default function Leaderboard() {
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 22, flexShrink: 0, overflow: 'hidden'
                   }}>
-                    {u.avatar ? <img src={u.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : '🐘'}
+                    <UserAvatar
+                      userId={u.id}
+                      src={u.avatar}
+                      name={u.name}
+                      className="w-full h-full rounded-full"
+                      fallbackClassName="bg-[#E5E5EA] dark:bg-[#3A3A3C] flex items-center justify-center text-[#6E6E73]"
+                    />
                   </div>
 
                   {/* 昵称 + 简介 */}
@@ -641,16 +647,13 @@ export default function Leaderboard() {
               borderRadius: 12,
               marginBottom: 16,
             }}>
-              {friendRequestTarget.avatar ? (
-                <img src={friendRequestTarget.avatar} style={{ width: 44, height: 44, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} alt="" referrerPolicy="no-referrer" />
-              ) : (
-                <div style={{
-                  width: 44, height: 44, borderRadius: '50%',
-                  backgroundColor: isDark ? '#48484A' : '#E5E5EA',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 22, flexShrink: 0,
-                }}>🐘</div>
-              )}
+              <UserAvatar
+                userId={friendRequestTarget.id}
+                src={friendRequestTarget.avatar}
+                name={friendRequestTarget.name}
+                className="w-[44px] h-[44px] rounded-full flex-shrink-0"
+                fallbackClassName="bg-[#E5E5EA] dark:bg-[#48484A] flex items-center justify-center text-[#6E6E73]"
+              />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 15, fontWeight: 600,
                               color: isDark ? '#F2F2F7' : '#1C1C1E',

@@ -1,5 +1,5 @@
 {
-  "name": "Remix: 日志app6",
-  "description": "",
+  "name": "小象日志",
+  "description": "记录日常、图文与漫步轨迹的私人日志应用",
   "requestFramePermissions": []
 }

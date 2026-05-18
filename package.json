@@ -1,5 +1,5 @@
 {
-  "name": "react-example",
+  "name": "xiaoxiang-log",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -8,6 +8,7 @@
     "dev:all": "node scripts/dev-all.cjs",
     "build": "vite build",
     "preview": "vite preview",
+    "preview:mobile": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/mobile-preview.ps1",
     "android:sync": "npm run build && cap sync android",
     "android:open": "cap open android",
     "clean": "rm -rf dist",

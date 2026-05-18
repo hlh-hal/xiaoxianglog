@@ -11,6 +11,7 @@ $FtpPort = if ($env:XX_FTP_PORT) { [int]$env:XX_FTP_PORT } else { 21 }
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $cred = New-Object System.Net.NetworkCredential($FtpUser, $FtpPass)
 $script:TotalFailures = 0
+[System.Net.WebRequest]::DefaultWebProxy = $null
 
 function Get-ErrorMessage {
     param([System.Management.Automation.ErrorRecord]$ErrorRecord)
@@ -81,28 +82,28 @@ function EnsureFtpDir {
 function UploadOneFile {
     param([string]$localPath, [string]$remotePath)
 
-    $remoteDir = $remotePath.Substring(0, $remotePath.LastIndexOf('/'))
-    EnsureFtpDir $remoteDir
+    $uri = "ftp://${Server}:${FtpPort}${remotePath}"
+    $args = @(
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--disable-epsv",
+        "--noproxy", "*",
+        "--ftp-create-dirs",
+        "--connect-timeout", "20",
+        "--max-time", "180",
+        "--user", "${FtpUser}:${FtpPass}",
+        "--upload-file", $localPath,
+        $uri
+    )
 
-    $req = New-FtpRequest $remotePath ([System.Net.WebRequestMethods+Ftp]::UploadFile)
-    $bytes = [System.IO.File]::ReadAllBytes($localPath)
-    $req.ContentLength = $bytes.Length
-    $stream = $null
-    $resp = $null
-    try {
-        $stream = $req.GetRequestStream()
-        $stream.Write($bytes, 0, $bytes.Length)
-        $stream.Close()
-        $stream = $null
-        $resp = $req.GetResponse()
-    }
-    finally {
-        if ($null -ne $stream) {
-            $stream.Close()
+    $output = & curl.exe @args 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $message = ($output | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($message)) {
+            $message = "curl.exe exited with code $LASTEXITCODE"
         }
-        if ($null -ne $resp) {
-            $resp.Close()
-        }
+        throw $message
     }
 }
 
@@ -173,6 +174,21 @@ if ($Target -eq "front" -or $Target -eq "all") {
     Write-Host "--- Frontend done ---"
 }
 
+if ($Target -eq "back-src") {
+    Write-Host "--- Upload backend source (server/src) ---"
+    $srcDir = Join-Path $ProjectRoot "server\src"
+    if (-not (Test-Path $srcDir)) {
+        Write-Host "ERROR: server/src folder not found"
+        exit 1
+    }
+    $failCount = UploadDir $srcDir "/xiaoxiang-server/src"
+    if ($failCount -gt 0) {
+        $script:TotalFailures += $failCount
+        Write-Host "ERROR: $failCount backend source files failed" -ForegroundColor Red
+    }
+    Write-Host "--- Backend source done ---"
+}
+
 if ($Target -eq "back" -or $Target -eq "all") {
     Write-Host "--- Upload backend (server/dist) ---"
     $sd = Join-Path $ProjectRoot "server\dist"
@@ -204,6 +220,19 @@ if ($Target -eq "back" -or $Target -eq "all") {
         }
     }
     Write-Host "--- Backend done ---"
+
+    Write-Host "--- Upload backend source (server/src) ---"
+    $srcDir = Join-Path $ProjectRoot "server\src"
+    if (-not (Test-Path $srcDir)) {
+        Write-Host "ERROR: server/src folder not found"
+        exit 1
+    }
+    $failCount = UploadDir $srcDir "/xiaoxiang-server/src"
+    if ($failCount -gt 0) {
+        $script:TotalFailures += $failCount
+        Write-Host "ERROR: $failCount backend source files failed" -ForegroundColor Red
+    }
+    Write-Host "--- Backend source done ---"
 }
 
 if ($script:TotalFailures -gt 0) {

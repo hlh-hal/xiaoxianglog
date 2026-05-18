@@ -1,6 +1,7 @@
 /**
  * JWT 认证中间件
  */
+import '../lib/env.js';
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import type { Secret, SignOptions } from 'jsonwebtoken';

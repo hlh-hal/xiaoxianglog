@@ -345,7 +345,7 @@ export default function Walk() {
         </button>
       </header>
 
-      <main className="flex-1 relative w-full flex flex-col justify-center pb-8 z-10">
+      <main className="flex-1 relative w-full flex flex-col justify-start pt-2 pb-8 z-10">
         <div 
           ref={containerRef}
           className="relative w-full h-[65vh] max-h-[700px] flex items-center justify-center touch-none"

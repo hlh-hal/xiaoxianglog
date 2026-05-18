@@ -1,7 +1,7 @@
 /**
  * 闁诲繐绻愮换妤呮寘閸曨垰绫嶉柕澶堝劤缁犲爼鏌涘顒佹崳妞?- Express 闁圭厧鐡ㄥ濠氬极閵堝绀傞柕澶堝劚缂?
  */
-import 'dotenv/config';
+import './lib/env.js';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
@@ -24,7 +24,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = parseInt(process.env.PORT || '3001', 10);
+function getPort() {
+  const port = Number(process.env.PORT);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    return 3001;
+  }
+  return port;
+}
+
+const PORT = getPort();
 const BODY_LIMIT_BYTES = 50 * 1024 * 1024;
 
 await configureSqlite();

@@ -165,6 +165,7 @@ export default function Community() {
               <article id={post.id} key={post.id} className="bg-surface-container-lowest rounded-2xl p-6 flex flex-col gap-5 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)] relative">
                 <header className="flex items-center gap-3">
                   <UserAvatar
+                    userId={post.user.id}
                     src={post.user.avatar}
                     name={post.user.name}
                     className="w-10 h-10 rounded-full"

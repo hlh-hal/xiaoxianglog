@@ -12,16 +12,49 @@ export type Session = {
 // 兼容遗留的本地缓存键，用于离线恢复（可选）
 const SESSION_KEY = 'app_session';
 
+function compactSession(session: Session): Session {
+  const avatarUrl = session.avatarUrl && !/^data:/i.test(session.avatarUrl) && session.avatarUrl.length < 2048
+    ? session.avatarUrl
+    : undefined;
+  return { ...session, avatarUrl };
+}
+
+function isQuotaError(error: unknown): boolean {
+  return error instanceof DOMException
+    && (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED');
+}
+
 export const authService = {
   // 从本地存储获取会话（用于初始化前临时显示）
   getSession(): Session | null {
     const data = localStorage.getItem(SESSION_KEY);
-    return data ? JSON.parse(data) : null;
+    if (!data) return null;
+    try {
+      return JSON.parse(data);
+    } catch {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
   },
 
   setSession(session: Session | null) {
     if (session) {
-      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      localStorage.removeItem(SESSION_KEY);
+      try {
+        localStorage.setItem(SESSION_KEY, JSON.stringify(compactSession(session)));
+      } catch (error) {
+        console.warn('Failed to save full session, retrying without avatar:', error);
+        const { avatarUrl: _avatarUrl, ...safeSession } = session;
+        localStorage.removeItem(SESSION_KEY);
+        try {
+          localStorage.setItem(SESSION_KEY, JSON.stringify(safeSession));
+        } catch (retryError) {
+          if (!isQuotaError(retryError)) {
+            console.warn('Failed to save compact session:', retryError);
+          }
+          localStorage.removeItem(SESSION_KEY);
+        }
+      }
     } else {
       localStorage.removeItem(SESSION_KEY);
     }

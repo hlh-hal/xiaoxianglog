@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { stripAllMarkdown } from '../lib/utils';
 import { Check, Share, Copy, MoreVertical, Image as ImageIcon, Undo, Redo, Highlighter, Bold, Quote, List, ListOrdered, X, ArrowLeft, Trash2, History, FileText, XCircle, ChevronRight, Plus, Star, Download, Palette } from 'lucide-react';
@@ -10,6 +10,7 @@ import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Markdown } from 'tiptap-markdown';
+import { TextSelection } from '@tiptap/pm/state';
 import BackgroundSelector from '../components/BackgroundSelector';
 import { getThemeById, calculateContrastColor } from '../config/themes';
 import { ShareCard } from '../components/ShareCard';
@@ -24,6 +25,7 @@ import { api, getAccessToken } from '../services/apiClient';
 import { createRoot } from 'react-dom/client';
 import { motion, AnimatePresence } from 'motion/react';
 import ImageViewer from '../components/ImageViewer';
+import { SafeImage } from '../components/SafeImage';
 
 export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: DiaryEntry | { diaryDate: number }, theme: DiaryTheme, htmlContent: string, images: string[] }) => {
   const date = new Date(entry.diaryDate);
@@ -320,6 +322,31 @@ export default function Editor() {
   const [images, setImages] = useState<string[]>([]);
   const [isFocused, setIsFocused] = useState(false);
   const [isEditing, setIsEditing] = useState(!id);
+  const editorScrollRef = useRef<HTMLElement | null>(null);
+  const editorInstanceRef = useRef<ReturnType<typeof useEditor>>(null);
+  const isEditingRef = useRef(!id);
+  const suppressNextEditorClickRef = useRef(false);
+  const tapScrollLockRef = useRef<{
+    scrollTop: number;
+    scrollLeft: number;
+    windowScrollX: number;
+    windowScrollY: number;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    moved: boolean;
+    frame: number | null;
+    releaseTimer: number | null;
+  } | null>(null);
+  const inputScrollLockRef = useRef<{
+    scrollTop: number;
+    scrollLeft: number;
+    windowScrollX: number;
+    windowScrollY: number;
+    frame: number | null;
+    timers: number[];
+    remainingFrames: number;
+  } | null>(null);
 
   // Menu and Modals State
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -338,7 +365,9 @@ export default function Editor() {
   const [prevTheme, setPrevTheme] = useState<DiaryTheme | null>(null);
   const [transitioning, setTransitioning] = useState(false);
 
-  const [fixedViewportHeight, setFixedViewportHeight] = useState('100vh');
+  const [fixedViewportHeight, setFixedViewportHeight] = useState(() => (
+    typeof window !== 'undefined' ? window.innerHeight : 0
+  ));
   const [previewImage, setPreviewImage] = useState<string | null>(null);
 
   const previewHashActive = location.hash === '#preview';
@@ -346,6 +375,240 @@ export default function Editor() {
   const [nextIndex, setNextIndex] = useState<number | null>(null);
   const [isCrossfading, setIsCrossfading] = useState(false);
   const isNavigatingToPreview = useRef(false);
+
+  useEffect(() => {
+    isEditingRef.current = isEditing;
+  }, [isEditing]);
+
+  const restoreTapScrollLock = useCallback(() => {
+    const lock = tapScrollLockRef.current;
+    const scrollEl = editorScrollRef.current;
+    if (!lock || !scrollEl) return;
+
+    if (scrollEl.scrollTop !== lock.scrollTop) {
+      scrollEl.scrollTop = lock.scrollTop;
+    }
+    if (scrollEl.scrollLeft !== lock.scrollLeft) {
+      scrollEl.scrollLeft = lock.scrollLeft;
+    }
+    if (window.scrollX !== lock.windowScrollX || window.scrollY !== lock.windowScrollY) {
+      window.scrollTo(lock.windowScrollX, lock.windowScrollY);
+    }
+  }, []);
+
+  const restoreInputScrollLock = useCallback(() => {
+    const lock = inputScrollLockRef.current;
+    const scrollEl = editorScrollRef.current;
+    if (!lock || !scrollEl) return;
+
+    if (scrollEl.scrollTop !== lock.scrollTop) {
+      scrollEl.scrollTop = lock.scrollTop;
+    }
+    if (scrollEl.scrollLeft !== lock.scrollLeft) {
+      scrollEl.scrollLeft = lock.scrollLeft;
+    }
+    if (window.scrollX !== lock.windowScrollX || window.scrollY !== lock.windowScrollY) {
+      window.scrollTo(lock.windowScrollX, lock.windowScrollY);
+    }
+  }, []);
+
+  const stopInputScrollLock = useCallback(() => {
+    const lock = inputScrollLockRef.current;
+    if (!lock) return;
+
+    if (lock.frame !== null) {
+      window.cancelAnimationFrame(lock.frame);
+    }
+    lock.timers.forEach(timer => window.clearTimeout(timer));
+    inputScrollLockRef.current = null;
+  }, []);
+
+  const lockScrollForEditorInput = useCallback(() => {
+    if (!isEditingRef.current) return;
+
+    const scrollEl = editorScrollRef.current;
+    if (!scrollEl) return;
+
+    let lock = inputScrollLockRef.current;
+    if (!lock) {
+      lock = {
+        scrollTop: scrollEl.scrollTop,
+        scrollLeft: scrollEl.scrollLeft,
+        windowScrollX: window.scrollX,
+        windowScrollY: window.scrollY,
+        frame: null,
+        timers: [],
+        remainingFrames: 12,
+      };
+      inputScrollLockRef.current = lock;
+    } else {
+      if (lock.frame !== null) {
+        window.cancelAnimationFrame(lock.frame);
+      }
+      lock.timers.forEach(timer => window.clearTimeout(timer));
+      lock.timers = [];
+      lock.remainingFrames = 12;
+    }
+
+    const restoreFrame = () => {
+      const activeLock = inputScrollLockRef.current;
+      if (!activeLock) return;
+
+      restoreInputScrollLock();
+      activeLock.remainingFrames -= 1;
+
+      if (activeLock.remainingFrames > 0) {
+        activeLock.frame = window.requestAnimationFrame(restoreFrame);
+      } else {
+        activeLock.frame = null;
+      }
+    };
+
+    restoreInputScrollLock();
+    lock.frame = window.requestAnimationFrame(restoreFrame);
+    lock.timers = [40, 100, 180, 320, 520].map(delay => (
+      window.setTimeout(() => {
+        restoreInputScrollLock();
+      }, delay)
+    ));
+    lock.timers.push(window.setTimeout(() => {
+      stopInputScrollLock();
+    }, 720));
+  }, [restoreInputScrollLock, stopInputScrollLock]);
+
+  const stopTapScrollLock = useCallback(() => {
+    const lock = tapScrollLockRef.current;
+    if (!lock) return;
+
+    if (lock.frame !== null) {
+      window.cancelAnimationFrame(lock.frame);
+    }
+    if (lock.releaseTimer !== null) {
+      window.clearTimeout(lock.releaseTimer);
+    }
+    tapScrollLockRef.current = null;
+  }, []);
+
+  const startTapScrollLock = useCallback((e: React.PointerEvent<HTMLElement>) => {
+    if (!isEditingRef.current) return;
+
+    const target = e.target as HTMLElement;
+    if (target.closest('button,a,input,textarea,select,[role="button"]')) return;
+
+    const scrollEl = editorScrollRef.current;
+    if (!scrollEl) return;
+
+    stopTapScrollLock();
+
+    tapScrollLockRef.current = {
+      scrollTop: scrollEl.scrollTop,
+      scrollLeft: scrollEl.scrollLeft,
+      windowScrollX: window.scrollX,
+      windowScrollY: window.scrollY,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      moved: false,
+      frame: null,
+      releaseTimer: null,
+    };
+
+    const lockFrame = () => {
+      const lock = tapScrollLockRef.current;
+      if (!lock) return;
+      restoreTapScrollLock();
+      lock.frame = window.requestAnimationFrame(lockFrame);
+    };
+
+    tapScrollLockRef.current.frame = window.requestAnimationFrame(lockFrame);
+  }, [restoreTapScrollLock, stopTapScrollLock]);
+
+  const updateTapScrollLockMove = useCallback((e: React.PointerEvent<HTMLElement>) => {
+    const lock = tapScrollLockRef.current;
+    if (!lock || lock.pointerId !== e.pointerId) return;
+
+    if (Math.hypot(e.clientX - lock.startX, e.clientY - lock.startY) > 4) {
+      lock.moved = true;
+      stopInputScrollLock();
+      stopTapScrollLock();
+    }
+  }, [stopInputScrollLock, stopTapScrollLock]);
+
+  const releaseTapScrollLock = useCallback((delay = 500) => {
+    const lock = tapScrollLockRef.current;
+    if (!lock) return;
+
+    if (lock.releaseTimer !== null) {
+      window.clearTimeout(lock.releaseTimer);
+    }
+
+    lock.releaseTimer = window.setTimeout(() => {
+      stopTapScrollLock();
+    }, delay);
+  }, [stopTapScrollLock]);
+
+  const focusEditorAtPointWithoutScroll = useCallback((clientX: number, clientY: number) => {
+    const editor = editorInstanceRef.current;
+    const view = editor?.view;
+    if (!view) return false;
+
+    const scrollEl = editorScrollRef.current;
+    const scrollTop = scrollEl?.scrollTop ?? 0;
+    const scrollLeft = scrollEl?.scrollLeft ?? 0;
+    const position = view.posAtCoords({ left: clientX, top: clientY });
+
+    if (position) {
+      const safePos = Math.max(0, Math.min(position.pos, view.state.doc.content.size));
+      const selection = TextSelection.near(view.state.doc.resolve(safePos));
+      view.dispatch(view.state.tr.setSelection(selection));
+    }
+
+    view.focus();
+
+    if (scrollEl) {
+      scrollEl.scrollTop = scrollTop;
+      scrollEl.scrollLeft = scrollLeft;
+    }
+    restoreTapScrollLock();
+
+    return Boolean(position);
+  }, [restoreTapScrollLock]);
+
+  const finishTapScrollLock = useCallback((e: React.PointerEvent<HTMLElement>) => {
+    const lock = tapScrollLockRef.current;
+    if (!lock || lock.pointerId !== e.pointerId || lock.moved) return false;
+
+    const target = e.target as HTMLElement;
+    const editorEl = e.currentTarget.querySelector('.ProseMirror');
+    const isEditorTap = Boolean(editorEl?.contains(target));
+    const isBlankSurfaceTap = target === e.currentTarget || target.dataset.editorBlankSurface === 'true';
+
+    if (!isEditorTap && !isBlankSurfaceTap) {
+      releaseTapScrollLock(120);
+      return false;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+    suppressNextEditorClickRef.current = true;
+    restoreTapScrollLock();
+
+    const editor = editorInstanceRef.current;
+    if (isEditorTap) {
+      focusEditorAtPointWithoutScroll(e.clientX, e.clientY);
+    } else {
+      editor?.view.focus();
+      restoreTapScrollLock();
+    }
+
+    releaseTapScrollLock(600);
+    return true;
+  }, [focusEditorAtPointWithoutScroll, releaseTapScrollLock, restoreTapScrollLock]);
+
+  useEffect(() => () => {
+    stopInputScrollLock();
+    stopTapScrollLock();
+  }, [stopInputScrollLock, stopTapScrollLock]);
 
   useEffect(() => {
     if (!previewHashActive) {
@@ -383,13 +646,13 @@ export default function Editor() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       let lastWidth = window.innerWidth;
-      setFixedViewportHeight(`${window.innerHeight}px`);
+      setFixedViewportHeight(window.innerHeight);
 
       const handleResize = () => {
         // 如果宽度改变（比如横竖屏切换），才更新高度；单纯高度缩小（比如弹窗输入法）不更新
         if (window.innerWidth !== lastWidth) {
           lastWidth = window.innerWidth;
-          setFixedViewportHeight(`${window.innerHeight}px`);
+          setFixedViewportHeight(window.innerHeight);
         }
       };
       
@@ -464,6 +727,10 @@ export default function Editor() {
   // History State
   const [historyList, setHistoryList] = useState<EditHistory[]>([]);
   const [selectedHistory, setSelectedHistory] = useState<EditHistory | null>(null);
+
+  // Auto-save history: periodic snapshots to prevent data loss
+  const lastHistoryContentRef = useRef<string>('');
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const shareCardRef = useRef<HTMLDivElement>(null);
@@ -732,6 +999,40 @@ export default function Editor() {
   const isDarkBg = selectedTheme 
     ? ['#E8EDF2', '#E8EEF8', '#FFFFFF'].includes(selectedTheme.textColor)
     : contrastColor === '#FFFFFF';
+  const lockEditorScrollDomEvents = {
+    beforeinput: () => {
+      lockScrollForEditorInput();
+      return false;
+    },
+    input: () => {
+      lockScrollForEditorInput();
+      return false;
+    },
+    compositionstart: () => {
+      lockScrollForEditorInput();
+      return false;
+    },
+    compositionupdate: () => {
+      lockScrollForEditorInput();
+      return false;
+    },
+    compositionend: () => {
+      lockScrollForEditorInput();
+      return false;
+    },
+    keydown: (_view: unknown, event: KeyboardEvent) => {
+      const editingKey = event.key.length === 1
+        || event.key === 'Enter'
+        || event.key === 'Backspace'
+        || event.key === 'Delete';
+
+      if (editingKey) {
+        lockScrollForEditorInput();
+      }
+
+      return false;
+    },
+  };
 
   const editor = useEditor({
     editable: isEditing,
@@ -751,6 +1052,7 @@ export default function Editor() {
     onUpdate: ({ editor }) => {
       setContent(editor.getHTML());
       hasUnsavedChanges.current = true;
+      lockScrollForEditorInput();
     },
     onSelectionUpdate: () => {
       // Force re-render for toolbar formatting states when cursor moves
@@ -759,14 +1061,22 @@ export default function Editor() {
     onTransaction: () => {
       setUpdateTick(t => t + 1);
     },
-    onFocus: () => setIsFocused(true),
-    onBlur: () => setIsFocused(false),
+    onFocus: () => {
+      setIsFocused(true);
+    },
+    onBlur: () => {
+      setIsFocused(false);
+    },
     editorProps: {
       attributes: {
         class: `prose prose-headings:font-headline prose-headings:font-bold prose-h1:text-2xl prose-h2:text-xl prose-strong:font-medium prose-a:text-primary prose-blockquote:border-l-4 prose-blockquote:border-primary prose-blockquote:bg-primary/5 prose-blockquote:px-4 prose-blockquote:py-1 prose-blockquote:rounded-r-lg max-w-none min-h-[60vh] focus:outline-none caret-primary text-[var(--diary-font-size)] leading-[var(--diary-line-height)] ${isDarkBg ? 'prose-invert prose-headings:text-white prose-strong:text-white text-white' : 'prose-headings:text-on-surface prose-strong:text-on-surface text-on-surface'}`,
       },
+      handleDOMEvents: lockEditorScrollDomEvents,
+      handleScrollToSelection: () => true,
     },
   });
+
+  editorInstanceRef.current = editor;
 
   const templateEditor = useEditor({
     extensions: [
@@ -804,56 +1114,15 @@ export default function Editor() {
     }
   }, [isEditing, editor]);
 
-  // bugfix: 键盘弹出或光标移动时，把光标所在行滚动到可视区域上方，
-  // 防止短文本被输入法挡住 / 无法手动滚动露出光标的问题。
-  useEffect(() => {
-    if (!editor || !isFocused) return;
-    if (keyboardInset <= 0) return;
-
-    const scrollCaretIntoView = () => {
-      try {
-        const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return;
-        const range = sel.getRangeAt(0).cloneRange();
-        range.collapse(true);
-
-        // 有时折叠的 range 没有尺寸，插入一个临时节点再测量
-        let rect = range.getBoundingClientRect();
-        let probe: HTMLSpanElement | null = null;
-        if (!rect || (rect.top === 0 && rect.left === 0)) {
-          probe = document.createElement('span');
-          probe.textContent = '\u200B';
-          range.insertNode(probe);
-          rect = probe.getBoundingClientRect();
-        }
-
-        const visibleBottom = window.innerHeight - keyboardInset - 60; // 留出 60px 余量覆盖工具条
-        if (rect.bottom > visibleBottom) {
-          const main = document.querySelector('main') as HTMLElement | null;
-          if (main) {
-            main.scrollBy({ top: rect.bottom - visibleBottom + 24, behavior: 'smooth' });
-          }
-        }
-
-        if (probe && probe.parentNode) {
-          probe.parentNode.removeChild(probe);
-        }
-      } catch {
-        // ignore
-      }
-    };
-
-    const t = setTimeout(scrollCaretIntoView, 60);
-    return () => clearTimeout(t);
-  }, [editor, isFocused, keyboardInset, updateTick]);
-
   useEffect(() => {
     if (editor) {
       editor.setOptions({
         editorProps: {
           attributes: {
             class: `prose prose-headings:font-headline prose-headings:font-bold prose-h1:text-2xl prose-h2:text-xl prose-strong:font-medium prose-a:text-primary prose-blockquote:border-l-4 prose-blockquote:border-primary prose-blockquote:bg-primary/5 prose-blockquote:px-4 prose-blockquote:py-1 prose-blockquote:rounded-r-lg max-w-none min-h-[60vh] focus:outline-none caret-primary text-[var(--diary-font-size)] leading-[var(--diary-line-height)] ${isDarkBg ? 'prose-invert prose-headings:text-white prose-strong:text-white text-white' : 'prose-headings:text-on-surface prose-strong:text-on-surface text-on-surface'}`,
-          }
+          },
+          handleDOMEvents: lockEditorScrollDomEvents,
+          handleScrollToSelection: () => true,
         }
       });
     }
@@ -942,17 +1211,94 @@ export default function Editor() {
     }
   }, [id, editor]);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // ===== Auto-save history: periodic snapshots every 30s while editing =====
+  useEffect(() => {
+    // Initialize lastHistoryContentRef with the loaded content
+    if (existingJournal) {
+      lastHistoryContentRef.current = existingJournal.content || '';
+    }
+  }, [existingJournal?.id]);
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const base64 = event.target?.result as string;
-      setImages(prev => [...prev, base64]);
-      hasUnsavedChanges.current = true;
+  useEffect(() => {
+    if (!existingJournal || !isEditing) return;
+
+    const INTERVAL_MS = 30_000; // 30 seconds
+
+    autoSaveTimerRef.current = setInterval(() => {
+      if (!hasUnsavedChanges.current) return;
+
+      const currentContent = editor?.getHTML() || content;
+      // Skip if content is identical to last saved history snapshot
+      if (currentContent === lastHistoryContentRef.current) return;
+      // Skip if content is empty or just whitespace
+      const plainText = currentContent.replace(/<[^>]*>/g, '').trim();
+      if (!plainText) return;
+
+      // Save snapshot
+      lastHistoryContentRef.current = currentContent;
+      diaryService.saveHistory({
+        entryId: existingJournal.id,
+        content: currentContent,
+        images: images,
+        savedAt: new Date().toISOString(),
+      }).catch(err => console.warn('Auto-save history failed:', err));
+    }, INTERVAL_MS);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearInterval(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
     };
-    reader.readAsDataURL(file);
+  }, [existingJournal?.id, isEditing, editor]);
+
+  // Save history on page hide / visibility change (user switches app or closes tab)
+  useEffect(() => {
+    if (!existingJournal || !isEditing) return;
+
+    const saveOnHide = () => {
+      if (!hasUnsavedChanges.current) return;
+      const currentContent = editor?.getHTML() || content;
+      if (currentContent === lastHistoryContentRef.current) return;
+      const plainText = currentContent.replace(/<[^>]*>/g, '').trim();
+      if (!plainText) return;
+
+      lastHistoryContentRef.current = currentContent;
+      // Use sendBeacon-style fire-and-forget
+      diaryService.saveHistory({
+        entryId: existingJournal.id,
+        content: currentContent,
+        images: images,
+        savedAt: new Date().toISOString(),
+      }).catch(() => {});
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') saveOnHide();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', saveOnHide);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', saveOnHide);
+    };
+  }, [existingJournal?.id, isEditing, editor]);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const base64 = event.target?.result as string;
+        setImages(prev => [...prev, base64]);
+        hasUnsavedChanges.current = true;
+      };
+      reader.readAsDataURL(file);
+    });
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -1021,14 +1367,19 @@ export default function Editor() {
 
       let savedEntry;
       if (existingJournal) {
-        // Save history before update
-        diaryService.saveHistory({
-            entryId: existingJournal.id,
-            content: existingJournal.content,
-            images: existingJournal.images || [],
-            savedAt: new Date().toISOString()
-          })
-          .catch(error => console.warn('Failed to save edit history:', error));
+        // Save current content as a history snapshot before overwriting
+        const currentContent2 = currentContent;
+        const plainCheck = currentContent2.replace(/<[^>]*>/g, '').trim();
+        if (plainCheck && currentContent2 !== lastHistoryContentRef.current) {
+          lastHistoryContentRef.current = currentContent2;
+          diaryService.saveHistory({
+              entryId: existingJournal.id,
+              content: currentContent2,
+              images: images,
+              savedAt: new Date().toISOString()
+            })
+            .catch(error => console.warn('Failed to save edit history:', error));
+        }
 
         savedEntry = await diaryService.updateEntry(existingJournal.id, {
           content: currentContent,
@@ -1130,14 +1481,20 @@ export default function Editor() {
     color: selectedTheme.textColor,
   } : { ...bgStyle, color: contrastColor, minHeight: '100dvh' };
 
+  const fixedViewportHeightCss = fixedViewportHeight > 0 ? `${fixedViewportHeight}px` : '100vh';
   const editorChromeHeight = 'calc(64px + env(safe-area-inset-top))';
   const editorContentTopPadding = 'calc(76px + env(safe-area-inset-top))';
   // bugfix: 软键盘弹出时，layout viewport 在部分安卓浏览器中不会缩小，
   // 导致 <main> 没有溢出、完全无法滚动，短文案时光标会被输入法遮挡。
   // 这里把 keyboardInset 加到底部 padding，确保有足够的可滚动空间把光标滚到可视区。
+  // 额外加 40vh 的空白，让用户在编辑时光标下方始终有舒适的留白空间。
+  // Reserve scrollable space; the visible room is locked from the user's scroll.
+  const editorBottomBreathingRoom = fixedViewportHeight > 0
+    ? `${Math.max(260, Math.round(fixedViewportHeight * 0.4))}px`
+    : '40vh';
   const editorContentBottomPadding = showThemeBar
-    ? `calc(220px + env(safe-area-inset-bottom) + ${keyboardInset}px)`
-    : `calc(160px + env(safe-area-inset-bottom) + ${keyboardInset}px)`;
+    ? `calc(220px + ${editorBottomBreathingRoom} + env(safe-area-inset-bottom) + ${keyboardInset}px)`
+    : `calc(160px + ${editorBottomBreathingRoom} + env(safe-area-inset-bottom) + ${keyboardInset}px)`;
   const editorTopFadeMask = [
     'linear-gradient(to bottom',
     'transparent 0px',
@@ -1158,7 +1515,8 @@ export default function Editor() {
     WebkitOverflowScrolling: 'touch',
     WebkitMaskImage: editorTopFadeMask,
     maskImage: editorTopFadeMask,
-    transition: 'padding-bottom 0.3s ease',
+    scrollPaddingBottom: `calc(120px + ${editorBottomBreathingRoom})`,
+    overflowAnchor: 'none',
   };
 
   const handleToggleMark = (markType: 'bold' | 'highlight') => {
@@ -1191,7 +1549,7 @@ export default function Editor() {
           {prevTheme && transitioning && (
             <div style={{
               position: 'fixed', top: 0, left: 0, right: 0,
-              height: fixedViewportHeight,
+              height: fixedViewportHeightCss,
               zIndex: 0,
               backgroundImage: prevTheme.backgroundImage ? `url(${prevTheme.backgroundImage})` : 'none',
               backgroundColor: prevTheme.backgroundColor || '#FAF9F5',
@@ -1209,7 +1567,7 @@ export default function Editor() {
           {/* 新背景淡入 */}
           <div style={{
             position: 'fixed', top: 0, left: 0, right: 0,
-            height: fixedViewportHeight,
+            height: fixedViewportHeightCss,
             zIndex: 0,
             backgroundImage: selectedTheme.backgroundImage
               ? `url(${selectedTheme.backgroundImage})` : 'none',
@@ -1392,32 +1750,52 @@ export default function Editor() {
       </nav>
 
       <main
+        ref={editorScrollRef}
         className="fixed inset-x-0 top-0 bottom-0 z-10 overflow-y-auto overscroll-contain"
         style={editorScrollStyle}
-        onClick={() => {
+        onTouchMove={stopInputScrollLock}
+        onWheel={stopInputScrollLock}
+        onPointerMove={updateTapScrollLockMove}
+        onPointerDown={(e) => {
+          startTapScrollLock(e);
+        }}
+        onPointerUp={finishTapScrollLock}
+        onPointerCancel={stopTapScrollLock}
+        onClick={(e) => {
           if (showThemeBar) {
             setShowThemeBar(false);
           }
           if (isBackgroundSelectorOpen) {
             setIsBackgroundSelectorOpen(false);
           }
+          if (suppressNextEditorClickRef.current) {
+            suppressNextEditorClickRef.current = false;
+            return;
+          }
           if (!isEditing) {
             setIsEditing(true);
             editor?.commands.focus();
             setTimeout(() => editor?.commands.focus(), 10);
           } else {
-            editor?.commands.focus();
+            // 只有当点击发生在编辑器内容区域内时才 re-focus，
+            // 避免点击底部空白区域时触发 scrollIntoView 把页面跳回光标位置。
+            const editorEl = (e.currentTarget as HTMLElement).querySelector('.ProseMirror');
+            if (editorEl && editorEl.contains(e.target as Node)) {
+              editor?.commands.focus(undefined, { scrollIntoView: false });
+            }
           }
         }}
       >
         <div
           id="diary-content-export"
           className="px-5 max-w-xl mx-auto"
+          data-editor-blank-surface="true"
         >
-          <div style={{ position: 'relative', zIndex: 1 }}>
+          <div style={{ position: 'relative', zIndex: 1 }} data-editor-blank-surface="true">
             <section 
               className="space-y-6 cursor-text"
               style={{ fontFamily: 'var(--diary-font-family)' }}
+              data-editor-blank-surface="true"
             >
               <EditorContent editor={editor} />
 
@@ -1432,7 +1810,7 @@ export default function Editor() {
                         openPreview(0);
                       }}
                     >
-                      <img src={images[0]} style={{
+                      <SafeImage src={images[0]} style={{
                         width: '100%', aspectRatio: '4/3',
                         objectFit: 'cover', display: 'block'
                       }} />
@@ -1461,7 +1839,7 @@ export default function Editor() {
                             openPreview(idx);
                           }}
                         >
-                          <img src={src} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                          <SafeImage src={src} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                           {isEditing && (
                             <button 
                               onClick={(e) => { e.stopPropagation(); removeImage(idx); }}
@@ -1489,7 +1867,7 @@ export default function Editor() {
                             openPreview(idx);
                           }}
                         >
-                          <img src={src} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                          <SafeImage src={src} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                           {isEditing && (
                             <button 
                               onClick={(e) => { e.stopPropagation(); removeImage(idx); }}
@@ -1512,6 +1890,7 @@ export default function Editor() {
       <input 
         type="file" 
         accept="image/*" 
+        multiple
         className="hidden" 
         ref={fileInputRef}
         onChange={handleImageUpload}
@@ -1679,7 +2058,7 @@ export default function Editor() {
                       </div>
                       <span className="text-xs text-on-surface-variant bg-surface-container px-2 py-1 rounded-md">系统</span>
                     </div>
-                    <p className="text-sm text-on-surface-variant line-clamp-1 whitespace-pre-wrap">{SYSTEM_TEMPLATE.replace(/<[^>]*>?/gm, '')}</p>
+                    <p className="text-sm text-on-surface-variant whitespace-pre-wrap">{SYSTEM_TEMPLATE.replace(/<[^>]*>?/gm, '')}</p>
                   </div>
                 </div>
               ) : (
@@ -1715,7 +2094,7 @@ export default function Editor() {
                           )}
                         </div>
                       </div>
-                      <p className="text-sm text-on-surface-variant line-clamp-1">{tpl.content.replace(/<[^>]*>?/gm, '')}</p>
+                      <p className="text-sm text-on-surface-variant whitespace-pre-wrap">{tpl.content.replace(/<[^>]*>?/gm, '')}</p>
                     </div>
                   ))}
                   

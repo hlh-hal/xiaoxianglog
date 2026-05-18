@@ -3,6 +3,7 @@ import { ChevronLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { sendBrowserNotification } from '../utils/notify';
 import { api } from '../services/apiClient';
+import { UserAvatar } from '../components/UserAvatar';
 
 export interface Notification {
   id: string;
@@ -76,6 +77,7 @@ export default function Inbox() {
   const isDark = document.documentElement.classList.contains('dark');
 
   const notifyUnreadCleared = () => {
+    sessionStorage.setItem('xiang_notifications_cleared', '1');
     window.dispatchEvent(new CustomEvent('xiang-notifications-read'));
   };
 
@@ -108,6 +110,12 @@ export default function Inbox() {
       }
     };
     fetchNotifications();
+
+    // On unmount (user navigates away), ensure the cleared flag is set
+    // so Profile picks it up immediately on mount
+    return () => {
+      sessionStorage.setItem('xiang_notifications_cleared', '1');
+    };
   }, []);
 
   const showToast = (msg: string) => {
@@ -286,18 +294,13 @@ export default function Inbox() {
             {/* 左侧：头像 + 类型角标 */}
             <div style={{ position: 'relative', flexShrink: 0 }}>
               {/* 头像 40px 圆形 */}
-              {item.sourceUser.avatarUrl ? (
-                <img src={item.sourceUser.avatarUrl} alt="Avatar" style={{ width: 40, height: 40, borderRadius: '50%', objectFit: 'cover' }} referrerPolicy="no-referrer" />
-              ) : (
-                <div style={{
-                  width: 40, height: 40, borderRadius: '50%',
-                  backgroundColor: isDark ? '#3A3A3C' : '#E5E5EA',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 18,
-                }}>
-                  🐘
-                </div>
-              )}
+              <UserAvatar
+                userId={item.sourceUser.id}
+                src={item.sourceUser.avatarUrl}
+                name={item.sourceUser.nickname}
+                className="w-[40px] h-[40px] rounded-full"
+                fallbackClassName="bg-[#E5E5EA] dark:bg-[#3A3A3C] flex items-center justify-center text-[#6E6E73]"
+              />
             </div>
 
             {/* 中间：通知文字 */}

@@ -27,7 +27,13 @@ export default function Login() {
       login(session);
       navigate('/profile', { replace: true });
     } catch (err: any) {
-      setError(err.message || '登录失败');
+      const message = String(err?.message || '');
+      if (message.includes('app_session') || message.includes('QuotaExceededError') || message.includes('exceeded the quota')) {
+        localStorage.removeItem('app_session');
+        setError('本地缓存已清理，请再点一次登录');
+      } else {
+        setError(message || '登录失败');
+      }
     } finally {
       setLoading(false);
     }

@@ -38,34 +38,39 @@ catch {
 
 Write-Host "Testing FTP upload data connection ..."
 
-$remoteTestPath = "/codex-upload-test.txt"
-$bytes = [System.Text.Encoding]::UTF8.GetBytes("codex ftp upload test")
-$stream = $null
-$resp = $null
+$tempFile = Join-Path $env:TEMP "codex-ftp-upload-test.txt"
+Set-Content -LiteralPath $tempFile -Value "codex ftp upload test" -Encoding ASCII
+
 try {
-    $req = New-FtpRequest $remoteTestPath ([System.Net.WebRequestMethods+Ftp]::UploadFile)
-    $req.ContentLength = $bytes.Length
-    $stream = $req.GetRequestStream()
-    $stream.Write($bytes, 0, $bytes.Length)
-    $stream.Close()
-    $stream = $null
-    $resp = $req.GetResponse()
-    $resp.Close()
-    $resp = $null
+    $args = @(
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--disable-epsv",
+        "--ftp-create-dirs",
+        "--connect-timeout", "20",
+        "--max-time", "60",
+        "--user", "${FtpUser}:${FtpPass}",
+        "--upload-file", $tempFile,
+        "ftp://${Server}:${FtpPort}/codex-upload-test.txt"
+    )
+    $output = & curl.exe @args 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $message = ($output | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($message)) {
+            $message = "curl.exe exited with code $LASTEXITCODE"
+        }
+        throw $message
+    }
     Write-Host "FTP upload OK!" -ForegroundColor Green
 }
 catch {
     Write-Host "FTP upload FAILED!" -ForegroundColor Red
-    Write-Host "Error: $($_.Exception.Message)"
+    Write-Host "Error: $_"
     Write-Host ""
-    Write-Host "This usually means the FTP server passive/data ports are not open or FileZilla Server passive mode is misconfigured."
+    Write-Host "curl.exe upload failed. Check the server passive/data ports and FileZilla passive mode settings."
     exit 1
 }
 finally {
-    if ($null -ne $stream) {
-        $stream.Close()
-    }
-    if ($null -ne $resp) {
-        $resp.Close()
-    }
+    Remove-Item -LiteralPath $tempFile -ErrorAction SilentlyContinue
 }

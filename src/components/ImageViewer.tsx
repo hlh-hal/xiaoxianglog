@@ -2,6 +2,7 @@ import React, { useState, useRef, useLayoutEffect } from 'react';
 import { motion } from 'motion/react';
 import { X } from 'lucide-react';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
+import { SafeImage } from './SafeImage';
 
 interface ImageViewerProps {
   images: string[];
@@ -61,7 +62,7 @@ const ImageSlide = ({ img, idx, onClose }: { img: string; idx: number; onClose: 
             justifyContent: 'center'
           }}
         >
-          <img 
+          <SafeImage
             src={img} 
             alt={`View ${idx}`} 
             referrerPolicy="no-referrer"

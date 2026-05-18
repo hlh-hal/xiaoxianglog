@@ -40,6 +40,19 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     const safeContent = String(content).slice(0, 200000);
+
+    // Deduplication: skip if the most recent history entry has identical content
+    const lastHistory = await prisma.editHistory.findFirst({
+      where: { entryId: entry.id, userId: req.user!.userId },
+      orderBy: { savedAt: 'desc' },
+      select: { id: true, content: true },
+    });
+    if (lastHistory && lastHistory.content === safeContent) {
+      // Content unchanged — no need to create a duplicate entry
+      res.status(200).json({ id: lastHistory.id, deduplicated: true });
+      return;
+    }
+
     const summary = safeContent.substring(0, 50) + (safeContent.length > 50 ? '...' : '');
     const history = await prisma.editHistory.create({
       data: {

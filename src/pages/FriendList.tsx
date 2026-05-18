@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
 import { MOCK_FRIENDS } from '../data/friends';
 import { api } from '../services/apiClient';
+import { UserAvatar } from '../components/UserAvatar';
 
 interface Friend {
   id: string;
@@ -296,7 +297,13 @@ export default function FriendList() {
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: 22, flexShrink: 0, overflow: 'hidden'
             }}>
-              {friend.avatar ? <img src={friend.avatar} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : '🐘'}
+              <UserAvatar
+                userId={friend.id}
+                src={friend.avatar}
+                name={friend.name}
+                className="w-full h-full rounded-full"
+                fallbackClassName="bg-[#E5E5EA] dark:bg-[#3A3A3C] flex items-center justify-center text-[#6E6E73]"
+              />
             </div>
 
             <div style={{ flex: 1, minWidth: 0 }}>
