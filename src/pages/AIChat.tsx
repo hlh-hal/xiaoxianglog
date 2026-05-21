@@ -20,6 +20,9 @@ const DEFAULT_MODEL_TIMEOUT_MS = 45000;
 const MODEL_TIMEOUT_MS: Record<string, number> = {
   'LongCat-Flash-Thinking-2601': 120000,
 };
+const EDGE_SWIPE_START_MAX_X = 40;
+const EDGE_SWIPE_MIN_DELTA_X = 60;
+const EDGE_SWIPE_MAX_DELTA_Y = 40;
 
 function extractAnswer(rawText: string): string {
   // Remove all <think>...</think> paired blocks, and any unclosed <think> block at the end (for streaming)
@@ -81,6 +84,7 @@ export default function AIChat() {
   const [activeContextSession, setActiveContextSession] = useState<ChatSession | null>(null);
   const [contextMenuPos, setContextMenuPos] = useState<{x: number, y: number} | null>(null);
   const pressTimer = useRef<NodeJS.Timeout | null>(null);
+  const edgeSwipeRef = useRef<{ startX: number; startY: number; tracking: boolean } | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
 
@@ -570,7 +574,39 @@ export default function AIChat() {
     : historySessions;
 
   const groupedSessions = groupSessions(filteredSessions);
-  let startX = 0;
+
+  const resetEdgeSwipe = () => {
+    edgeSwipeRef.current = null;
+  };
+
+  const handleEdgeSwipeStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    const touch = e.touches[0];
+    if (!touch) return;
+
+    edgeSwipeRef.current = {
+      startX: touch.clientX,
+      startY: touch.clientY,
+      tracking: touch.clientX <= EDGE_SWIPE_START_MAX_X,
+    };
+  };
+
+  const handleEdgeSwipeEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    const touch = e.changedTouches[0];
+    const swipe = edgeSwipeRef.current;
+    resetEdgeSwipe();
+
+    if (!touch || !swipe?.tracking) return;
+
+    const deltaX = touch.clientX - swipe.startX;
+    const deltaY = Math.abs(touch.clientY - swipe.startY);
+    if (deltaX > EDGE_SWIPE_MIN_DELTA_X && deltaY < EDGE_SWIPE_MAX_DELTA_Y) {
+      if (window.history.length > 1) {
+        navigate(-1);
+      } else {
+        navigate('/', { replace: true });
+      }
+    }
+  };
 
   const quickPrompts = [
     '📊 根据我的日记，我最近状态怎么样？',
@@ -587,17 +623,9 @@ export default function AIChat() {
         backgroundColor: isDark ? '#1C1C1E' : '#FAF9F5',
         boxSizing: 'border-box'
       }}
-      onTouchStart={e => { startX = e.touches[0].clientX; }}
-      onTouchEnd={e => {
-        const delta = e.changedTouches[0].clientX - startX;
-        if (delta > 60 && startX < 40) {
-          if (window.history.length > 1) {
-            navigate(-1);
-          } else {
-            navigate('/', { replace: true });
-          }
-        }
-      }}
+      onTouchStart={handleEdgeSwipeStart}
+      onTouchEnd={handleEdgeSwipeEnd}
+      onTouchCancel={resetEdgeSwipe}
     >
       {/* AppBar */}
       <header style={{
