@@ -5,6 +5,7 @@ import { diaryService, DiaryEntry } from '../services/diaryService';
 import { extractImages } from '../utils/imageUtils';
 import { getExcerpt } from '../utils/textUtils';
 import { format, isValid } from 'date-fns';
+import { SafeImage } from '../components/SafeImage';
 
 const FOOTER_TEXTS = [
   '随 机 回 顾 时 光',
@@ -53,7 +54,7 @@ interface WanderEntry extends DiaryEntry {
 export default function Walk() {
   const navigate = useNavigate();
   const location = useLocation();
-  const outletContext = useOutletContext<any>();
+  const { returnToDrawer } = useOutletContext<any>();
   const [entries, setEntries] = useState<WanderEntry[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -255,6 +256,14 @@ export default function Walk() {
     }
   };
 
+  const goBack = () => {
+    if (location.state?.fromDrawer && returnToDrawer) {
+      returnToDrawer();
+    } else {
+      navigate(-1);
+    }
+  };
+
   if (loading) {
     return <div className="min-h-screen bg-surface" />;
   }
@@ -264,14 +273,7 @@ export default function Walk() {
       <div className="min-h-screen bg-surface flex flex-col font-sans">
         <header className="w-full z-50 flex items-center justify-between px-4 h-16 shrink-0 relative">
           <button 
-            onClick={() => {
-              if (location.state?.fromDrawer) {
-                sessionStorage.setItem('openDrawerOnNextMount', 'true');
-                navigate(-1);
-              } else {
-                navigate(-1);
-              }
-            }}
+            onClick={goBack}
             className="p-2 -ml-2 rounded-full hover:bg-surface-container-high transition-colors relative z-10"
           >
             <ArrowLeft className="w-[26px] h-[26px] text-on-surface" />
@@ -323,14 +325,7 @@ export default function Walk() {
 
       <header className="w-full z-50 flex items-center justify-between px-4 h-16 shrink-0 relative">
         <button 
-          onClick={() => {
-            if (location.state?.fromDrawer) {
-              sessionStorage.setItem('openDrawerOnNextMount', 'true');
-              navigate(-1);
-            } else {
-              navigate(-1);
-            }
-          }}
+          onClick={goBack}
           className="p-2 -ml-2 rounded-full hover:bg-surface-container-high transition-colors relative z-10"
         >
           <ArrowLeft className="w-[26px] h-[26px] text-on-surface" />
@@ -403,7 +398,7 @@ export default function Walk() {
                   {entry.coverImage ? (
                     <>
                       {/* Background Image */}
-                      <img 
+                      <SafeImage
                         src={entry.coverImage} 
                         alt="" 
                         className="absolute inset-0 w-full h-full object-cover" 

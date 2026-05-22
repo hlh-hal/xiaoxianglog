@@ -15,11 +15,31 @@ import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { paramString, positiveInt, queryString, stringArray } from '../utils/request.js';
 import { deleteStoredUrls } from '../lib/objectStorage.js';
+import { repairLegacyImageUrls } from '../lib/imageRepair.js';
+import { areStringArraysEqual, parseStoredStringArray, saveEditHistorySnapshot } from '../lib/editHistory.js';
 
 const router = Router();
 
 // 所有日记接口都需要认证
 router.use(requireAuth);
+
+function parseJsonArray(value?: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+async function formatDiaryEntry(entry: any) {
+  return {
+    ...entry,
+    tags: entry.tags ? JSON.parse(entry.tags) : [],
+    images: await repairLegacyImageUrls(parseJsonArray(entry.images)),
+  };
+}
 
 // 获取日记列表
 router.get('/entries', async (req: Request, res: Response) => {
@@ -51,11 +71,7 @@ router.get('/entries', async (req: Request, res: Response) => {
     ]);
 
     // 解析 JSON 字段
-    const result = entries.map(e => ({
-      ...e,
-      tags: e.tags ? JSON.parse(e.tags) : [],
-      images: e.images ? JSON.parse(e.images) : [],
-    }));
+    const result = await Promise.all(entries.map(formatDiaryEntry));
 
     res.json({ entries: result, total, page, limit });
   } catch (err: any) {
@@ -74,11 +90,7 @@ router.get('/entries/:id', async (req: Request, res: Response) => {
       res.status(404).json({ error: '日记不存在' });
       return;
     }
-    res.json({
-      ...entry,
-      tags: entry.tags ? JSON.parse(entry.tags) : [],
-      images: entry.images ? JSON.parse(entry.images) : [],
-    });
+    res.json(await formatDiaryEntry(entry));
   } catch (err: any) {
     console.error('获取日记失败:', err);
     res.status(500).json({ error: '获取失败' });
@@ -109,11 +121,14 @@ router.post('/entries', async (req: Request, res: Response) => {
       },
     });
 
-    res.status(201).json({
-      ...entry,
-      tags: entry.tags ? JSON.parse(entry.tags) : [],
-      images: entry.images ? JSON.parse(entry.images) : [],
+    await saveEditHistorySnapshot({
+      entryId: entry.id,
+      userId,
+      content: entry.content,
+      images: parseJsonArray(entry.images),
     });
+
+    res.status(201).json(await formatDiaryEntry(entry));
   } catch (err: any) {
     console.error('创建日记失败:', err);
     res.status(500).json({ error: '创建失败' });
@@ -126,16 +141,31 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
     const userId = req.user!.userId;
     const entryId = paramString(req, 'id');
     const { title, content, diaryDate, status, mood, weather, tags, themeId, images, isPinned, isHidden, syncVersion } = req.body;
+    const existingForHistory = await prisma.diaryEntry.findFirst({
+      where: { id: entryId, userId },
+    });
 
-    // 乐观锁检测
-    if (syncVersion !== undefined) {
-      const existing = await prisma.diaryEntry.findFirst({
-        where: { id: entryId, userId },
+    if (!existingForHistory) {
+      res.status(404).json({ error: 'Diary entry not found' });
+      return;
+    }
+
+    // Optimistic lock check
+    if (syncVersion !== undefined && existingForHistory.syncVersion > Number(syncVersion)) {
+      res.status(409).json({ error: 'Data conflict, please refresh and retry', serverVersion: existingForHistory.syncVersion });
+      return;
+    }
+
+    const nextImages = images !== undefined ? stringArray(images, 20, 2000) : undefined;
+    const contentChanged = content !== undefined && String(content) !== existingForHistory.content;
+    const imagesChanged = nextImages !== undefined && !areStringArraysEqual(nextImages, parseStoredStringArray(existingForHistory.images));
+    if (contentChanged || imagesChanged) {
+      await saveEditHistorySnapshot({
+        entryId: existingForHistory.id,
+        userId,
+        content: existingForHistory.content,
+        images: parseStoredStringArray(existingForHistory.images),
       });
-      if (existing && existing.syncVersion > syncVersion) {
-        res.status(409).json({ error: '数据冲突，请刷新后重试', serverVersion: existing.syncVersion });
-        return;
-      }
     }
 
     const entry = await prisma.diaryEntry.updateMany({
@@ -162,11 +192,7 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
     }
 
     const updated = await prisma.diaryEntry.findFirst({ where: { id: entryId, userId } });
-    res.json({
-      ...updated,
-      tags: updated?.tags ? JSON.parse(updated.tags) : [],
-      images: updated?.images ? JSON.parse(updated.images) : [],
-    });
+    res.json(await formatDiaryEntry(updated));
   } catch (err: any) {
     console.error('更新日记失败:', err);
     res.status(500).json({ error: '更新失败' });
@@ -286,11 +312,7 @@ router.get('/search', async (req: Request, res: Response) => {
     });
 
     res.json({
-      entries: entries.map(e => ({
-        ...e,
-        tags: e.tags ? JSON.parse(e.tags) : [],
-        images: e.images ? JSON.parse(e.images) : [],
-      })),
+      entries: await Promise.all(entries.map(formatDiaryEntry)),
     });
   } catch (err: any) {
     console.error('搜索日记失败:', err);

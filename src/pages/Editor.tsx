@@ -1159,7 +1159,7 @@ export default function Editor() {
           }
           
           if (data.images) {
-            setImages(data.images);
+            setImages(data.images.filter((img: string) => typeof img === 'string' && img.trim() !== ''));
           }
           if (data.backgroundId) {
             setBackgroundId(data.backgroundId);
@@ -1367,20 +1367,6 @@ export default function Editor() {
 
       let savedEntry;
       if (existingJournal) {
-        // Save current content as a history snapshot before overwriting
-        const currentContent2 = currentContent;
-        const plainCheck = currentContent2.replace(/<[^>]*>/g, '').trim();
-        if (plainCheck && currentContent2 !== lastHistoryContentRef.current) {
-          lastHistoryContentRef.current = currentContent2;
-          diaryService.saveHistory({
-              entryId: existingJournal.id,
-              content: currentContent2,
-              images: images,
-              savedAt: new Date().toISOString()
-            })
-            .catch(error => console.warn('Failed to save edit history:', error));
-        }
-
         savedEntry = await diaryService.updateEntry(existingJournal.id, {
           content: currentContent,
           images: images,
@@ -1508,6 +1494,12 @@ export default function Editor() {
     paddingTop: 'env(safe-area-inset-top)',
     ...(selectedTheme ? { backgroundColor: selectedTheme.toolbarColor, color: selectedTheme.textColor } : {}),
   };
+  const toolbarBottomOffset = keyboardInset > 0
+    ? '8px'
+    : 'max(8px, env(safe-area-inset-bottom))';
+  const templateEditorBottomInset = keyboardInset > 0
+    ? `${keyboardInset}px`
+    : '0px';
   const editorScrollStyle: React.CSSProperties = {
     ...(selectedTheme ? { backgroundColor: selectedTheme.paperColor || 'transparent' } : {}),
     paddingTop: editorContentTopPadding,
@@ -1898,29 +1890,30 @@ export default function Editor() {
 
       {/* Toolbars Container */}
       <div 
-        className="fixed left-0 right-0 z-50 transition-transform duration-300 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]"
+        className="fixed left-[10px] right-[10px] z-50 transition-transform duration-300"
         style={{ 
-          bottom: 0,
-          transform: `translateY(-${keyboardInset}px)` 
+          bottom: toolbarBottomOffset,
+          transform: `translateY(-${keyboardInset}px)`,
+          pointerEvents: isFocused && isEditing ? 'auto' : 'none',
         }}
       >
         {/* Markdown Toolbar */}
         <div 
-          className="backdrop-blur-md border-t border-outline-variant/20 transition-all duration-300 overflow-hidden"
+          className="backdrop-blur-md border border-outline-variant/20 rounded-[24px] transition-all duration-300 overflow-hidden shadow-[0_4px_22px_rgba(0,0,0,0.10)]"
           style={{ 
-            height: isFocused && isEditing ? '44px' : '0',
+            height: isFocused && isEditing ? '48px' : '0',
             opacity: isFocused && isEditing ? 1 : 0,
             backgroundColor: selectedTheme ? selectedTheme.toolbarColor : 'rgba(var(--color-surface), 0.95)' 
           }}
         >
-          <div className="flex items-center justify-between px-2 py-1 w-full h-[44px]">
+          <div className="flex items-center justify-between overflow-x-auto no-scrollbar px-2 w-full h-[48px] touch-pan-x overscroll-x-contain">
           {/* Group 1: Image */}
           <div className="flex">
             <button 
               onMouseDown={(e) => { e.preventDefault(); fileInputRef.current?.click(); }}
-              className="flex-shrink-0 w-8 h-9 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors text-on-surface-variant"
+              className="flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors text-on-surface-variant"
             >
-              <ImageIcon className="w-[20px] h-[20px]" />
+              <ImageIcon className="w-[24px] h-[24px]" />
             </button>
           </div>
           
@@ -1931,16 +1924,16 @@ export default function Editor() {
             <button 
               onMouseDown={(e) => { e.preventDefault(); editor?.chain().focus().undo().run(); }}
               disabled={!editor?.can().undo()}
-              className="flex-shrink-0 w-8 h-9 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors text-on-surface-variant disabled:opacity-50"
+              className="flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors text-on-surface-variant disabled:opacity-50"
             >
-              <Undo className="w-[20px] h-[20px]" />
+              <Undo className="w-[24px] h-[24px]" />
             </button>
             <button 
               onMouseDown={(e) => { e.preventDefault(); editor?.chain().focus().redo().run(); }}
               disabled={!editor?.can().redo()}
-              className="flex-shrink-0 w-8 h-9 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors text-on-surface-variant disabled:opacity-50"
+              className="flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors text-on-surface-variant disabled:opacity-50"
             >
-              <Redo className="w-[20px] h-[20px]" />
+              <Redo className="w-[24px] h-[24px]" />
             </button>
           </div>
 
@@ -1950,36 +1943,36 @@ export default function Editor() {
           <div className="flex gap-0">
             <button 
               onMouseDown={(e) => { e.preventDefault(); handleToggleMark('highlight'); }}
-              className={`flex-shrink-0 w-8 h-9 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${editor?.isActive('highlight') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+              className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${editor?.isActive('highlight') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
             >
-              <Highlighter className="w-[20px] h-[20px]" />
+              <Highlighter className="w-[24px] h-[24px]" />
             </button>
             
             <button 
               onMouseDown={(e) => { e.preventDefault(); handleToggleMark('bold'); }}
-              className={`flex-shrink-0 w-8 h-9 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${editor?.isActive('bold') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+              className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${editor?.isActive('bold') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
             >
-              <Bold className="w-[20px] h-[20px]" />
+              <Bold className="w-[24px] h-[24px]" />
             </button>
             
             <button 
               onMouseDown={(e) => { e.preventDefault(); editor?.chain().focus().toggleHeading({ level: 1 }).run(); }}
-              className={`flex-shrink-0 w-8 h-9 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors font-bold font-serif text-[15px] ${editor?.isActive('heading', { level: 1 }) ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+              className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors font-bold font-serif text-[18px] ${editor?.isActive('heading', { level: 1 }) ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
             >
               H1
             </button>
             <button 
               onMouseDown={(e) => { e.preventDefault(); editor?.chain().focus().toggleHeading({ level: 2 }).run(); }}
-              className={`flex-shrink-0 w-8 h-9 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors font-bold font-serif text-[15px] ${editor?.isActive('heading', { level: 2 }) ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+              className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors font-bold font-serif text-[18px] ${editor?.isActive('heading', { level: 2 }) ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
             >
               H2
             </button>
             
             <button 
               onMouseDown={(e) => { e.preventDefault(); editor?.chain().focus().toggleBlockquote().run(); }}
-              className={`flex-shrink-0 w-8 h-9 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${editor?.isActive('blockquote') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+              className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${editor?.isActive('blockquote') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
             >
-              <Quote className="w-[20px] h-[20px]" />
+              <Quote className="w-[24px] h-[24px]" />
             </button>
           </div>
 
@@ -1989,15 +1982,15 @@ export default function Editor() {
           <div className="flex gap-0">
             <button 
               onMouseDown={(e) => { e.preventDefault(); editor?.chain().focus().toggleOrderedList().run(); }}
-              className={`flex-shrink-0 w-8 h-9 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${editor?.isActive('orderedList') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+              className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${editor?.isActive('orderedList') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
             >
-              <ListOrdered className="w-[20px] h-[20px]" />
+              <ListOrdered className="w-[24px] h-[24px]" />
             </button>
             <button 
               onMouseDown={(e) => { e.preventDefault(); editor?.chain().focus().toggleBulletList().run(); }}
-              className={`flex-shrink-0 w-8 h-9 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${editor?.isActive('bulletList') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+              className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${editor?.isActive('bulletList') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
             >
-              <List className="w-[20px] h-[20px]" />
+              <List className="w-[24px] h-[24px]" />
             </button>
           </div>
         </div>
@@ -2267,7 +2260,7 @@ export default function Editor() {
       {isTemplateEditorOpen && (
         <div 
           className="fixed inset-0 z-[60] flex flex-col bg-surface animate-in slide-in-from-bottom-full duration-300"
-          style={{ paddingBottom: `${keyboardInset}px` }}
+          style={{ paddingBottom: templateEditorBottomInset }}
         >
           <div className="flex items-center justify-between px-4 h-14 border-b border-surface-container-high bg-surface/80 backdrop-blur-md">
             <button 
@@ -2309,74 +2302,81 @@ export default function Editor() {
           </div>
 
           {/* Template Editor Toolbar */}
-          <div className="bg-surface/95 backdrop-blur-md border-t border-outline-variant/20 pb-safe">
-            <div className="flex items-center overflow-x-auto no-scrollbar px-2 py-2 gap-1 w-full touch-pan-x overscroll-x-contain">
+          <div
+            className="px-[10px] pt-1"
+            style={{
+              paddingBottom: toolbarBottomOffset,
+            }}
+          >
+            <div className="bg-surface/95 backdrop-blur-md border border-outline-variant/20 rounded-[24px] overflow-hidden shadow-[0_4px_22px_rgba(0,0,0,0.10)]">
+            <div className="flex items-center justify-between overflow-x-auto no-scrollbar px-2 w-full h-[48px] touch-pan-x overscroll-x-contain">
               <button 
                 onMouseDown={(e) => { e.preventDefault(); templateEditor?.chain().focus().undo().run(); }}
                 disabled={!templateEditor?.can().undo()}
-                className="flex-shrink-0 px-2 h-11 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors text-on-surface-variant disabled:opacity-50"
+                className="flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors text-on-surface-variant disabled:opacity-50"
               >
-                <Undo className="w-[18px] h-[18px]" />
+                <Undo className="w-[24px] h-[24px]" />
               </button>
               <button 
                 onMouseDown={(e) => { e.preventDefault(); templateEditor?.chain().focus().redo().run(); }}
                 disabled={!templateEditor?.can().redo()}
-                className="flex-shrink-0 px-2 h-11 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors text-on-surface-variant disabled:opacity-50"
+                className="flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors text-on-surface-variant disabled:opacity-50"
               >
-                <Redo className="w-[18px] h-[18px]" />
+                <Redo className="w-[24px] h-[24px]" />
               </button>
 
               <div className="w-px h-6 bg-outline-variant/30 mx-1 flex-shrink-0"></div>
 
               <button 
                 onMouseDown={(e) => { e.preventDefault(); templateEditor?.chain().focus().toggleHighlight().run(); }}
-                className={`flex-shrink-0 px-2 h-11 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${templateEditor?.isActive('highlight') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+                className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${templateEditor?.isActive('highlight') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
               >
-                <Highlighter className="w-[18px] h-[18px]" />
+                <Highlighter className="w-[24px] h-[24px]" />
               </button>
               
               <button 
                 onMouseDown={(e) => { e.preventDefault(); templateEditor?.chain().focus().toggleBold().run(); }}
-                className={`flex-shrink-0 px-2 h-11 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${templateEditor?.isActive('bold') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+                className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${templateEditor?.isActive('bold') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
               >
-                <Bold className="w-[18px] h-[18px]" />
+                <Bold className="w-[24px] h-[24px]" />
               </button>
               
               <button 
                 onMouseDown={(e) => { e.preventDefault(); templateEditor?.chain().focus().toggleHeading({ level: 1 }).run(); }}
-                className={`flex-shrink-0 px-2 h-11 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors font-bold font-serif text-[15px] ${templateEditor?.isActive('heading', { level: 1 }) ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+                className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors font-bold font-serif text-[18px] ${templateEditor?.isActive('heading', { level: 1 }) ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
               >
                 H1
               </button>
               <button 
                 onMouseDown={(e) => { e.preventDefault(); templateEditor?.chain().focus().toggleHeading({ level: 2 }).run(); }}
-                className={`flex-shrink-0 px-2 h-11 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors font-bold font-serif text-[15px] ${templateEditor?.isActive('heading', { level: 2 }) ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+                className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors font-bold font-serif text-[18px] ${templateEditor?.isActive('heading', { level: 2 }) ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
               >
                 H2
               </button>
               
               <button 
                 onMouseDown={(e) => { e.preventDefault(); templateEditor?.chain().focus().toggleBlockquote().run(); }}
-                className={`flex-shrink-0 px-2 h-11 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${templateEditor?.isActive('blockquote') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+                className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${templateEditor?.isActive('blockquote') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
               >
-                <Quote className="w-[18px] h-[18px]" />
+                <Quote className="w-[24px] h-[24px]" />
               </button>
 
               <div className="w-px h-6 bg-outline-variant/30 mx-1 flex-shrink-0"></div>
 
               <button 
                 onMouseDown={(e) => { e.preventDefault(); templateEditor?.chain().focus().toggleOrderedList().run(); }}
-                className={`flex-shrink-0 px-2 h-11 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${templateEditor?.isActive('orderedList') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+                className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${templateEditor?.isActive('orderedList') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
               >
-                <ListOrdered className="w-[18px] h-[18px]" />
+                <ListOrdered className="w-[24px] h-[24px]" />
               </button>
               <button 
                 onMouseDown={(e) => { e.preventDefault(); templateEditor?.chain().focus().toggleBulletList().run(); }}
-                className={`flex-shrink-0 px-2 h-11 flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${templateEditor?.isActive('bulletList') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
+                className={`flex-shrink-0 w-[36px] h-[46px] flex items-center justify-center rounded-lg hover:bg-surface-container active:bg-surface-container-high transition-colors ${templateEditor?.isActive('bulletList') ? 'text-primary bg-primary/10' : 'text-on-surface-variant'}`}
               >
-                <List className="w-[18px] h-[18px]" />
+                <List className="w-[24px] h-[24px]" />
               </button>
               <div className="w-1 flex-shrink-0"></div>
+            </div>
             </div>
           </div>
         </div>

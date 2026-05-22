@@ -4,6 +4,7 @@ import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { Check, Pin } from 'lucide-react';
 import { stripAllMarkdown } from '../../lib/utils';
+import { SafeImage } from '../SafeImage';
 
 function excerpt(raw: string, max = 60): string {
   const plain = stripAllMarkdown(raw);
@@ -23,7 +24,8 @@ export function MagazineList({ journals, isMultiSelectMode, selectedJournals, ha
   return (
     <div className="flex flex-col gap-6">
       {journals.map((journal) => {
-        const hasImage = journal.images && journal.images.length > 0;
+        const validImages = (journal.images || []).filter(img => typeof img === 'string' && img.trim() !== '');
+        const hasImage = validImages.length > 0;
         const maxLength = hasImage ? 40 : 80;
         let fullContent = '';
         if (journal.blocks && journal.blocks.length > 0) {
@@ -55,8 +57,8 @@ export function MagazineList({ journals, isMultiSelectMode, selectedJournals, ha
 
             {hasImage ? (
               <div className="relative aspect-[4/5] w-full bg-surface-container-high">
-                <img 
-                  src={journal.images![0]} 
+                <SafeImage
+                  src={validImages[0]} 
                   alt="Cover" 
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"

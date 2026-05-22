@@ -203,6 +203,10 @@ if ($Target -eq "back" -or $Target -eq "all") {
     }
     Write-Host "--- Upload schema + package ---"
     foreach ($extra in @(
+        @{ Local = (Join-Path $ProjectRoot "server\.env"); Remote = "/xiaoxiang-server/.env" },
+        @{ Local = (Join-Path $ProjectRoot "server\bt-start.bat"); Remote = "/xiaoxiang-server/bt-start.bat" },
+        @{ Local = (Join-Path $ProjectRoot "server\tsconfig.json"); Remote = "/xiaoxiang-server/tsconfig.json" },
+        @{ Local = (Join-Path $ProjectRoot "server\scripts\doctor-cpamc.mjs"); Remote = "/xiaoxiang-server/scripts/doctor-cpamc.mjs" },
         @{ Local = (Join-Path $ProjectRoot "server\prisma\schema.prisma"); Remote = "/xiaoxiang-server/prisma/schema.prisma" },
         @{ Local = (Join-Path $ProjectRoot "server\package.json"); Remote = "/xiaoxiang-server/package.json" },
         @{ Local = (Join-Path $ProjectRoot "server\package-lock.json"); Remote = "/xiaoxiang-server/package-lock.json" }

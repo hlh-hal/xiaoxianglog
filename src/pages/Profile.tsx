@@ -39,7 +39,7 @@ let cachedStats: ProfileStats = emptyStats;
 
 export default function Profile() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const { isDark } = useTheme();
   const [entries, setEntries] = useState<DiaryEntry[]>(cachedEntries);
   const [stats, setStats] = useState<ProfileStats>(cachedStats);
@@ -53,6 +53,11 @@ export default function Profile() {
 
   useEffect(() => {
     const loadUnreadCount = async () => {
+      if (loading || !user) {
+        setUnreadCount(0);
+        return;
+      }
+
       // If notifications were already marked as read (e.g. user just visited Inbox), skip fetch and clear badge
       if (sessionStorage.getItem('xiang_notifications_cleared') === '1') {
         sessionStorage.removeItem('xiang_notifications_cleared');
@@ -82,10 +87,12 @@ export default function Profile() {
       window.removeEventListener('visibilitychange', loadWhenVisible);
       window.removeEventListener('xiang-notifications-read', clearUnreadCount);
     };
-  }, [user?.userId]);
+  }, [loading, user?.userId]);
 
   useEffect(() => {
     const loadData = async () => {
+      if (loading) return;
+
       const activeEntries = await diaryService.getActiveEntries();
       const now = new Date();
       const currentMonth = now.getMonth();
@@ -159,7 +166,7 @@ export default function Profile() {
       window.removeEventListener('pageshow', loadData);
       window.removeEventListener('visibilitychange', loadWhenVisible);
     };
-  }, [user?.userId]);
+  }, [loading, user?.userId]);
 
   const keywords = useMemo(() => {
     const tagCounts: Record<string, number> = {};
@@ -294,8 +301,8 @@ export default function Profile() {
             fallbackClassName="bg-surface-container-high flex items-center justify-center text-outline"
           />
           <div className="flex-grow">
-            <h2 className="text-xl font-bold text-on-surface tracking-tight">{user?.nickname || '点击登录'}</h2>
-            <p className="text-[13px] text-outline mt-0.5">{user?.bio || '无个性签名'}</p>
+            <h2 className="text-xl font-bold text-on-surface tracking-tight">{loading ? '...' : user?.nickname || '点击登录'}</h2>
+            <p className="text-[13px] text-outline mt-0.5">{loading ? '' : user?.bio || '无个性签名'}</p>
           </div>
           <ChevronRight className="w-6 h-6 text-outline/40 group-hover:translate-x-1 transition-transform" />
         </section>
@@ -308,7 +315,7 @@ export default function Profile() {
         </section>
 
         <section
-          onClick={() => navigate('/leaderboard')}
+          onClick={() => navigate(user ? '/leaderboard' : '/login')}
           className="bg-surface-container-lowest/80 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.04)] p-5 rounded-2xl flex justify-between items-center cursor-pointer hover:bg-surface-container-lowest transition-all duration-300"
         >
           <div className="flex items-center gap-3">

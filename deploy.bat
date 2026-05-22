@@ -119,7 +119,17 @@ echo   cd C:\wwwroot\xiaoxiang-server
 echo   npm install --omit=dev
 echo   npx prisma generate
 echo   npx prisma db push --skip-generate
-echo   pm2 restart xiaoxiang-server
+echo   npm start
+echo.
+echo   If using the BT Node project panel:
+echo   Project directory: C:\wwwroot\xiaoxiang-server
+echo   Startup file/command: npm start
+echo   Or run: C:\wwwroot\xiaoxiang-server\bt-start.bat
+echo.
+echo   After restart, health must include build=cpamc-only-20260520:
+echo   http://%SERVER%/api/health
+echo   If LongCat still fails, run:
+echo   npm run doctor:cpamc
 echo.
 echo   Verify:
 echo   Frontend: http://%SERVER%

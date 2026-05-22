@@ -9,12 +9,23 @@ import { CardFlowList } from '../components/diary-lists/CardFlowList';
 import { BriefingList } from '../components/diary-lists/BriefingList';
 import { MagazineList } from '../components/diary-lists/MagazineList';
 
-export default function Home() {
+export type HomeOutletContext = {
+  selectedDate: Date | null;
+  listStyle: string;
+  isDrawerOpen?: boolean;
+};
+
+type HomeViewProps = {
+  context: HomeOutletContext;
+  isBackdrop?: boolean;
+};
+
+export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
   const [journals, setJournals] = useState<DiaryEntry[]>(() => diaryService.getCachedActiveEntries() || []);
   const [hasRestoredScroll, setHasRestoredScroll] = useState(false);
-  const context = useOutletContext<{ selectedDate: Date | null, listStyle: string }>();
   const selectedDate = context?.selectedDate || null;
   const listStyle = context?.listStyle || 'timeline';
+  const isDrawerOpen = context?.isDrawerOpen || false;
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastNavigateTime = useRef<number>(0);
@@ -32,11 +43,26 @@ export default function Home() {
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    if (!isDrawerOpen && !isBackdrop) {
+      loadData();
+    }
+  }, [isDrawerOpen, isBackdrop]);
 
   // Restore scroll position after data is loaded
   useLayoutEffect(() => {
+    if (isBackdrop) return;
+    if (isDrawerOpen) {
+      if (sessionStorage.getItem('suppressHomeScrollRestoreOnce') === 'true') {
+        sessionStorage.removeItem('suppressHomeScrollRestoreOnce');
+        window.scrollTo({ top: 0, behavior: 'instant' });
+        requestAnimationFrame(() => {
+          window.scrollTo({ top: 0, behavior: 'instant' });
+        });
+        setHasRestoredScroll(true);
+      }
+      return;
+    }
+
     if (journals.length > 0 && !hasRestoredScroll) {
       const saved = sessionStorage.getItem('timeline_scroll');
       if (saved) {
@@ -44,10 +70,12 @@ export default function Home() {
       }
       setHasRestoredScroll(true);
     }
-  }, [journals, hasRestoredScroll]);
+  }, [journals, hasRestoredScroll, isBackdrop, isDrawerOpen]);
 
   // Save scroll position when navigating away
   const handleNavigate = (path: string) => {
+    if (isBackdrop) return;
+
     const now = Date.now();
     if (now - lastNavigateTime.current < 400) return;
     lastNavigateTime.current = now;
@@ -58,6 +86,8 @@ export default function Home() {
 
   // Scroll to selected date
   useEffect(() => {
+    if (isBackdrop || isDrawerOpen) return;
+
     if (selectedDate && journals.length > 0) {
       const targetDateStr = format(selectedDate, 'yyyy-MM-dd');
       let element = document.querySelector(`[data-date="${targetDateStr}"]`);
@@ -79,7 +109,7 @@ export default function Home() {
         window.scrollTo({ top: y, behavior: 'smooth' });
       }
     }
-  }, [selectedDate, journals]);
+  }, [selectedDate, journals, isBackdrop, isDrawerOpen]);
 
   // Long Press Logic
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -346,4 +376,9 @@ export default function Home() {
       )}
     </div>
   );
+}
+
+export default function Home() {
+  const context = useOutletContext<HomeOutletContext>();
+  return <HomeView context={context} />;
 }

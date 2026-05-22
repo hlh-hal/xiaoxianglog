@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
-import { MOCK_FRIENDS } from '../data/friends';
+import { useAuth } from '../contexts/AuthContext';
 import { api } from '../services/apiClient';
 import { UserAvatar } from '../components/UserAvatar';
 
@@ -15,6 +15,7 @@ interface Friend {
 export default function FriendList() {
   const navigate = useNavigate();
   const { isDark } = useTheme();
+  const { user, loading } = useAuth();
 
   const [friends, setFriends] = useState<Friend[]>([]);
   const [filteredFriends, setFilteredFriends] = useState<Friend[]>([]);
@@ -30,6 +31,11 @@ export default function FriendList() {
   };
 
   const fetchFriends = async () => {
+    if (!user?.userId) {
+      setFriends([]);
+      return;
+    }
+
     try {
       const data = await api.get<any[]>('/friends');
       setFriends((data || []).map(f => ({
@@ -44,8 +50,15 @@ export default function FriendList() {
   };
 
   useEffect(() => {
+    if (loading) return;
+    if (!user?.userId) {
+      setFriends([]);
+      navigate('/login', { replace: true });
+      return;
+    }
+
     fetchFriends();
-  }, []);
+  }, [loading, navigate, user?.userId]);
 
   useEffect(() => {
     const kw = searchKeyword.trim().toLowerCase();

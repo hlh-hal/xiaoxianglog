@@ -56,7 +56,7 @@ const highlightKeyword = (text: string, keyword: string): React.ReactNode => {
 export default function Leaderboard() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const { isDark } = useTheme();
   const [users, setUsers] = useState<LeaderboardUser[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -85,6 +85,18 @@ export default function Leaderboard() {
   }, [users, focusUser]);
 
   useEffect(() => {
+    if (!loading && !user?.userId) {
+      setUsers([]);
+      navigate('/login', { replace: true });
+    }
+  }, [loading, navigate, user?.userId]);
+
+  useEffect(() => {
+    if (loading || !user?.userId) {
+      setSearchResults([]);
+      return;
+    }
+
     const kw = searchKeyword.trim().toLowerCase();
     if (!kw) {
       setSearchResults([]);
@@ -106,9 +118,14 @@ export default function Leaderboard() {
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [searchKeyword, user?.userId]);
+  }, [loading, searchKeyword, user?.userId]);
 
   const openSearchPage = () => {
+    if (!user?.userId) {
+      navigate('/login');
+      return;
+    }
+
     setShowSearchPage(true);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => setSearchPageVisible(true));
@@ -129,6 +146,10 @@ export default function Leaderboard() {
 
   const sendFriendRequest = async () => {
     if (!friendRequestTarget) return;
+    if (!user?.userId) {
+      navigate('/login');
+      return;
+    }
 
     try {
       await api.post('/friends/request', {
@@ -150,22 +171,27 @@ export default function Leaderboard() {
 
   useEffect(() => {
     const loadData = async () => {
+      if (loading) return;
+      if (!user?.userId) {
+        setUsers([]);
+        setLikesState({});
+        return;
+      }
+
       try {
         const data = await api.get<LeaderboardUser[]>('/leaderboard');
         const allUsers = Array.isArray(data) ? data : [];
         let localMonthCount = 0;
-        if (user?.userId) {
-          const now = new Date();
-          const currentYear = now.getFullYear();
-          const currentMonth = now.getMonth();
-          const localEntries = await diaryService.getActiveEntries();
-          localMonthCount = localEntries.filter(entry => {
-            const entryDate = new Date(entry.diaryDate);
-            return entryDate.getFullYear() === currentYear && entryDate.getMonth() === currentMonth;
-          }).length;
-        }
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth();
+        const localEntries = await diaryService.getActiveEntries();
+        localMonthCount = localEntries.filter(entry => {
+          const entryDate = new Date(entry.diaryDate);
+          return entryDate.getFullYear() === currentYear && entryDate.getMonth() === currentMonth;
+        }).length;
 
-        const normalizedUsers = (allUsers.length > 0 || !user?.userId
+        const normalizedUsers = (allUsers.length > 0
           ? allUsers.map(item => item.isCurrentUser
               ? { ...item, monthCount: localMonthCount, avatar: user?.avatarUrl || item.avatar }
               : item
@@ -201,7 +227,7 @@ export default function Leaderboard() {
     };
 
     loadData();
-  }, [user]);
+  }, [loading, user]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -209,6 +235,11 @@ export default function Leaderboard() {
   };
 
   const handleLike = async (userId: string) => {
+    if (!user?.userId) {
+      navigate('/login');
+      return;
+    }
+
     const isCurrentlyLiked = !!likesState[userId];
     const newIsLiked = !isCurrentlyLiked;
     
@@ -413,7 +444,7 @@ export default function Leaderboard() {
       <div className="mt-auto" style={{ textAlign: 'center', padding: '24px 16px', fontSize: '12px', color: '#A1A1A6' }}>
         添加好友后可参与排行 
         <span 
-          onClick={() => navigate('/friends')}
+          onClick={() => navigate(user?.userId ? '/friends' : '/login')}
           style={{ color: '#446733', cursor: 'pointer', marginLeft: 4 }}
         >
           管理好友列表

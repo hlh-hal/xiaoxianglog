@@ -24,6 +24,9 @@ export default function Layout() {
   const isLoggedIn = !!user;
   const location = useLocation();
   const navigate = useNavigate();
+  const [optimisticNavPath, setOptimisticNavPath] = useState(location.pathname);
+  const pendingBottomNavFrame = React.useRef<number | null>(null);
+  const isReturningToDrawerRef = React.useRef(false);
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(() => {
     const state = location.state as any;
@@ -73,6 +76,32 @@ export default function Layout() {
     }
   };
 
+  const handleBottomNavPress = (path: string) => {
+    if (pendingBottomNavFrame.current !== null) {
+      cancelAnimationFrame(pendingBottomNavFrame.current);
+      pendingBottomNavFrame.current = null;
+    }
+
+    setOptimisticNavPath(path);
+    if (location.pathname === path) return;
+
+    pendingBottomNavFrame.current = requestAnimationFrame(() => {
+      pendingBottomNavFrame.current = null;
+      navigate(path);
+    });
+  };
+
+  const returnToDrawer = () => {
+    if (isReturningToDrawerRef.current) return;
+
+    isReturningToDrawerRef.current = true;
+    sessionStorage.setItem('openDrawerOnNextMount', 'true');
+    sessionStorage.setItem('suppressHomeScrollRestoreOnce', 'true');
+    setDisableDrawerTransition(true);
+    lastDrawerOpenTime.current = Date.now();
+    navigate(-1);
+  };
+
   const handleAvatarClick = () => {
     // Let the route change close the drawer if it's a new page
     handleCloseDrawer();
@@ -119,8 +148,14 @@ export default function Layout() {
       setDisableDrawerTransition(true);
       setIsDrawerOpen(true);
       lastDrawerOpenTime.current = Date.now();
+      if (shouldOpenFromSession) {
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      }
       
       requestAnimationFrame(() => {
+        if (shouldOpenFromSession) {
+          window.scrollTo({ top: 0, behavior: 'instant' });
+        }
         requestAnimationFrame(() => {
           setDisableDrawerTransition(false);
         });
@@ -130,7 +165,17 @@ export default function Layout() {
     }
     setIsMenuOpen(false);
     setIsStyleSheetOpen(false);
+    setOptimisticNavPath(location.pathname);
+    isReturningToDrawerRef.current = false;
   }, [location.pathname, location.state]);
+
+  useEffect(() => {
+    return () => {
+      if (pendingBottomNavFrame.current !== null) {
+        cancelAnimationFrame(pendingBottomNavFrame.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (isCalendarOpen) {
@@ -593,15 +638,20 @@ export default function Layout() {
       </aside>
 
       {/* Main Content */}
-      <main className={cn("md:ml-72 transition-all duration-500 min-h-screen flex flex-col relative", ['/', '/community', '/profile'].includes(location.pathname) ? "pb-[72px]" : "pb-0")}>
+      <main className={cn(
+        "md:ml-72 transition-all duration-500 min-h-screen flex flex-col relative",
+        ['/', '/community', '/profile'].includes(location.pathname) ? "pb-[72px]" : "pb-0"
+      )}>
         <div className="flex-1 w-full flex flex-col">
           <AnimatePresence mode="wait">
             <motion.div
               key={location.pathname}
               initial={false}
-              className="flex-1 flex flex-col"
+              animate={{ x: 0, borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
+              transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+              className="flex-1 flex flex-col bg-surface"
             >
-              <Outlet context={{ selectedDate, listStyle, openDrawer: () => setIsDrawerOpen(true), closeDrawer: handleCloseDrawer, toggleDrawer }} />
+              <Outlet context={{ selectedDate, listStyle, isDrawerOpen, openDrawer: () => setIsDrawerOpen(true), closeDrawer: handleCloseDrawer, toggleDrawer, returnToDrawer }} />
             </motion.div>
           </AnimatePresence>
         </div>
@@ -682,20 +732,30 @@ export default function Layout() {
           style={{ paddingTop: '6px', paddingBottom: 'env(safe-area-inset-bottom)' }}
         >
           {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
+            const isActive = optimisticNavPath === item.path;
             const Icon = item.icon;
             return (
-              <Link 
+              <button
                 key={item.path}
-                to={item.path}
+                type="button"
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.preventDefault();
+                  handleBottomNavPress(item.path);
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleBottomNavPress(item.path);
+                }}
                 className={cn(
-                  "flex flex-col items-center justify-center px-5 py-1 transition-colors duration-300",
+                  "flex flex-col items-center justify-center px-5 py-1 transition-colors duration-100",
                   isActive ? "text-primary" : "text-outline hover:text-primary"
                 )}
+                style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
               >
                 <Icon className={cn("w-[22px] h-[22px] mb-[2px]", isActive && "stroke-[2.25]")} />
                 <span className="font-sans font-normal text-[11px] tracking-wide">{item.label}</span>
-              </Link>
+              </button>
             );
           })}
         </nav>

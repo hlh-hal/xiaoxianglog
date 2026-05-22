@@ -42,6 +42,11 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+function cacheBusted(path: string): string {
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}_ts=${Date.now()}`;
+}
+
 export function assetUrl(path: string): string {
   if (!path || /^https?:\/\//i.test(path) || path.startsWith('data:')) return path;
   const baseWithoutApi = API_BASE.replace(/\/api$/, '');
@@ -253,7 +258,13 @@ export async function uploadFont(file: File): Promise<{ url: string; fileName: s
 // === 便捷方法 ===
 
 export const api = {
-  get: <T = any>(path: string) => apiRequest<T>(path),
+  get: <T = any>(path: string) => apiRequest<T>(cacheBusted(path), {
+    cache: 'no-store',
+    headers: {
+      'Cache-Control': 'no-cache',
+      Pragma: 'no-cache',
+    },
+  }),
   post: <T = any>(path: string, body?: any) => apiRequest<T>(path, {
     method: 'POST',
     body: body ? JSON.stringify(body) : undefined,

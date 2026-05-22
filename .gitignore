@@ -9,3 +9,5 @@ coverage/
 .vscode/
 server/prisma/data/*.db-shm
 server/prisma/data/*.db-wal
+cpa-local-test/
+cpa-manager/

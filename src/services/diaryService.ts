@@ -8,6 +8,23 @@ import { api, isAuthenticated } from './apiClient';
 import { localVaultService, VaultSyncResult } from './localVaultService';
 import { createClientId } from '../utils/id';
 
+/** 过滤掉 images 数组中的空字符串和无效值 */
+function filterValidImages(images?: string[] | null): string[] {
+  if (!images || !Array.isArray(images)) return [];
+  return images.filter(img => typeof img === 'string' && img.trim() !== '');
+}
+
+function areImagesEqual(a?: string[] | null, b?: string[] | null): boolean {
+  const left = filterValidImages(a);
+  const right = filterValidImages(b);
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function makeHistorySummary(content: string): string {
+  return content.substring(0, 50) + (content.length > 50 ? '...' : '');
+}
+
 export type EntryStatus = 'active' | 'draft' | 'trashed';
 
 export interface DiaryEntry {
@@ -211,6 +228,43 @@ async function restoreVaultEntry(entry: DiaryEntry): Promise<DiaryEntry> {
   }
 }
 
+async function saveLocalHistorySnapshot(history: Omit<EditHistory, 'id' | 'summary'>): Promise<void> {
+  const db = await initDB();
+  const content = history.content || '';
+  const images = filterValidImages(history.images);
+  if (!content && images.length === 0) return;
+
+  const existing = await db.getAllFromIndex('history', 'by-entry', history.entryId);
+  if (existing.length > 0) {
+    const sorted = existing.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
+    if (sorted[0].content === content && areImagesEqual(sorted[0].images, images)) return;
+  }
+
+  const newHistory: EditHistory = {
+    ...history,
+    content,
+    images,
+    id: createClientId(),
+    summary: makeHistorySummary(content),
+  };
+  await db.put('history', newHistory);
+}
+
+function mergeHistoryLists(localHistory: EditHistory[], remoteHistory: EditHistory[]): EditHistory[] {
+  const merged = new Map<string, EditHistory>();
+
+  for (const history of [...localHistory, ...remoteHistory]) {
+    const images = filterValidImages(history.images);
+    const key = `${history.content || ''}\u0000${JSON.stringify(images)}`;
+    const existing = merged.get(key);
+    if (!existing || new Date(history.savedAt).getTime() > new Date(existing.savedAt).getTime()) {
+      merged.set(key, { ...history, images });
+    }
+  }
+
+  return Array.from(merged.values()).sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
+}
+
 export const diaryService = {
   getCachedActiveEntries(): DiaryEntry[] | null {
     return activeEntriesCache;
@@ -320,6 +374,8 @@ export const diaryService = {
       if (!a.isPinned && b.isPinned) return 1;
       return new Date(b.diaryDate).getTime() - new Date(a.diaryDate).getTime();
     });
+    // 过滤掉 images 中的空字符串/无效值，防止首页渲染空图片容器
+    result.forEach(e => { e.images = filterValidImages(e.images); });
     activeEntriesCache = result;
     return result;
   },
@@ -345,15 +401,23 @@ export const diaryService = {
 
   async getEntryById(id: string): Promise<DiaryEntry | undefined> {
     const db = await initDB();
-    return db.get('entries', id);
+    const entry = await db.get('entries', id);
+    if (entry) entry.images = filterValidImages(entry.images);
+    return entry;
   },
 
   async createEntry(data: Omit<DiaryEntry, 'id' | 'createdAt' | 'updatedAt' | 'status'> & { id?: string; status?: EntryStatus; createdAt?: string; updatedAt?: string }): Promise<DiaryEntry> {
     const now = new Date().toISOString();
-    let entry: DiaryEntry = { ...data, id: data.id || createClientId(), createdAt: data.createdAt || now, updatedAt: data.updatedAt || now, status: data.status || 'active' };
+    let entry: DiaryEntry = { ...data, images: filterValidImages(data.images), id: data.id || createClientId(), createdAt: data.createdAt || now, updatedAt: data.updatedAt || now, status: data.status || 'active' };
     const db = await initDB(); 
     await db.put('entries', entry);
     entry = await syncEntryToVault(entry);
+    await saveLocalHistorySnapshot({
+      entryId: entry.id,
+      content: entry.content,
+      images: entry.images,
+      savedAt: entry.updatedAt || now,
+    });
     activeEntriesCache = null; 
     this.triggerSync();
     return entry;
@@ -363,6 +427,19 @@ export const diaryService = {
     const db = await initDB();
     const entry = await db.get('entries', id);
     if (!entry) return undefined;
+    if (patch.images !== undefined) {
+      patch.images = filterValidImages(patch.images);
+    }
+    const contentChanged = patch.content !== undefined && patch.content !== entry.content;
+    const imagesChanged = patch.images !== undefined && !areImagesEqual(patch.images, entry.images);
+    if (contentChanged || imagesChanged) {
+      await saveLocalHistorySnapshot({
+        entryId: entry.id,
+        content: entry.content,
+        images: entry.images,
+        savedAt: entry.updatedAt,
+      });
+    }
     let updatedEntry = { ...entry, ...patch, updatedAt: new Date().toISOString() };
     await db.put('entries', updatedEntry);
     updatedEntry = await syncEntryToVault(updatedEntry);
@@ -444,26 +521,29 @@ export const diaryService = {
 
   // 编辑历史
   async getHistoryForEntry(entryId: string): Promise<EditHistory[]> {
-    if (useApi()) { try { return await withTimeout(api.get<EditHistory[]>(`/history/${entryId}`)); } catch (e) { console.warn('后端获取历史失败:', e); } }
     const db = await initDB();
-    const history = await db.getAllFromIndex('history', 'by-entry', entryId);
-    return history.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
+    const localHistory = await db.getAllFromIndex('history', 'by-entry', entryId);
+    if (useApi()) {
+      try {
+        const remoteHistory = await withTimeout(api.get<EditHistory[]>(`/history/${entryId}`));
+        await Promise.all(remoteHistory.map(history => db.put('history', { ...history, images: filterValidImages(history.images) })));
+        return mergeHistoryLists(localHistory, remoteHistory);
+      } catch (e) {
+        console.warn('Failed to load remote edit history:', e);
+      }
+    }
+    return localHistory.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
   },
 
   async saveHistory(history: Omit<EditHistory, 'id' | 'summary'>): Promise<void> {
-    if (useApi()) { try { await withTimeout(api.post('/history', history)); return; } catch (e) { console.warn('后端保存历史失败:', e); } }
-    const db = await initDB();
-    const c = history.content || '';
-
-    // Deduplication: check if the most recent local history has identical content
-    const existing = await db.getAllFromIndex('history', 'by-entry', history.entryId);
-    if (existing.length > 0) {
-      const sorted = existing.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
-      if (sorted[0].content === c) return; // Skip duplicate
+    await saveLocalHistorySnapshot(history);
+    if (useApi()) {
+      try {
+        await withTimeout(api.post('/history', history));
+      } catch (e) {
+        console.warn('Failed to save remote edit history:', e);
+      }
     }
-
-    const newH: EditHistory = { ...history, id: createClientId(), summary: c.substring(0, 50) + (c.length > 50 ? '...' : '') };
-    await db.put('history', newH);
   },
 
   // 聊天会话
@@ -565,3 +645,4 @@ export const diaryService = {
   async getCustomFonts(): Promise<StoredFont[]> { const db = await initDB(); return db.getAll('customFonts'); },
   async deleteCustomFont(id: string): Promise<void> { const db = await initDB(); await db.delete('customFonts', id); },
 };
+

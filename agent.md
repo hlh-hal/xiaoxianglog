@@ -147,3 +147,73 @@ npm run db:push
 3. 如果是 UI 任务，改完启动 dev server 做视觉验证。
 4. 如果是数据或接口任务，同时检查前端 service、后端 route、Prisma schema。
 5. 完成后说明改了哪些文件、跑了哪些验证、还有哪些风险。
+
+## 线上 CPAMC / CPA 面板
+
+LongCat 不直接走官方地址，线上小象后端只调用本机 CPAMC 面板：
+
+```env
+CPAMC_BASE_URL="http://127.0.0.1:8317/v1"
+```
+
+当前线上 CPAMC 程序位置：
+
+```bat
+C:\Users\Administrator\Desktop\cll\cli-proxy-api.exe
+```
+
+启动 CPAMC 面板：
+
+```bat
+cd /d C:\Users\Administrator\Desktop\cll
+cli-proxy-api.exe
+```
+
+启动后另开一个终端确认 8317 已监听：
+
+```bat
+netstat -ano | findstr :8317
+```
+
+必须看到 `LISTENING`。如果没有，LongCat 会失败，后端诊断会显示 CPAMC `/models` `fetch failed`。
+
+小象后端位置和启动方式：
+
+```bat
+cd /d C:\wwwroot\xiaoxiang-server
+npm start
+```
+
+确认新版后端已接管线上请求：
+
+```text
+http://47.122.112.242/api/health
+```
+
+返回里必须包含：
+
+```json
+"build":"cpamc-only-20260520"
+```
+
+CPAMC/LongCat 诊断命令：
+
+```bat
+cd /d C:\wwwroot\xiaoxiang-server
+npm run doctor:cpamc
+```
+
+`doctor:cpamc` 会检查：
+- 小象后端是否加载新版 build。
+- `http://127.0.0.1:8317/v1/models` 是否可访问。
+- `LongCat-Flash-Lite` 的 `/chat/completions` 是否返回 200。
+
+如果 3001 仍由旧进程占用：
+
+```bat
+netstat -ano | findstr :3001
+tasklist /FI "PID eq <PID>"
+taskkill /PID <PID> /F
+```
+
+然后重新执行 `npm start`。

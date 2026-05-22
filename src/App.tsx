@@ -26,7 +26,7 @@ import Terms from './pages/Terms';
 import { diaryService } from './services/diaryService';
 import { settingsService } from './services/settingsService';
 import { AuthProvider } from './contexts/AuthContext';
-import { sendBrowserNotification, requestBrowserNotificationPermission } from './utils/notify';
+import { scheduleDailyReminder, sendBrowserNotification } from './utils/notify';
 
 if ('scrollRestoration' in history) {
   history.scrollRestoration = 'manual';
@@ -111,14 +111,10 @@ export default function App() {
       await diaryService.init();          // 确保 DB 已初始化
       await loadCustomFonts();            // 加载自定义字体
       await initWelcomeDiary();           // 创建欢迎日记（仅首次）
-      
-      // Request notification permission on first launch
-      if (localStorage.getItem('xiang_notif_requested') !== 'true') {
-        setTimeout(() => {
-          requestBrowserNotificationPermission().then(() => {
-            localStorage.setItem('xiang_notif_requested', 'true');
-          });
-        }, 1500); // slight delay for better UX
+
+      const settings = settingsService.getSettings();
+      if (settings.reminderEnabled) {
+        await scheduleDailyReminder(settings.reminderTime, '小象日志', '该写今天的日记啦，记录生活的美好 🐘').catch(() => false);
       }
 
       setIsInitialized(true);
@@ -127,7 +123,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    const interval = setInterval(async () => {
       const settings = settingsService.getSettings();
       if (!settings.reminderEnabled) return;
       const now = new Date();
@@ -136,7 +132,7 @@ export default function App() {
         const lastRemind = localStorage.getItem('last_remind_date');
         const todayStr = now.toLocaleDateString();
         if (lastRemind !== todayStr) {
-          if (sendBrowserNotification('小象日志', '该写今天的日记啦，记录生活的美好 🐘')) {
+          if (await sendBrowserNotification('小象日志', '该写今天的日记啦，记录生活的美好 🐘')) {
             localStorage.setItem('last_remind_date', todayStr);
           }
         }

@@ -24,6 +24,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] unhandledRejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[process] uncaughtException:', error);
+});
+
 function getPort() {
   const port = Number(process.env.PORT);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -34,6 +43,7 @@ function getPort() {
 
 const PORT = getPort();
 const BODY_LIMIT_BYTES = 50 * 1024 * 1024;
+const SERVER_BUILD_ID = 'cpamc-only-20260520';
 
 await configureSqlite();
 
@@ -97,8 +107,12 @@ app.use(parseRequestBody);
 
 // Static files for uploaded images and fonts
 const uploadDir = process.env.UPLOAD_DIR || './uploads';
-app.use('/uploads', express.static(path.resolve(uploadDir)));
-app.use('/api/uploads', express.static(path.resolve(uploadDir)));
+const uploadStaticOptions: NonNullable<Parameters<typeof express.static>[1]> = {
+  immutable: true,
+  maxAge: '1y',
+};
+app.use('/uploads', express.static(path.resolve(uploadDir), uploadStaticOptions));
+app.use('/api/uploads', express.static(path.resolve(uploadDir), uploadStaticOptions));
 
 // === API 闁荤姳璀﹂崹鎶藉极?===
 function mountRoutes(prefix = '') {
@@ -117,10 +131,18 @@ function mountRoutes(prefix = '') {
 
 mountRoutes('/api');
 mountRoutes();
+console.log(`[startup] cpamcBaseUrl=${process.env.CPAMC_BASE_URL || '(not configured)'}`);
+console.log(`[startup] xiaomiBaseUrl=${process.env.XIAOMI_BASE_URL || '(not configured)'}`);
+console.log(`[startup] build=${SERVER_BUILD_ID} pid=${process.pid}`);
 
 // === 闂佺顑冮崕閬嶅箖瀹ュ憘娑㈠焵椤掑嫬钃?===
 app.get(['/api/health', '/health'], (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    build: SERVER_BUILD_ID,
+    pid: process.pid,
+  });
 });
 
 // === 闂佺绻堥崝宀勬儑椤掑嫭鐓ユ繛鍡樺俯閸ゆ牕顭跨捄鍝勵伀闁?===
@@ -136,7 +158,6 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`濡絽鍟崑?闁诲繐绻愮换妤呮寘閸曨垰绫嶉柕澶堝劤缁犲爼鏌涘顒佹崳妞ゅ浚鍓欓蹇涘箵閹烘挸鍓婚梺? http://localhost:${PORT}`);
   console.log(`濡絽鍟幉?闂佽桨鑳舵晶妤€鐣垫担瑙勫劅? ${process.env.DATABASE_URL}`);
-  console.log(`濡絽鍠氬Ο?AI 闂佸搫鐗嗙粔瀛樻叏? ${process.env.AI_BASE_URL}`);
 });
 
 export default app;

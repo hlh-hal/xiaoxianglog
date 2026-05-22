@@ -6,6 +6,7 @@ import { extractImages } from '../utils/imageUtils';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import ImageViewer from '../components/ImageViewer';
+import { SafeImage } from '../components/SafeImage';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface GalleryImage {
@@ -33,7 +34,7 @@ let cachedEntriesRef: any = null;
 export default function Gallery() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { openDrawer } = useOutletContext<any>();
+  const { returnToDrawer } = useOutletContext<any>();
   const [images, setImages] = useState<GalleryImage[]>(cachedGalleryImages || []);
   const [loading, setLoading] = useState(!cachedGalleryImages);
   
@@ -145,6 +146,14 @@ export default function Gallery() {
     setLightboxImages([]);
   };
 
+  const goBack = () => {
+    if (location.state?.fromDrawer && returnToDrawer) {
+      returnToDrawer();
+    } else {
+      navigate(-1);
+    }
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
@@ -155,14 +164,7 @@ export default function Gallery() {
     >
       <header className="sticky top-0 w-full z-40 bg-surface flex items-center px-4 h-16">
         <button 
-          onClick={() => {
-            if (location.state?.fromDrawer) {
-              sessionStorage.setItem('openDrawerOnNextMount', 'true');
-              navigate(-1);
-            } else {
-              navigate(-1);
-            }
-          }}
+          onClick={goBack}
           className="flex items-center justify-center w-10 h-10 -ml-2 rounded-full hover:bg-on-surface/5 transition-colors relative z-10"
         >
           <ArrowLeft className="w-6 h-6 text-on-surface" />
@@ -198,14 +200,11 @@ export default function Gallery() {
                         className="aspect-square bg-surface-container-low rounded-[12px] overflow-hidden cursor-pointer"
                         onClick={() => openLightbox(img)}
                       >
-                        <img 
+                        <SafeImage
                           src={img.url} 
                           className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" 
                           alt="" 
                           referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = 'none';
-                          }}
                         />
                       </div>
                     ))}

@@ -4,6 +4,7 @@ import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { Check, Pin } from 'lucide-react';
 import { stripAllMarkdown } from '../../lib/utils';
+import { SafeImage } from '../SafeImage';
 
 function excerpt(raw: string, max = 60): string {
   const plain = stripAllMarkdown(raw);
@@ -75,16 +76,20 @@ export function BriefingList({ journals, isMultiSelectMode, selectedJournals, ha
                 </p>
               </div>
 
-              {journal.images && journal.images.length > 0 && (
-                <div className="w-[60px] h-[60px] rounded-lg overflow-hidden flex-shrink-0 shadow-sm">
-                  <img 
-                    src={journal.images[0]} 
-                    alt="Thumbnail" 
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                </div>
-              )}
+              {(() => {
+                const validImages = (journal.images || []).filter(img => typeof img === 'string' && img.trim() !== '');
+                if (validImages.length === 0) return null;
+                return (
+                  <div className="w-[60px] h-[60px] rounded-lg overflow-hidden flex-shrink-0 shadow-sm">
+                    <SafeImage
+                      src={validImages[0]} 
+                      alt="Thumbnail" 
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                );
+              })()}
             </div>
           </article>
         );

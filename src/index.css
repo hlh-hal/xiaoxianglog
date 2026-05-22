@@ -63,6 +63,11 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 /* 全局过渡，切换时平滑 */
 * {
   transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;

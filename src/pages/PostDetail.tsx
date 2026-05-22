@@ -12,6 +12,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import { api } from '../services/apiClient';
 import { useAuth } from '../contexts/AuthContext';
 import { UserAvatar } from '../components/UserAvatar';
+import { SafeImage } from '../components/SafeImage';
 
 const formatTime = (isoString: string) => {
   if (!isoString) return '';
@@ -72,6 +73,14 @@ const flattenComments = (formattedComments: any[]) => {
   };
   formattedComments.forEach(visit);
   return result;
+};
+
+const mergeFetchedComments = (currentComments: any[], fetchedComments: any[]) => {
+  const fetchedFlat = flattenComments(formatComments(fetchedComments));
+  const fetchedIds = new Set(fetchedFlat.map(comment => comment.id));
+  const localOnly = flattenComments(currentComments).filter(comment => !fetchedIds.has(comment.id));
+
+  return formatComments([...fetchedFlat, ...localOnly]);
 };
 
 export default function PostDetail() {
@@ -268,12 +277,12 @@ export default function PostDetail() {
       setComments(prev => formatComments([...flattenComments(prev), createdComment]));
       setPost(prev => prev ? { ...prev, comments: (prev.comments || 0) + 1 } : prev);
 
-      // Delay the background refresh slightly to ensure the server has committed the new comment
+      // Merge the refresh result so a stale cached response cannot hide the freshly posted comment.
       setTimeout(() => {
-        api.get<any[]>(`/community/posts/${post.id}/comments`)
+        api.get<any[]>(`/community/posts/${post.id}/comments?_=${Date.now()}`)
           .then(commentData => {
-            if (Array.isArray(commentData) && commentData.length > 0) {
-              setComments(formatComments(commentData));
+            if (Array.isArray(commentData)) {
+              setComments(current => mergeFetchedComments(current, commentData));
             }
           })
           .catch(console.warn);
@@ -505,7 +514,7 @@ export default function PostDetail() {
                 className={`relative cursor-pointer ${post.images.length === 1 ? 'aspect-video' : 'aspect-square'}`}
                 onClick={() => openGallery(idx)}
               >
-                <img src={img} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                <SafeImage src={img} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
               </div>
             ))}
           </div>

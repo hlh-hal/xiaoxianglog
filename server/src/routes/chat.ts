@@ -23,13 +23,14 @@ type ProviderConfig = {
 const XIAOMI_BASE_URL = process.env.XIAOMI_BASE_URL || 'https://token-plan-cn.xiaomimimo.com/v1';
 const XIAOMI_API_KEY = process.env.XIAOMI_API_KEY || process.env.AI_API_KEY || '';
 const XIAOMI_MODEL = process.env.XIAOMI_MODEL || 'mimo-v2.5';
-const CPAMC_BASE_URL = process.env.AI_BASE_URL || process.env.CPAMC_BASE_URL || 'http://47.122.112.242:8317/v1';
-const CPAMC_API_KEY = process.env.CPAMC_API_KEY || process.env.AI_API_KEY || '';
+const CPAMC_BASE_URL = process.env.CPAMC_BASE_URL || '';
+const CPAMC_API_KEY = process.env.CPAMC_API_KEY || '';
 const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS || 45000);
 const PRIMARY_PROVIDER_TIMEOUT_MS = Number(process.env.AI_PRIMARY_TIMEOUT_MS || AI_REQUEST_TIMEOUT_MS);
 const THINKING_PROVIDER_TIMEOUT_MS = Number(process.env.AI_THINKING_TIMEOUT_MS || 120000);
 const MAX_USER_AI_CONCURRENCY = Number(process.env.AI_MAX_USER_CONCURRENCY || 1);
 const MAX_GLOBAL_AI_CONCURRENCY = Number(process.env.AI_MAX_GLOBAL_CONCURRENCY || 8);
+const AI_DEBUG_ERRORS = process.env.AI_DEBUG_ERRORS === 'true';
 
 const chatRateLimit = rateLimit({
   windowMs: 60 * 1000,
@@ -55,6 +56,31 @@ class ProviderError extends Error {
       this.cause = options.cause;
     }
   }
+}
+
+function summarizeProviderError(error: unknown): string {
+  if (error instanceof ProviderError) {
+    const body = error.body ? ` ${error.body.slice(0, 300)}` : '';
+    const cause = error.cause instanceof Error ? ` ${error.cause.message}` : '';
+    return `${error.status ?? 'exception'} ${error.message}${body}${cause}`.trim();
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function providerErrorResponse(error: unknown) {
+  if (!AI_DEBUG_ERRORS) {
+    return { error: 'AI 服务暂时不可用' };
+  }
+
+  return {
+    error: 'AI 服务暂时不可用',
+    detail: summarizeProviderError(error),
+  };
 }
 
 function parseMessages(value: string) {
@@ -129,31 +155,38 @@ function acquireAiSlot(userId: string) {
   };
 }
 
+function buildChatCompletionsUrl(provider: ProviderConfig) {
+  const cleanBaseUrl = provider.baseUrl.replace(/\/+$/, '');
+  if (cleanBaseUrl.endsWith('/chat/completions')) {
+    return cleanBaseUrl;
+  }
+
+  return `${cleanBaseUrl}/chat/completions`;
+}
+
 async function requestCompletion(provider: ProviderConfig, messages: ChatMessage[], stream: boolean, options?: {
   temperature?: number;
   maxTokens?: number;
   responseFormat?: unknown;
-}, authMode: 'authorization' | 'api-key' = 'authorization') {
+}) {
   if (!provider.apiKey) {
     throw new ProviderError('AI provider API key is not configured', { status: 503 });
   }
+  if (!provider.baseUrl) {
+    throw new ProviderError('AI provider base URL is not configured', { status: 503 });
+  }
 
-  const cleanBaseUrl = provider.baseUrl.replace(/\/$/, '');
+  const chatCompletionsUrl = buildChatCompletionsUrl(provider);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), getProviderTimeoutMs(provider));
 
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      Authorization: `Bearer ${provider.apiKey}`,
     };
 
-    if (authMode === 'api-key') {
-      headers['api-key'] = provider.apiKey;
-    } else {
-      headers.Authorization = `Bearer ${provider.apiKey}`;
-    }
-
-    return await fetch(`${cleanBaseUrl}/chat/completions`, {
+    return await fetch(chatCompletionsUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -175,18 +208,10 @@ async function requestCompletion(provider: ProviderConfig, messages: ChatMessage
 
 async function requestProvider(provider: ProviderConfig, messages: ChatMessage[], startedAt: number) {
   console.log(
-    `[ai] request requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model}`,
+    `[ai] request requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model} baseUrl=${provider.baseUrl}`,
   );
 
-  let response = await requestCompletion(provider, messages, true);
-
-  if (!response.ok && response.status === 401 && provider.name === 'xiaomi-mimo') {
-    const errorText = await response.text().catch(() => 'Unknown error');
-    console.warn(
-      `[ai] xiaomi_auth_retry requestedModel=${provider.requestedModel} provider=${provider.name} targetModel=${provider.model} status=401 body=${JSON.stringify(errorText)}`,
-    );
-    response = await requestCompletion(provider, messages, true, undefined, 'api-key');
-  }
+  const response = await requestCompletion(provider, messages, true);
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => 'Unknown error');
@@ -348,6 +373,60 @@ router.delete('/sessions/:id', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/cpamc/status', async (_req: Request, res: Response) => {
+  const provider = getProviderConfig('LongCat-Flash-Lite');
+  const status = {
+    provider: provider.name,
+    baseUrl: provider.baseUrl || null,
+    keyConfigured: Boolean(provider.apiKey),
+    models: null as null | { ok: boolean; status: number; hasLongCatLite: boolean; hasLongCatThinking: boolean; body: string },
+    completion: null as null | { ok: boolean; status: number; body: string },
+  };
+
+  try {
+    const modelsResponse = await fetch(`${provider.baseUrl.replace(/\/+$/, '')}/models`, {
+      headers: { Authorization: `Bearer ${provider.apiKey}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    const body = await modelsResponse.text();
+    status.models = {
+      ok: modelsResponse.ok,
+      status: modelsResponse.status,
+      hasLongCatLite: body.includes('LongCat-Flash-Lite'),
+      hasLongCatThinking: body.includes('LongCat-Flash-Thinking-2601'),
+      body: body.slice(0, 500),
+    };
+  } catch (error) {
+    status.models = {
+      ok: false,
+      status: 0,
+      hasLongCatLite: false,
+      hasLongCatThinking: false,
+      body: summarizeProviderError(error),
+    };
+  }
+
+  try {
+    const completionResponse = await requestCompletion(provider, [{ role: 'user', content: '只回复 OK' }], false, {
+      maxTokens: 16,
+    });
+    const body = await completionResponse.text();
+    status.completion = {
+      ok: completionResponse.ok,
+      status: completionResponse.status,
+      body: body.slice(0, 500),
+    };
+  } catch (error) {
+    status.completion = {
+      ok: false,
+      status: 0,
+      body: summarizeProviderError(error),
+    };
+  }
+
+  res.json(status);
+});
+
 router.post('/complete', chatRateLimit, async (req: Request, res: Response) => {
   const { messages, modelId, temperature, maxTokens, responseFormat } = req.body as {
     messages?: ChatMessage[];
@@ -379,29 +458,6 @@ router.post('/complete', chatRateLimit, async (req: Request, res: Response) => {
       responseFormat,
     });
 
-    if (!response.ok && response.status === 401 && primary.name === 'xiaomi-mimo') {
-      const errorText = await response.text().catch(() => 'Unknown error');
-      console.warn(
-        `[ai] xiaomi_auth_retry requestedModel=${primary.requestedModel} provider=${primary.name} targetModel=${primary.model} status=401 body=${JSON.stringify(errorText)}`,
-      );
-      const altResponse = await requestCompletion(primary, normalizedMessages, false, {
-        temperature,
-        maxTokens,
-        responseFormat,
-      }, 'api-key');
-
-      if (!altResponse.ok) {
-        throw new ProviderError('AI provider returned an error', {
-          status: altResponse.status,
-          body: await altResponse.text().catch(() => ''),
-        });
-      }
-
-      const altData = await altResponse.json();
-      res.json({ content: altData.choices?.[0]?.message?.content || '' });
-      return;
-    }
-
     if (!response.ok) {
       throw new ProviderError('AI provider returned an error', {
         status: response.status,
@@ -416,7 +472,7 @@ router.post('/complete', chatRateLimit, async (req: Request, res: Response) => {
       `[ai] complete_exception requestedModel=${primary.requestedModel} provider=${primary.name} targetModel=${primary.model} elapsedMs=${Date.now() - startedAt}`,
       err,
     );
-    res.status(500).json({ error: 'AI 服务暂时不可用' });
+    res.status(500).json(providerErrorResponse(err));
   } finally {
     release();
   }
@@ -450,7 +506,7 @@ router.post('/message', chatRateLimit, async (req: Request, res: Response) => {
     );
 
     if (!res.headersSent) {
-      res.status(500).json({ error: 'AI 服务暂时不可用' });
+      res.status(500).json(providerErrorResponse(err));
     }
   } finally {
     release();

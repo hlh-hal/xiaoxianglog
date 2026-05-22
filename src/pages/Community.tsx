@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { BookOpen, Heart, MessageCircle } from 'lucide-react';
 import { stripAllMarkdown } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -7,32 +7,56 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../services/apiClient';
 import { UserAvatar } from '../components/UserAvatar';
+import { SafeImage } from '../components/SafeImage';
+
+type CommunityTab = 'recommend' | 'friends';
+
+const cachedPostsByTab: Partial<Record<CommunityTab, any[]>> = {};
 
 export default function Community() {
-  const [activeTab, setActiveTab] = useState<'recommend' | 'friends'>('recommend');
+  const [activeTab, setActiveTab] = useState<CommunityTab>('recommend');
   const [previewGallery, setPreviewGallery] = useState<{ images: string[], index: number } | null>(null);
-  const [posts, setPosts] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [posts, setPosts] = useState<any[]>(cachedPostsByTab.recommend || []);
+  const [loading, setLoading] = useState(!cachedPostsByTab.recommend);
   const [postToDelete, setPostToDelete] = useState<string | null>(null);
   
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const activeTabRef = useRef(activeTab);
 
-  const fetchPosts = async () => {
-    setLoading(true);
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  const fetchPosts = async (tab: CommunityTab = activeTab, showLoading = !cachedPostsByTab[tab]) => {
+    if (showLoading) setLoading(true);
     try {
-      const data = await api.get<{posts: any[]}>(`/community/posts?tab=${activeTab}&_=${Date.now()}`);
-      setPosts(data.posts || []);
+      const data = await api.get<{posts: any[]}>(`/community/posts?tab=${tab}&_=${Date.now()}`);
+      const nextPosts = data.posts || [];
+      cachedPostsByTab[tab] = nextPosts;
+      if (tab === activeTabRef.current) {
+        setPosts(nextPosts);
+      }
     } catch (e) {
       console.error('Failed to fetch posts:', e);
     } finally {
-      setLoading(false);
+      if (tab === activeTabRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    fetchPosts();
+    const cachedPosts = cachedPostsByTab[activeTab];
+    if (cachedPosts) {
+      setPosts(cachedPosts);
+      setLoading(false);
+      fetchPosts(activeTab, false);
+    } else {
+      setPosts([]);
+      fetchPosts(activeTab, true);
+    }
   }, [activeTab]);
 
   useEffect(() => {
@@ -54,10 +78,14 @@ export default function Community() {
       createdPost,
       ...prev.filter(post => post.id !== createdPost.id),
     ]);
+    cachedPostsByTab[activeTab] = [
+      createdPost,
+      ...(cachedPostsByTab[activeTab] || []).filter(post => post.id !== createdPost.id),
+    ];
     navigate(location.pathname + location.search, { replace: true, state: null });
 
     if (state.refreshPosts) {
-      setTimeout(fetchPosts, 300);
+      setTimeout(() => fetchPosts(activeTab, false), 300);
     }
   }, [location.pathname, location.search, location.state, navigate]);
 
@@ -99,7 +127,9 @@ export default function Community() {
   const handleDeletePost = async (postId: string) => {
     try {
       await api.delete(`/community/posts/${postId}`);
-      setPosts(posts.filter(p => p.id !== postId));
+      const nextPosts = posts.filter(p => p.id !== postId);
+      cachedPostsByTab[activeTab] = nextPosts;
+      setPosts(nextPosts);
     } catch (e) {
       console.error('Delete failed', e);
     }
@@ -115,6 +145,7 @@ export default function Community() {
     post.likedByMe = !post.likedByMe;
     post.likes += post.likedByMe ? 1 : -1;
     setPosts(newPosts);
+    cachedPostsByTab[activeTab] = newPosts;
 
     try {
       await api.post(`/community/posts/${postId}/like`);
@@ -124,6 +155,7 @@ export default function Community() {
       const p = reverted[index];
       p.likedByMe = !p.likedByMe;
       p.likes += p.likedByMe ? 1 : -1;
+      cachedPostsByTab[activeTab] = reverted;
       setPosts(reverted);
     }
   };
@@ -194,7 +226,7 @@ export default function Community() {
                   <div className={`grid gap-2 ${post.images.length === 1 ? 'grid-cols-1' : post.images.length === 2 ? 'grid-cols-2' : post.images.length === 4 ? 'grid-cols-2' : 'grid-cols-3'}`}>
                     {post.images.map((img: string, idx: number) => (
                       <div key={idx} className="aspect-square">
-                        <img src={img} alt="Post image" referrerPolicy="no-referrer" className="w-full h-full object-cover rounded-xl cursor-pointer" onClick={(e) => { e.stopPropagation(); openGallery(post.images, idx); }} />
+                        <SafeImage src={img} alt="Post image" referrerPolicy="no-referrer" className="w-full h-full object-cover rounded-xl cursor-pointer" onClick={(e) => { e.stopPropagation(); openGallery(post.images, idx); }} />
                       </div>
                     ))}
                   </div>

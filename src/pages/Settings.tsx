@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, ChevronRight, Lightbulb, Loader2, MessageSquare, X } from 'lucide-react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { authService } from '../services/authService';
 import { diaryService } from '../services/diaryService';
 import { AppSettings, FontSettings, settingsService } from '../services/settingsService';
@@ -14,9 +14,13 @@ import {
   saveParsedEntries,
 } from '../utils/importExport';
 import {
+  cancelDailyReminder,
+  checkBrowserNotificationPermission,
   getBrowserNotificationPermission,
+  getNotificationUnavailableReason,
   openNotificationPermissionSettings,
   requestBrowserNotificationPermission,
+  scheduleDailyReminder,
 } from '../utils/notify';
 
 type PendingNotificationToggle =
@@ -24,9 +28,13 @@ type PendingNotificationToggle =
   | { type: 'notify' }
   | { type: 'friendRequest' };
 
+const REMINDER_NOTIFICATION_TITLE = '小象日志';
+const REMINDER_NOTIFICATION_BODY = '该写今天的日记啦，记录生活的美好 🐘';
+
 export default function Settings() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { returnToDrawer } = useOutletContext<any>();
   const [settings, setSettings] = useState<AppSettings>(settingsService.getSettings());
   const [fontSettings, setFontSettings] = useState<FontSettings>(() => settingsService.getFontSettings());
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
@@ -80,14 +88,19 @@ export default function Settings() {
   }, []);
 
   useEffect(() => {
-    if (getBrowserNotificationPermission() !== 'denied') return;
+    checkBrowserNotificationPermission().then((permission) => {
+      const granted = permission === 'granted';
+      setNotifyEnabled(localStorage.getItem('setting_notify_enabled') !== 'false' && granted);
+      setFriendRequestEnabled(localStorage.getItem('setting_friend_request_enabled') !== 'false' && granted);
 
-    if (settingsService.getSettings().reminderEnabled) {
-      setSettings(settingsService.saveSettings({ reminderEnabled: false }));
-    }
-
-    updateLocalNotificationSetting('setting_notify_enabled', setNotifyEnabled, false);
-    updateLocalNotificationSetting('setting_friend_request_enabled', setFriendRequestEnabled, false);
+      if (permission === 'denied' || permission === 'unsupported' || permission === 'insecure') {
+        if (settingsService.getSettings().reminderEnabled) {
+          setSettings(settingsService.saveSettings({ reminderEnabled: false }));
+        }
+        updateLocalNotificationSetting('setting_notify_enabled', setNotifyEnabled, false);
+        updateLocalNotificationSetting('setting_friend_request_enabled', setFriendRequestEnabled, false);
+      }
+    }).catch(error => console.warn('Failed to check notification permission:', error));
   }, []);
 
   const applyPendingNotificationToggle = (pending: PendingNotificationToggle | null) => {
@@ -113,8 +126,8 @@ export default function Settings() {
       return true;
     }
 
-    if (permission === 'unsupported') {
-      showToast(`当前环境不支持系统通知，无法开启${featureName}`);
+    if (permission === 'unsupported' || permission === 'insecure') {
+      showToast(`${getNotificationUnavailableReason() || '当前环境不支持系统通知'}，无法开启${featureName}`);
     } else if (permission === 'denied') {
       setPermissionFeatureName(featureName);
       setPendingNotificationToggle(pendingToggle);
@@ -136,11 +149,25 @@ export default function Settings() {
   const handleReminderToggle = async (enabled: boolean) => {
     if (!enabled) {
       updateSetting('reminderEnabled', false);
+      await cancelDailyReminder().catch(error => console.warn('Cancel reminder failed:', error));
       return;
     }
 
     const allowed = await ensureNotificationPermission('每日写日记提醒', { type: 'reminder' });
     updateSetting('reminderEnabled', allowed);
+    if (allowed) {
+      await scheduleDailyReminder(settings.reminderTime, REMINDER_NOTIFICATION_TITLE, REMINDER_NOTIFICATION_BODY)
+        .catch(error => console.warn('Schedule reminder failed:', error));
+    }
+  };
+
+  const handleReminderTimeChange = async (value: string) => {
+    const updated = settingsService.saveSettings({ reminderTime: value });
+    setSettings(updated);
+    if (updated.reminderEnabled) {
+      await scheduleDailyReminder(value, REMINDER_NOTIFICATION_TITLE, REMINDER_NOTIFICATION_BODY)
+        .catch(error => console.warn('Schedule reminder failed:', error));
+    }
   };
 
   const handleNotificationToggle = async (
@@ -182,7 +209,8 @@ export default function Settings() {
 
   const handleChooseVaultDirectory = async () => {
     if (!localVaultService.isSupported()) {
-      showToast('当前环境不是 Android App，无法选择 Documents 本地文件夹');
+      const status = await refreshVaultStatus();
+      showToast(status.unavailableReason || '当前环境不支持选择本地日志文件夹');
       return;
     }
 
@@ -190,7 +218,7 @@ export default function Settings() {
     try {
       const status = await localVaultService.chooseVaultDirectory();
       setVaultStatus(status);
-      showToast(status.available ? '本地日志文件夹已开启' : '文件夹授权未完成');
+      showToast(status.available ? '本地日志文件夹已开启' : (status.unavailableReason || '文件夹授权未完成'));
     } catch (error: any) {
       console.error(error);
       showToast(error?.message || '选择本地日志文件夹失败');
@@ -204,7 +232,11 @@ export default function Settings() {
     try {
       const status = await refreshVaultStatus();
       if (!status.available) {
-        showToast('请先选择本地日志文件夹');
+        showToast(
+          status.provider === 'unsupported'
+            ? '当前浏览器不支持直接读取文件夹，请使用“导入备份”选择 Markdown 文件'
+            : (status.unavailableReason || '请先选择本地日志文件夹'),
+        );
         return;
       }
 
@@ -304,10 +336,11 @@ export default function Settings() {
   };
 
   const goBack = () => {
-    if (location.state?.fromDrawer) {
-      sessionStorage.setItem('openDrawerOnNextMount', 'true');
+    if (location.state?.fromDrawer && returnToDrawer) {
+      returnToDrawer();
+    } else {
+      navigate(-1);
     }
-    navigate(-1);
   };
 
   const getImportDateRange = () => {
@@ -315,6 +348,13 @@ export default function Settings() {
     const dates = importData.filter((entry) => entry.date).map((entry) => entry.date).sort();
     if (dates.length === 0) return '-';
     return `${dates[0]} 至 ${dates[dates.length - 1]}`;
+  };
+
+  const getVaultDescription = () => {
+    if (!vaultStatus) return '正在检查本地日志保存能力';
+    if (vaultStatus.available) return vaultStatus.displayPath || '已授权本地文件夹';
+    if (vaultStatus.supported) return vaultStatus.unavailableReason || '尚未开启本地保存';
+    return vaultStatus.unavailableReason || '当前浏览器不支持文件夹写入，可使用导入/导出';
   };
 
   const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) => (
@@ -354,7 +394,9 @@ export default function Settings() {
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="p-4 max-h-[70vh] overflow-y-auto">{children}</div>
+          <div className="p-4 max-h-[70vh] overflow-y-auto" style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
+            {children}
+          </div>
         </div>
       </div>
     );
@@ -479,20 +521,16 @@ export default function Settings() {
         <section className="space-y-3">
           <SectionTitle title="本地日志" />
           <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(47,52,46,0.02)] overflow-hidden">
-            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-surface-container/50">
-              <div className="flex flex-col items-start gap-1 min-w-0">
-                <span className="text-[15px] font-medium">Documents 保存位置</span>
-                <span className="text-xs text-on-surface-variant truncate max-w-[240px]">
-                  {vaultStatus?.available
-                    ? (vaultStatus.displayPath || '已授权本地文件夹')
-                    : localVaultService.isSupported()
-                      ? '尚未开启 Documents 本地保存'
-                      : '仅 Android App 支持'}
+            <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-surface-container/50">
+              <div className="flex flex-col items-start gap-1 min-w-0 flex-1">
+                <span className="text-[15px] font-medium">本地日志保存位置</span>
+                <span className="text-xs text-on-surface-variant max-w-full break-all leading-snug">
+                  {getVaultDescription()}
                 </span>
               </div>
               <button
                 onClick={handleChooseVaultDirectory}
-                className="shrink-0 px-3 py-1.5 rounded-full bg-primary text-white text-sm font-medium active:scale-95 transition-transform"
+                className="shrink-0 min-w-[56px] px-3 py-1.5 rounded-full bg-primary text-white text-sm font-medium active:scale-95 transition-transform"
               >
                 {vaultStatus?.available ? '重新选择' : '选择'}
               </button>
@@ -578,7 +616,7 @@ export default function Settings() {
           <input
             type="time"
             value={settings.reminderTime}
-            onChange={(event) => updateSetting('reminderTime', event.target.value)}
+            onChange={(event) => handleReminderTimeChange(event.target.value)}
             className="text-4xl font-bold bg-transparent border-none outline-none text-center text-primary"
           />
           <button
@@ -607,13 +645,19 @@ export default function Settings() {
               const permission = await requestBrowserNotificationPermission();
               if (permission === 'granted') {
                 applyPendingNotificationToggle(pendingNotificationToggle);
+                if (pendingNotificationToggle?.type === 'reminder') {
+                  await scheduleDailyReminder(settings.reminderTime, REMINDER_NOTIFICATION_TITLE, REMINDER_NOTIFICATION_BODY)
+                    .catch(error => console.warn('Schedule reminder failed:', error));
+                }
                 setPendingNotificationToggle(null);
                 setActiveSheet(null);
                 showToast('通知权限已开启');
               } else if (permission === 'denied') {
                 showToast('仍未允许通知权限');
+              } else if (permission === 'insecure') {
+                showToast(getNotificationUnavailableReason() || '当前地址无法开启通知权限');
               } else {
-                showToast('请在弹出的授权框中选择允许');
+                showToast(getNotificationUnavailableReason() || '请在弹出的授权框中选择允许');
               }
             }}
             className="w-full py-3 bg-surface-container-low text-on-surface rounded-xl font-medium active:scale-95 transition-transform"

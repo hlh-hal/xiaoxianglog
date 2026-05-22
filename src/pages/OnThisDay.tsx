@@ -7,6 +7,7 @@ import { getExcerpt } from '../utils/textUtils';
 import { format, subYears, subMonths, subDays, isSameDay } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { useTheme } from '../contexts/ThemeContext';
+import { SafeImage } from '../components/SafeImage';
 
 type ReviewMode = 'years_1' | 'months_6' | 'days_100' | 'custom';
 type Season = 'spring' | 'summer' | 'autumn' | 'winter';
@@ -168,7 +169,7 @@ const ParticleStyles = () => (
 export default function OnThisDay() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { openDrawer } = useOutletContext<any>();
+  const { returnToDrawer } = useOutletContext<any>();
   const { isDark } = useTheme();
 
   const c = {
@@ -306,6 +307,14 @@ export default function OnThisDay() {
     }, 300);
   };
 
+  const goBack = () => {
+    if (location.state?.fromDrawer && returnToDrawer) {
+      returnToDrawer();
+    } else {
+      navigate(-1);
+    }
+  };
+
   const getSubtitle = () => {
     if (reviewMode === 'years_1') return '一年前的这一天，你写下了这些';
     if (reviewMode === 'months_6') return '半年前的这一天，你写下了这些';
@@ -366,7 +375,7 @@ export default function OnThisDay() {
       >
         {imageUrl ? (
           <>
-            <img src={imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" referrerPolicy="no-referrer" />
+            <SafeImage src={imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" referrerPolicy="no-referrer" />
             <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/40 to-transparent" />
             
             <div className="relative z-10 flex flex-col h-full p-[24px] flex-1">
@@ -469,14 +478,7 @@ export default function OnThisDay() {
         }}
       >
         <button 
-          onClick={() => {
-            if (location.state?.fromDrawer) {
-              sessionStorage.setItem('openDrawerOnNextMount', 'true');
-              navigate(-1);
-            } else {
-              navigate(-1);
-            }
-          }}
+          onClick={goBack}
           className="p-2 -ml-2 rounded-full hover:bg-surface-container-high transition-colors"
         >
           <ArrowLeft className="w-6 h-6" style={{ color: c.icon }} />

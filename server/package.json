@@ -6,6 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:bt": "node dist/index.js",
+    "doctor:cpamc": "node scripts/doctor-cpamc.mjs",
     "backup:db": "tsx scripts/backup-db-to-oss.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
@@ -23,6 +25,7 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.2",
     "nodemailer": "^8.0.7",
+    "tsx": "^4.22.3",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
@@ -34,7 +37,6 @@
     "@types/node": "^22.14.0",
     "@types/uuid": "^10.0.0",
     "prisma": "^6.9.0",
-    "tsx": "^4.21.0",
     "typescript": "~5.8.2"
   }
 }

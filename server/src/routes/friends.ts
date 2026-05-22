@@ -5,6 +5,77 @@ import { requireAuth } from '../middleware/auth.js';
 const router = Router();
 router.use(requireAuth);
 
+type FriendDecisionAction = 'accept' | 'decline';
+
+async function markFriendRequestNotificationsRead(userId: string, requesterId: string) {
+  await prisma.notification.updateMany({
+    where: {
+      userId,
+      fromUserId: requesterId,
+      type: 'friend_request',
+    },
+    data: { isRead: true },
+  });
+}
+
+async function handleFriendDecision(
+  requesterId: string,
+  addresseeId: string,
+  action: FriendDecisionAction,
+) {
+  const status = action === 'accept' ? 'accepted' : 'declined';
+  const existing = await prisma.friendship.findFirst({
+    where: {
+      OR: [
+        { requesterId, addresseeId },
+        { requesterId: addresseeId, addresseeId: requesterId },
+      ],
+    },
+  });
+
+  const notification = await prisma.notification.findFirst({
+    where: {
+      userId: addresseeId,
+      fromUserId: requesterId,
+      type: 'friend_request',
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  if (existing) {
+    const isOriginalRecipient =
+      existing.requesterId === requesterId &&
+      existing.addresseeId === addresseeId;
+    if (!isOriginalRecipient && existing.status !== 'accepted' && !notification) {
+      return null;
+    }
+
+    if (existing.status !== status) {
+      await prisma.friendship.update({
+        where: { id: existing.id },
+        data: { status },
+      });
+    }
+    await markFriendRequestNotificationsRead(addresseeId, requesterId);
+    return existing.id;
+  }
+
+  if (!notification) {
+    return null;
+  }
+
+  const friendship = await prisma.friendship.create({
+    data: {
+      requesterId,
+      addresseeId,
+      status,
+      note: notification.content,
+    },
+  });
+  await markFriendRequestNotificationsRead(addresseeId, requesterId);
+  return friendship.id;
+}
+
 router.get('/', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
@@ -130,6 +201,7 @@ router.put('/request/:id', async (req: Request, res: Response) => {
       where: { id: requestId },
       data: { status: newStatus },
     });
+    await markFriendRequestNotificationsRead(userId, friendship.requesterId);
 
     res.json({
       message: action === 'accept' ? '已接受' : '已拒绝',
@@ -145,21 +217,14 @@ router.post('/:userId/accept', async (req: Request, res: Response) => {
     const requesterId = String(req.params.userId || '');
     const addresseeId = req.user!.userId;
 
-    const friendship = await prisma.friendship.findFirst({
-      where: { requesterId, addresseeId, status: 'pending' },
-    });
+    const friendshipId = await handleFriendDecision(requesterId, addresseeId, 'accept');
 
-    if (!friendship) {
+    if (!friendshipId) {
       res.status(404).json({ error: '未找到待处理的好友申请' });
       return;
     }
 
-    await prisma.friendship.update({
-      where: { id: friendship.id },
-      data: { status: 'accepted' },
-    });
-
-    res.json({ message: '已接受', status: 'accepted' });
+    res.json({ message: '已接受', status: 'accepted', friendshipId });
   } catch {
     res.status(500).json({ error: '处理失败' });
   }
@@ -170,21 +235,14 @@ router.post('/:userId/decline', async (req: Request, res: Response) => {
     const requesterId = String(req.params.userId || '');
     const addresseeId = req.user!.userId;
 
-    const friendship = await prisma.friendship.findFirst({
-      where: { requesterId, addresseeId, status: 'pending' },
-    });
+    const friendshipId = await handleFriendDecision(requesterId, addresseeId, 'decline');
 
-    if (!friendship) {
+    if (!friendshipId) {
       res.status(404).json({ error: '未找到待处理的好友申请' });
       return;
     }
 
-    await prisma.friendship.update({
-      where: { id: friendship.id },
-      data: { status: 'declined' },
-    });
-
-    res.json({ message: '已拒绝', status: 'declined' });
+    res.json({ message: '已拒绝', status: 'declined', friendshipId });
   } catch {
     res.status(500).json({ error: '处理失败' });
   }

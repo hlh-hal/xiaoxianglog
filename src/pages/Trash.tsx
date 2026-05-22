@@ -9,7 +9,7 @@ import { stripAllMarkdown } from '../lib/utils';
 export default function Trash() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { openDrawer } = useOutletContext<any>();
+  const { returnToDrawer } = useOutletContext<any>();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
@@ -44,6 +44,14 @@ export default function Trash() {
     setShowClearConfirm(false);
   };
 
+  const goBack = () => {
+    if (location.state?.fromDrawer && returnToDrawer) {
+      returnToDrawer();
+    } else {
+      navigate(-1);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-surface text-on-surface pb-12 animate-in fade-in slide-in-from-right-8 duration-300 ease-out">
       <header 
@@ -51,14 +59,7 @@ export default function Trash() {
         style={{ height: '56px' }}
       >
         <button 
-          onClick={() => {
-            if (location.state?.fromDrawer) {
-              sessionStorage.setItem('openDrawerOnNextMount', 'true');
-              navigate(-1);
-            } else {
-              navigate(-1);
-            }
-          }}
+          onClick={goBack}
           className="flex items-center justify-center rounded-[12px] transition-colors duration-300 bg-transparent active:bg-[rgba(0,0,0,0.06)] dark:active:bg-[rgba(255,255,255,0.08)] text-[#1C1C1E] dark:text-[#F2F2F7] shrink-0 relative z-10"
           style={{ width: '40px', height: '40px' }}
         >

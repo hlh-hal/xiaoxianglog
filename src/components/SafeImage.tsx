@@ -5,25 +5,21 @@ type SafeImageProps = React.ImgHTMLAttributes<HTMLImageElement> & {
   src?: string | null;
 };
 
+function getDisplaySrc(src?: string | null): string {
+  if (!src) return '';
+
+  if (!src.trim().startsWith('data:image/')) {
+    return resolveMediaUrl(src);
+  }
+
+  return dataImageUrlToBlobUrl(src) || '';
+}
+
 export function SafeImage({ src, alt = '', ...props }: SafeImageProps) {
-  const [displaySrc, setDisplaySrc] = useState('');
+  const [displaySrc, setDisplaySrc] = useState(() => getDisplaySrc(src));
 
   useEffect(() => {
-    if (!src) {
-      setDisplaySrc('');
-      return;
-    }
-
-    if (!src.trim().startsWith('data:image/')) {
-      setDisplaySrc(resolveMediaUrl(src));
-      return;
-    }
-
-    const objectUrl = dataImageUrlToBlobUrl(src);
-    setDisplaySrc(objectUrl || '');
-    return () => {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
+    setDisplaySrc(getDisplaySrc(src));
   }, [src]);
 
   if (!displaySrc) {

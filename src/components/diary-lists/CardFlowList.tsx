@@ -4,6 +4,7 @@ import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { Check, Pin } from 'lucide-react';
 import { stripAllMarkdown } from '../../lib/utils';
+import { SafeImage } from '../SafeImage';
 
 function excerpt(raw: string, max = 60): string {
   const plain = stripAllMarkdown(raw);
@@ -75,24 +76,28 @@ export function CardFlowList({ journals, isMultiSelectMode, selectedJournals, ha
               );
             })()}
             
-            {journal.images && journal.images.length > 0 && (
-              <div className={`mt-4 grid gap-2 ${
-                journal.images.length === 1 ? 'grid-cols-1' : 
-                journal.images.length === 2 ? 'grid-cols-2' :
-                journal.images.length === 4 ? 'grid-cols-2' : 'grid-cols-3'
-              }`}>
-                {journal.images.map((img, idx) => (
-                  <div key={idx} className={journal.images.length === 1 ? 'aspect-[4/3]' : 'aspect-square'}>
-                    <img 
-                      src={img} 
-                      alt="Journal attachment" 
-                      className={`w-full h-full object-cover transition-transform duration-700 ${journal.images.length === 1 ? 'rounded-2xl hover:scale-[1.02]' : 'rounded-[16px] hover:scale-105'} `} 
-                      referrerPolicy="no-referrer"
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
+            {(() => {
+              const validImages = (journal.images || []).filter(img => typeof img === 'string' && img.trim() !== '');
+              if (validImages.length === 0) return null;
+              return (
+                <div className={`mt-4 grid gap-2 ${
+                  validImages.length === 1 ? 'grid-cols-1' : 
+                  validImages.length === 2 ? 'grid-cols-2' :
+                  validImages.length === 4 ? 'grid-cols-2' : 'grid-cols-3'
+                }`}>
+                  {validImages.map((img, idx) => (
+                    <div key={idx} className={validImages.length === 1 ? 'aspect-[4/3]' : 'aspect-square'}>
+                      <SafeImage
+                        src={img} 
+                        alt="Journal attachment" 
+                        className={`w-full h-full object-cover transition-transform duration-700 ${validImages.length === 1 ? 'rounded-2xl hover:scale-[1.02]' : 'rounded-[16px] hover:scale-105'} `} 
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         </article>
       ))}

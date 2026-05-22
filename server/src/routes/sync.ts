@@ -3,9 +3,29 @@ import { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { stringArray } from '../utils/request.js';
+import { repairLegacyImageUrls } from '../lib/imageRepair.js';
+import { areStringArraysEqual, parseStoredStringArray, saveEditHistorySnapshot } from '../lib/editHistory.js';
 
 const router = Router();
 router.use(requireAuth);
+
+function parseJsonArray(value?: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string' && item.trim() !== '') : [];
+  } catch {
+    return [];
+  }
+}
+
+async function formatSyncEntry(entry: any) {
+  return {
+    ...entry,
+    tags: entry.tags ? JSON.parse(entry.tags) : [],
+    images: await repairLegacyImageUrls(parseJsonArray(entry.images)),
+  };
+}
 
 router.get('/pull', async (req: Request, res: Response) => {
   try {
@@ -15,18 +35,17 @@ router.get('/pull', async (req: Request, res: Response) => {
     if (since) {
       const sinceDate = new Date(since);
       if (!Number.isNaN(sinceDate.getTime())) {
-        where.updatedAt = { gt: sinceDate };
+        where.OR = [
+          { updatedAt: { gt: sinceDate } },
+          { images: { contains: 'data:image/' } },
+        ];
       }
     }
 
     const entries = await prisma.diaryEntry.findMany({ where, take: 1000 });
 
     res.json({
-      entries: entries.map(e => ({
-        ...e,
-        tags: e.tags ? JSON.parse(e.tags) : [],
-        images: e.images ? JSON.parse(e.images) : [],
-      })),
+      entries: await Promise.all(entries.map(formatSyncEntry)),
       serverTime: new Date().toISOString(),
     });
   } catch (err: any) {
@@ -67,18 +86,31 @@ router.post('/push', async (req: Request, res: Response) => {
             continue;
           }
 
+          const nextContent = String(entry.content || '').slice(0, 200000);
+          const nextImages = entry.images ? stringArray(entry.images, 20, 2000) : [];
+          const contentChanged = nextContent !== existing.content;
+          const imagesChanged = !areStringArraysEqual(nextImages, parseStoredStringArray(existing.images));
+          if (contentChanged || imagesChanged) {
+            await saveEditHistorySnapshot({
+              entryId: existing.id,
+              userId,
+              content: existing.content,
+              images: parseStoredStringArray(existing.images),
+            });
+          }
+
           await prisma.diaryEntry.update({
             where: { id: existing.id },
             data: {
               title: entry.title,
-              content: String(entry.content || '').slice(0, 200000),
+              content: nextContent,
               diaryDate: entry.diaryDate,
               status: entry.status,
               mood: entry.mood,
               weather: entry.weather,
               tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
               themeId: entry.themeId,
-              images: entry.images ? JSON.stringify(stringArray(entry.images, 20, 2000)) : null,
+              images: nextImages.length > 0 ? JSON.stringify(nextImages) : null,
               isPinned: Boolean(entry.isPinned),
               isHidden: Boolean(entry.isHidden),
               trashReason: entry.trashReason,
@@ -88,7 +120,7 @@ router.post('/push', async (req: Request, res: Response) => {
           });
           results.push({ id, status: 'updated' });
         } else {
-          await prisma.diaryEntry.create({
+          const created = await prisma.diaryEntry.create({
             data: {
               id,
               userId,
@@ -106,6 +138,12 @@ router.post('/push', async (req: Request, res: Response) => {
               trashReason: entry.trashReason,
               trashedAt: entry.trashedAt ? new Date(entry.trashedAt) : null,
             },
+          });
+          await saveEditHistorySnapshot({
+            entryId: created.id,
+            userId,
+            content: created.content,
+            images: parseStoredStringArray(created.images),
           });
           results.push({ id, status: 'created' });
         }

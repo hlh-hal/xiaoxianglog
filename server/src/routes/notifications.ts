@@ -30,6 +30,27 @@ router.get('/', async (req: Request, res: Response) => {
       take: 50,
     });
 
+    const friendRequestSenderIds = Array.from(new Set(
+      notifications
+        .filter(n => n.type === 'friend_request' && n.fromUserId)
+        .map(n => n.fromUserId as string),
+    ));
+    const friendships = friendRequestSenderIds.length
+      ? await prisma.friendship.findMany({
+          where: {
+            OR: [
+              { requesterId: { in: friendRequestSenderIds }, addresseeId: userId },
+              { requesterId: userId, addresseeId: { in: friendRequestSenderIds } },
+            ],
+          },
+        })
+      : [];
+    const friendStatusMap = new Map<string, string>();
+    friendships.forEach(friendship => {
+      const otherId = friendship.requesterId === userId ? friendship.addresseeId : friendship.requesterId;
+      friendStatusMap.set(otherId, friendship.status);
+    });
+
     res.json(notifications.map(n => ({
       id: n.id,
       type: n.type,
@@ -42,6 +63,7 @@ router.get('/', async (req: Request, res: Response) => {
       refPostId: n.refPostId,
       refDiaryId: n.refDiaryId,
       isRead: n.isRead,
+      friendStatus: n.fromUserId ? friendStatusMap.get(n.fromUserId) || 'none' : 'none',
       createdAt: n.createdAt.toISOString(),
     })));
   } catch (err: any) {

@@ -2,6 +2,7 @@ import React, { forwardRef } from 'react';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { getThemeById, calculateContrastColor } from '../config/themes';
+import { SafeImage } from './SafeImage';
 
 interface ShareCardProps {
   contentHtml: string;
@@ -58,7 +59,7 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(({ contentHt
           <div className="grid grid-cols-2 gap-3 mt-8">
             {images.map((img, idx) => (
               <div key={idx} className="aspect-square rounded-xl overflow-hidden shadow-sm">
-                <img src={img} alt="" className="w-full h-full object-cover" />
+                <SafeImage src={img} alt="" className="w-full h-full object-cover" />
               </div>
             ))}
           </div>

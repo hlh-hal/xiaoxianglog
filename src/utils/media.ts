@@ -23,13 +23,19 @@ export function normalizeImageDataUrl(url?: string | null): string {
   if (!value || !value.startsWith('data:image/')) return value;
   return value
     .replace(/^data:(image\/[^;,]+);base,/i, 'data:$1;base64,')
-    .replace(/^data:(image\/[^;,]+);base64;/i, 'data:$1;base64,');
+    .replace(/^data:(image\/[^;,]+);base64;/i, 'data:$1;base64,')
+    .replace(/\s/g, '');
 }
+
+const dataImageBlobUrlCache = new Map<string, string>();
 
 export function dataImageUrlToBlobUrl(url?: string | null): string | null {
   const value = normalizeImageDataUrl(url);
   const match = value.match(/^data:(image\/[^;,]+);base64,(.+)$/i);
   if (!match) return null;
+
+  const cachedUrl = dataImageBlobUrlCache.get(value);
+  if (cachedUrl) return cachedUrl;
 
   try {
     const mimeType = match[1];
@@ -45,7 +51,9 @@ export function dataImageUrlToBlobUrl(url?: string | null): string | null {
       }
       chunks.push(bytes);
     }
-    return URL.createObjectURL(new Blob(chunks, { type: mimeType }));
+    const objectUrl = URL.createObjectURL(new Blob(chunks, { type: mimeType }));
+    dataImageBlobUrlCache.set(value, objectUrl);
+    return objectUrl;
   } catch {
     return null;
   }

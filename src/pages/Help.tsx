@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import {
   BookOpen,
   ChevronDown,
@@ -136,7 +136,7 @@ const HELP_SECTIONS: HelpSection[] = [
     items: [
       '设置页的“导入导出”支持导出全部活动日记为 Markdown（.md）文件。',
       '导入备份支持普通导入和智能解析导入；日期不确定时可在确认页手动修改或跳过。',
-      'Android App 可在设置页选择 Documents 本地日志文件夹，把日记同步为本地 Markdown 文件。',
+      '支持的环境可在设置页选择本地日志文件夹，把日记同步为本地 Markdown 文件；不支持文件夹写入的浏览器仍可使用导入导出。',
       '如果本地索引丢失，可通过“从本地日志文件夹恢复索引”重新找回已授权文件夹里的日志。',
       '删除日记会先进入回收站；回收站内可恢复，永久删除后无法找回。',
       '登录账号后应用会尝试同步日记数据；离线或网络异常时会继续保留本地数据。',
@@ -186,8 +186,8 @@ const FAQ_GROUPS: FaqGroup[] = [
         a: '当前导出为 Markdown（.md）文件，文件名会带“小象日志备份”和当天日期。导入时也请选择 .md 文件。',
       },
       {
-        q: 'Android 的本地日志文件夹有什么用？',
-        a: '在 Android App 内授权 Documents 文件夹后，应用会把日记写成可见的 Markdown 文件，并记录附件路径；需要时也能从这个文件夹恢复索引。',
+        q: '本地日志文件夹有什么用？',
+        a: '授权本地日志文件夹后，应用会把日记写成可见的 Markdown 文件，并记录附件路径；需要时也能从这个文件夹恢复索引。手机浏览器是否支持文件夹写入取决于浏览器能力。',
       },
       {
         q: '登录账号后数据还是本地的吗？',
@@ -236,6 +236,7 @@ const FAQ_GROUPS: FaqGroup[] = [
 export default function Help() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { returnToDrawer } = useOutletContext<any>();
   const { isDark } = useTheme();
 
   const [expandedSection, setExpandedSection] = useState<string>(HELP_SECTIONS[0].id);
@@ -262,10 +263,11 @@ export default function Help() {
   };
 
   const goBack = () => {
-    if (location.state?.fromDrawer) {
-      sessionStorage.setItem('openDrawerOnNextMount', 'true');
+    if (location.state?.fromDrawer && returnToDrawer) {
+      returnToDrawer();
+    } else {
+      navigate(-1);
     }
-    navigate(-1);
   };
 
   const submitFeedback = () => {
