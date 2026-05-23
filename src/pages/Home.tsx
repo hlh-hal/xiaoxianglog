@@ -296,7 +296,7 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
     <div className="px-3 w-full max-w-[800px] mx-auto pt-3 pb-0">
       {/* Multi-select Top Bar */}
       {isMultiSelectMode && (
-        <div className="fixed top-0 left-0 right-0 h-16 bg-surface z-50 flex items-center justify-between px-4 md:px-6 shadow-sm animate-in slide-in-from-top max-w-[800px] mx-auto">
+        <div className="app-safe-header fixed top-0 left-0 right-0 bg-surface z-50 flex items-center justify-between px-4 md:px-6 shadow-sm animate-in slide-in-from-top max-w-[800px] mx-auto">
           <button 
             onClick={() => {
               setIsMultiSelectMode(false);

@@ -102,7 +102,7 @@ export default function ForgotPassword() {
 
   return (
     <div className="min-h-screen bg-[#FAF9F5] flex flex-col font-sans">
-      <header className="w-full flex items-center px-6 h-14 shrink-0 bg-[#FAF9F5]">
+      <header className="app-safe-header w-full flex items-center px-6 shrink-0 bg-[#FAF9F5]">
         <button onClick={handleBack} className="p-2 -ml-2 rounded-full active:bg-black/5 transition-colors">
           <ArrowLeft className="w-6 h-6 text-[#1C1C1E]" />
         </button>

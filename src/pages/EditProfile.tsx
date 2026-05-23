@@ -158,7 +158,7 @@ export default function EditProfile() {
 
   return (
     <div className="min-h-screen bg-surface text-on-surface flex flex-col font-sans">
-      <header className="sticky top-0 z-10 flex items-center justify-between px-6 h-14 bg-surface/80 backdrop-blur-md">
+      <header className="app-safe-header sticky top-0 z-10 flex items-center justify-between px-6 bg-surface/80 backdrop-blur-md">
         <button
           onClick={() => navigate(-1)}
           className="p-2 -ml-2 rounded-full active:bg-black/5 transition-colors"

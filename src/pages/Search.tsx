@@ -130,7 +130,7 @@ export default function Search() {
   return (
     <div className="min-h-screen bg-surface font-sans">
       {/* AppBar */}
-      <header className="sticky top-0 left-0 w-full z-40 flex items-center px-4 h-16 bg-surface">
+      <header className="app-safe-header sticky top-0 left-0 w-full z-40 flex items-center px-4 bg-surface">
         <button 
           onClick={handleBack}
           className="flex items-center justify-center w-10 h-10 mr-2 rounded-full hover:bg-surface-container-high transition-colors"

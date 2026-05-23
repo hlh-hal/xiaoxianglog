@@ -36,6 +36,14 @@
   --diary-line-height: 1.7;
   --diary-font-family: "Noto Sans SC", "Inter", ui-sans-serif, system-ui, sans-serif;
   --diary-font-color: auto;
+  --app-safe-top: env(safe-area-inset-top, 0px);
+  --app-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --app-header-height: 56px;
+  --app-total-header-height: calc(var(--app-safe-top) + var(--app-header-height));
+}
+
+html[data-platform="android"] {
+  --app-safe-top: max(env(safe-area-inset-top, 0px), 28px);
 }
 
 .dark {
@@ -66,6 +74,12 @@ body {
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+}
+
+.app-safe-header {
+  height: var(--app-total-header-height);
+  padding-top: var(--app-safe-top);
+  box-sizing: border-box;
 }
 
 /* 全局过渡，切换时平滑 */

@@ -242,7 +242,6 @@ export default function Leaderboard() {
 
     const isCurrentlyLiked = !!likesState[userId];
     const newIsLiked = !isCurrentlyLiked;
-    
     // Get current user details to append to likedBy
     const currentUser = users.find(u => u.isCurrentUser);
     const myName = currentUser ? currentUser.name : '我';
@@ -305,7 +304,7 @@ export default function Leaderboard() {
   return (
     <div className="min-h-screen font-body flex flex-col relative" style={{ backgroundColor: bgColor, color: textColor }}>
       {/* AppBar */}
-      <header className="sticky top-0 z-50 flex items-center justify-between px-4 h-14 backdrop-blur-md" style={{ backgroundColor: isDark ? 'rgba(28,28,30,0.8)' : 'rgba(250,249,245,0.8)' }}>
+      <header className="app-safe-header sticky top-0 z-50 flex items-center justify-between px-4 backdrop-blur-md" style={{ backgroundColor: isDark ? 'rgba(28,28,30,0.8)' : 'rgba(250,249,245,0.8)' }}>
         <button 
           onClick={() => {
             if (window.history.length > 1) {
@@ -468,7 +467,7 @@ export default function Leaderboard() {
           backgroundColor: isDark ? '#1C1C1E' : '#FAF9F5',
           transform: searchPageVisible ? 'translateY(0)' : 'translateY(100%)',
           transition: 'transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
-          paddingTop: 'max(env(safe-area-inset-top), 12px)',
+          paddingTop: 'calc(var(--app-safe-top) + 12px)',
         }}>
 
           {/* 搜索栏 AppBar */}
@@ -644,7 +643,7 @@ export default function Leaderboard() {
             backgroundColor: isDark ? '#2C2C2E' : '#FFFFFF',
             borderTopLeftRadius: '20px',
             borderTopRightRadius: '20px',
-            padding: '20px 20px calc(32px + env(safe-area-inset-bottom))',
+            padding: '20px 20px calc(32px + var(--app-safe-bottom))',
             animation: 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
           }}>
             <style>{`

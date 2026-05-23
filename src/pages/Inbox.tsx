@@ -204,8 +204,8 @@ export default function Inbox() {
     }}>
       {/* TopAppBar */}
       <div style={{
-        height: '56px',
-        paddingTop: 'env(safe-area-inset-top)',
+        height: 'var(--app-total-header-height)',
+        paddingTop: 'var(--app-safe-top)',
         backgroundColor: isDark ? 'rgba(28, 28, 30, 0.9)' : 'rgba(250, 249, 245, 0.9)',
         backdropFilter: 'blur(10px)',
         position: 'sticky',
@@ -216,7 +216,8 @@ export default function Inbox() {
         justifyContent: 'space-between',
         paddingLeft: '8px',
         paddingRight: '16px',
-        borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`
+        borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`,
+        boxSizing: 'border-box'
       }}>
         <button 
           onClick={() => navigate(-1)}
@@ -238,7 +239,7 @@ export default function Inbox() {
         borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`,
         backgroundColor: isDark ? '#1C1C1E' : '#FAF9F5',
         position: 'sticky',
-        top: 'calc(56px + env(safe-area-inset-top))',
+        top: 'var(--app-total-header-height)',
         zIndex: 40
       }}>
         {TABS.map((tab, idx) => {

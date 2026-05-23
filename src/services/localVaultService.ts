@@ -122,6 +122,7 @@ const MANIFEST_PATH = '.xiaoxiang/manifest.json';
 const WEB_VAULT_DB_NAME = 'xiaoxiang-local-vault';
 const WEB_VAULT_DB_VERSION = 1;
 const WEB_ROOT_HANDLE_ID = 'root';
+const YEAR_DIR_PATTERN = /^\d{4}$/;
 
 let webRootHandle: FileSystemDirectoryHandle | null = null;
 let webVaultDbPromise: Promise<IDBPDatabase<WebVaultDB>> | null = null;
@@ -133,7 +134,12 @@ const emptyManifest = (): VaultManifest => ({
 });
 
 function isAndroid(): boolean {
-  return Capacitor.getPlatform() === 'android';
+  return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+}
+
+function isMobileWeb(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 }
 
 function getWebWindow(): WebFileSystemWindow | null {
@@ -143,6 +149,66 @@ function getWebWindow(): WebFileSystemWindow | null {
 
 function normalizePath(path: string): string {
   return path.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/');
+}
+
+function selectedRootKind(rootName: string): 'vault-root' | 'user-log-root' | 'year-root' {
+  if (rootName === USER_LOG_DIR) return 'user-log-root';
+  if (YEAR_DIR_PATTERN.test(rootName)) return 'year-root';
+  return 'vault-root';
+}
+
+function mapPathToSelectedRoot(path: string, rootName: string): string {
+  const normalized = normalizePath(path);
+  const kind = selectedRootKind(rootName);
+
+  if (kind === 'user-log-root') {
+    if (normalized === USER_LOG_DIR) return '';
+    if (normalized.startsWith(`${USER_LOG_DIR}/`)) {
+      return normalized.slice(USER_LOG_DIR.length + 1);
+    }
+  }
+
+  if (kind === 'year-root') {
+    const currentYearRoot = `${USER_LOG_DIR}/${rootName}`;
+    if (normalized === currentYearRoot) return '';
+    if (normalized.startsWith(`${currentYearRoot}/`)) {
+      return normalized.slice(currentYearRoot.length + 1);
+    }
+    if (normalized === USER_LOG_DIR) return '';
+    if (normalized.startsWith(`${USER_LOG_DIR}/`)) {
+      return normalized.slice(USER_LOG_DIR.length + 1);
+    }
+  }
+
+  return normalized;
+}
+
+function mapPathFromSelectedRoot(path: string, rootName: string): string {
+  const normalized = normalizePath(path);
+  const kind = selectedRootKind(rootName);
+
+  if (kind === 'user-log-root') {
+    return normalized ? `${USER_LOG_DIR}/${normalized}` : USER_LOG_DIR;
+  }
+
+  if (kind === 'year-root') {
+    if (!normalized) return `${USER_LOG_DIR}/${rootName}`;
+    const firstSegment = normalized.split('/')[0];
+    if (YEAR_DIR_PATTERN.test(firstSegment)) {
+      return `${USER_LOG_DIR}/${normalized}`;
+    }
+    return `${USER_LOG_DIR}/${rootName}/${normalized}`;
+  }
+
+  return normalized;
+}
+
+function shouldIgnoreSelectedRootMarkdownPath(path: string): boolean {
+  const firstSegment = normalizePath(path).split('/')[0];
+  return firstSegment === EXPORT_DIR
+    || firstSegment === ATTACHMENT_IMAGE_DIR.split('/')[0]
+    || firstSegment === TRASH_DIR
+    || firstSegment === '.xiaoxiang';
 }
 
 function cleanSegments(path: string, allowEmpty = false): string[] {
@@ -334,6 +400,7 @@ function webStatus(partial: Partial<VaultStatus>): VaultStatus {
 }
 
 function supportsWebDirectoryPicker(): boolean {
+  if (isMobileWeb()) return false;
   return typeof getWebWindow()?.showDirectoryPicker === 'function';
 }
 
@@ -469,7 +536,10 @@ async function findWebFile(root: FileSystemDirectoryHandle, path: string): Promi
 }
 
 async function ensureWebVaultStructure(root: FileSystemDirectoryHandle): Promise<void> {
-  await getOrCreateWebDirectory(root, cleanSegments(USER_LOG_DIR));
+  const kind = selectedRootKind(root.name || '');
+  if (kind === 'vault-root') {
+    await getOrCreateWebDirectory(root, cleanSegments(USER_LOG_DIR));
+  }
   await getOrCreateWebDirectory(root, cleanSegments(EXPORT_DIR));
   await getOrCreateWebDirectory(root, cleanSegments(ATTACHMENT_IMAGE_DIR));
   await getOrCreateWebDirectory(root, cleanSegments(TRASH_DIR));
@@ -520,12 +590,29 @@ const androidBackend: VaultBackend = {
     }
   },
 
-  writeTextFile(path: string, content: string): Promise<{ path: string }> {
-    return LocalVault.writeTextFile({ path, content });
+  async writeTextFile(path: string, content: string): Promise<{ path: string; size?: number }> {
+    const result = await LocalVault.writeTextFile({ path, content });
+    if (content.length > 0) {
+      if (result.size === 0) {
+        throw new Error(`写入失败，文件为空: ${path}`);
+      }
+
+      if (result.size === undefined) {
+        const verify = await LocalVault.readTextFile({ path });
+        if (verify.content !== content) {
+          throw new Error(`写入校验失败: ${path}`);
+        }
+      }
+    }
+    return result;
   },
 
-  writeBase64File(path: string, base64: string, mimeType: string): Promise<{ path: string }> {
-    return LocalVault.writeBase64File({ path, base64, mimeType });
+  async writeBase64File(path: string, base64: string, mimeType: string): Promise<{ path: string; size?: number }> {
+    const result = await LocalVault.writeBase64File({ path, base64, mimeType });
+    if (result.size === 0) {
+      throw new Error(`写入失败，附件为空: ${path}`);
+    }
+    return result;
   },
 
   readTextFile(path: string): Promise<{ path: string; content: string }> {
@@ -613,7 +700,8 @@ const webDirectoryBackend: VaultBackend = {
 
   async writeTextFile(path: string, content: string): Promise<{ path: string; size?: number }> {
     const root = await requireWebRoot();
-    const handle = await getOrCreateWebFile(root, path);
+    const physicalPath = mapPathToSelectedRoot(path, root.name || '');
+    const handle = await getOrCreateWebFile(root, physicalPath);
     const writable = await handle.createWritable();
     await writable.write(content);
     await writable.close();
@@ -626,7 +714,8 @@ const webDirectoryBackend: VaultBackend = {
 
   async writeBase64File(path: string, base64: string, mimeType: string): Promise<{ path: string; size?: number }> {
     const root = await requireWebRoot();
-    const handle = await getOrCreateWebFile(root, path);
+    const physicalPath = mapPathToSelectedRoot(path, root.name || '');
+    const handle = await getOrCreateWebFile(root, physicalPath);
     const writable = await handle.createWritable();
     await writable.write(dataUrlToBlob(base64, mimeType));
     await writable.close();
@@ -639,7 +728,8 @@ const webDirectoryBackend: VaultBackend = {
 
   async readTextFile(path: string): Promise<{ path: string; content: string }> {
     const root = await requireWebRoot();
-    const handle = await findWebFile(root, path);
+    const physicalPath = mapPathToSelectedRoot(path, root.name || '');
+    const handle = await findWebFile(root, physicalPath);
     if (!handle) throw new Error('文件不存在');
 
     const file = await handle.getFile();
@@ -651,17 +741,27 @@ const webDirectoryBackend: VaultBackend = {
 
   async listMarkdownFiles(rootPath = USER_LOG_DIR): Promise<{ files: VaultMarkdownFile[] }> {
     const root = await requireWebRoot();
-    const directory = await findWebDirectory(root, rootPath, false);
+    const physicalRootPath = mapPathToSelectedRoot(rootPath, root.name || '');
+    const directory = await findWebDirectory(root, physicalRootPath, false);
     const files: VaultMarkdownFile[] = [];
     if (directory) {
-      await walkWebMarkdownFiles(directory, normalizePath(rootPath).replace(/\/+$/, ''), files);
+      await walkWebMarkdownFiles(directory, normalizePath(physicalRootPath).replace(/\/+$/, ''), files);
     }
-    return { files };
+    const visibleFiles = physicalRootPath === '' && selectedRootKind(root.name || '') !== 'vault-root'
+      ? files.filter((file) => !shouldIgnoreSelectedRootMarkdownPath(file.path))
+      : files;
+    return {
+      files: visibleFiles.map((file) => ({
+        ...file,
+        path: mapPathFromSelectedRoot(file.path, root.name || ''),
+      })),
+    };
   },
 
   async deleteFile(path: string): Promise<{ path: string; deleted: boolean }> {
     const root = await requireWebRoot();
-    const segments = cleanSegments(path);
+    const physicalPath = mapPathToSelectedRoot(path, root.name || '');
+    const segments = cleanSegments(physicalPath);
     const fileName = segments[segments.length - 1];
     const parent = await findWebDirectory(root, segments.slice(0, -1).join('/'), false);
     if (!parent) return { path, deleted: true };
@@ -679,10 +779,10 @@ const webDirectoryBackend: VaultBackend = {
 
   async moveFile(fromPath: string, toPath: string): Promise<{ fromPath: string; toPath: string }> {
     const root = await requireWebRoot();
-    const source = await findWebFile(root, fromPath);
+    const source = await findWebFile(root, mapPathToSelectedRoot(fromPath, root.name || ''));
     if (!source) throw new Error('源文件不存在');
 
-    const target = await getOrCreateWebFile(root, toPath);
+    const target = await getOrCreateWebFile(root, mapPathToSelectedRoot(toPath, root.name || ''));
     const writable = await target.createWritable();
     await writable.write(await source.getFile());
     await writable.close();
@@ -736,7 +836,9 @@ async function writeManifest(manifest: VaultManifest, backend = getBackend()): P
 async function existingMarkdownPaths(root: string, backend = getBackend()): Promise<Set<string>> {
   try {
     const result = await backend.listMarkdownFiles(root);
-    return new Set((result.files || []).map((file) => normalizePath(file.path)));
+    return new Set((result.files || [])
+      .filter((file) => file.size !== 0)
+      .map((file) => normalizePath(file.path)));
   } catch {
     return new Set();
   }

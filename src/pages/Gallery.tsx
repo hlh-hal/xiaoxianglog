@@ -162,7 +162,7 @@ export default function Gallery() {
       transition={{ duration: 0.3 }}
       className="min-h-screen bg-surface font-sans pb-12"
     >
-      <header className="sticky top-0 w-full z-40 bg-surface flex items-center px-4 h-16">
+      <header className="app-safe-header sticky top-0 w-full z-40 bg-surface flex items-center px-4">
         <button 
           onClick={goBack}
           className="flex items-center justify-center w-10 h-10 -ml-2 rounded-full hover:bg-on-surface/5 transition-colors relative z-10"

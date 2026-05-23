@@ -274,9 +274,9 @@ export default function Profile() {
   const rankText = stats.leaderboardRank ? `第 ${stats.leaderboardRank} 名` : '未上榜';
 
   return (
-    <div className="bg-surface text-on-surface pb-4 pt-[72px] px-4 md:px-6 w-full max-w-[800px] mx-auto">
-      <header className="fixed top-0 left-0 w-full z-50 bg-surface/80 backdrop-blur-xl">
-        <div className="flex justify-between items-center w-full px-4 md:px-6 py-4 max-w-[800px] mx-auto">
+    <div className="bg-surface text-on-surface pb-4 pt-[calc(var(--app-total-header-height)+16px)] px-4 md:px-6 w-full max-w-[800px] mx-auto">
+      <header className="app-safe-header fixed top-0 left-0 w-full z-50 bg-surface/80 backdrop-blur-xl">
+        <div className="flex justify-between items-center w-full h-[var(--app-header-height)] px-4 md:px-6 max-w-[800px] mx-auto">
           <button className="relative" onClick={() => navigate('/inbox')}>
             <Mail className="w-7 h-7 text-on-surface" />
             {unreadCount > 0 && (

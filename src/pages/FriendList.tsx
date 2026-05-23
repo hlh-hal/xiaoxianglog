@@ -128,11 +128,11 @@ export default function FriendList() {
       backgroundColor: isDark ? '#1C1C1E' : '#FAF9F5',
       color: isDark ? '#F2F2F7' : '#1C1C1E',
       fontFamily: 'inherit',
-      paddingTop: '56px',
-      paddingBottom: 'env(safe-area-inset-bottom)',
+      paddingTop: 'var(--app-total-header-height)',
+      paddingBottom: 'var(--app-safe-bottom)',
     }}>
-      <header className="fixed top-0 left-0 w-full z-50 bg-surface/80 backdrop-blur-xl">
-        <div className="flex items-center justify-between w-full h-[56px] px-4 mx-auto max-w-[800px]">
+      <header className="app-safe-header fixed top-0 left-0 w-full z-50 bg-surface/80 backdrop-blur-xl">
+        <div className="flex items-center justify-between w-full h-[var(--app-header-height)] px-4 mx-auto max-w-[800px]">
           <button onClick={isSelecting ? cancelSelect : () => navigate(-1)}
             style={{ width: 36, height: 36, background: 'none', border: 'none',
                      display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -192,11 +192,10 @@ export default function FriendList() {
         <div style={{
           position: 'fixed',
           top: 0, left: 0, right: 0,
-          height: '56px',
-          paddingTop: 'max(env(safe-area-inset-top), 0px)',
+          height: 'var(--app-total-header-height)',
           display: 'flex',
           alignItems: 'center',
-          padding: '0 16px',
+          padding: 'var(--app-safe-top) 16px 0',
           gap: '10px',
           backgroundColor: isDark ? '#1C1C1E' : '#FAF9F5',
           borderBottom: `1px solid ${isDark ? '#3A3A3C' : '#F2F2F7'}`,
@@ -354,7 +353,7 @@ export default function FriendList() {
       {toastMessage && (
         <div style={{
           position: 'fixed',
-          bottom: 'max(env(safe-area-inset-bottom), 24px)',
+          bottom: 'max(var(--app-safe-bottom), 24px)',
           left: '50%',
           transform: 'translateX(-50%)',
           backgroundColor: isDark ? '#F2F2F7' : '#1C1C1E',

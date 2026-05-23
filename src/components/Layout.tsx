@@ -227,11 +227,8 @@ export default function Layout() {
       {/* Top App Bar (Only on Home) */}
       {location.pathname === '/' && (
         <header 
-          className="sticky top-0 left-0 w-full z-40 flex items-center justify-between bg-surface/80 backdrop-blur-md"
+          className="app-safe-header sticky top-0 left-0 w-full z-40 flex items-center justify-between bg-surface/80 backdrop-blur-md"
           style={{
-            minHeight: '56px',
-            paddingTop: 'max(env(safe-area-inset-top), 12px)',
-            paddingBottom: '10px',
             paddingLeft: '16px',
             paddingRight: '16px',
           }}
@@ -392,7 +389,8 @@ export default function Layout() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex flex-col items-center pt-[72px]"
+            className="fixed inset-0 z-50 flex flex-col items-center"
+            style={{ paddingTop: 'calc(var(--app-total-header-height) + 16px)' }}
           >
             <div 
               className="absolute inset-0 bg-on-surface/20 -z-10"
@@ -510,7 +508,7 @@ export default function Layout() {
         
         {/* 抽屉顶部 Header 区域 */}
         <div style={{
-          padding: '36px 20px 20px',  // 减少顶部留白，状态栏高度够用即可
+          padding: 'calc(var(--app-safe-top) + 28px) 20px 20px',
           borderBottom: `1px solid ${drawerHeaderColors.border}`,
           marginBottom: '8px',
         }}>
@@ -640,7 +638,7 @@ export default function Layout() {
       {/* Main Content */}
       <main className={cn(
         "md:ml-72 transition-all duration-500 min-h-screen flex flex-col relative",
-        ['/', '/community', '/profile'].includes(location.pathname) ? "pb-[72px]" : "pb-0"
+        ['/', '/community', '/profile'].includes(location.pathname) ? "pb-[calc(72px+var(--app-safe-bottom))]" : "pb-0"
       )}>
         <div className="flex-1 w-full flex flex-col">
           <AnimatePresence mode="wait">
@@ -720,6 +718,7 @@ export default function Layout() {
             navigate('/editor');
           }}
           className="fixed bottom-28 right-6 w-14 h-14 rounded-2xl bg-primary text-white shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] flex items-center justify-center hover:bg-primary-dim active:scale-90 transition-all z-[40]"
+          style={{ bottom: 'calc(7rem + var(--app-safe-bottom))' }}
         >
           <Plus className="w-8 h-8" />
         </button>
@@ -729,7 +728,7 @@ export default function Layout() {
       {['/', '/community', '/profile'].includes(location.pathname) && (
         <nav 
           className="fixed bottom-0 left-0 w-full md:w-[calc(100%-18rem)] md:ml-72 flex justify-around items-center px-4 bg-surface/90 backdrop-blur-xl z-50 rounded-t-[24px] shadow-[0_-10px_40px_rgba(0,0,0,0.03)] border-t border-outline-variant/10"
-          style={{ paddingTop: '6px', paddingBottom: 'env(safe-area-inset-bottom)' }}
+          style={{ paddingTop: '6px', paddingBottom: 'var(--app-safe-bottom)' }}
         >
           {navItems.map((item) => {
             const isActive = optimisticNavPath === item.path;

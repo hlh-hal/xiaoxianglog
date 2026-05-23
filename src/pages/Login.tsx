@@ -41,7 +41,7 @@ export default function Login() {
 
   return (
     <div className="min-h-screen bg-[#FAF9F5] flex flex-col font-sans">
-      <header className="w-full flex items-center px-6 h-14 shrink-0 bg-[#FAF9F5]">
+      <header className="app-safe-header w-full flex items-center px-6 shrink-0 bg-[#FAF9F5]">
         <button 
           onClick={() => {
             if (window.history.length > 1) {

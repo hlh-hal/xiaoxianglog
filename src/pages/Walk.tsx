@@ -271,7 +271,7 @@ export default function Walk() {
   if (entries.length === 0) {
     return (
       <div className="min-h-screen bg-surface flex flex-col font-sans">
-        <header className="w-full z-50 flex items-center justify-between px-4 h-16 shrink-0 relative">
+        <header className="app-safe-header w-full z-50 flex items-center justify-between px-4 shrink-0 relative">
           <button 
             onClick={goBack}
             className="p-2 -ml-2 rounded-full hover:bg-surface-container-high transition-colors relative z-10"
@@ -323,7 +323,7 @@ export default function Walk() {
         </svg>
       </div>
 
-      <header className="w-full z-50 flex items-center justify-between px-4 h-16 shrink-0 relative">
+      <header className="app-safe-header w-full z-50 flex items-center justify-between px-4 shrink-0 relative">
         <button 
           onClick={goBack}
           className="p-2 -ml-2 rounded-full hover:bg-surface-container-high transition-colors relative z-10"

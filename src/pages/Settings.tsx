@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, ChevronRight, Lightbulb, Loader2, MessageSquare, X } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Lightbulb, Loader2, MessageSquare, RefreshCw, X } from 'lucide-react';
 import { Link, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { authService } from '../services/authService';
 import { diaryService } from '../services/diaryService';
@@ -262,6 +262,19 @@ export default function Settings() {
     }
   };
 
+  const handleManualCloudSync = async () => {
+    setIsLoading(true);
+    try {
+      await diaryService.syncCurrentAccount();
+      showToast('账号日志已同步');
+    } catch (error: any) {
+      console.error(error);
+      showToast(error?.message || '账号同步失败，请稍后重试');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleImport = (useAI: boolean = false) => {
     setActiveSheet(null);
     const input = document.createElement('input');
@@ -406,7 +419,7 @@ export default function Settings() {
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="p-4 max-h-[70vh] overflow-y-auto" style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
+          <div className="p-4 max-h-[70vh] overflow-y-auto" style={{ paddingBottom: 'max(1rem, var(--app-safe-bottom))' }}>
             {children}
           </div>
         </div>
@@ -432,8 +445,7 @@ export default function Settings() {
       )}
 
       <header
-        className="sticky top-0 z-40 flex items-center justify-between px-4 w-full transition-colors duration-300 bg-[#FAF9F5] dark:bg-[#1C1C1E]"
-        style={{ height: '56px' }}
+        className="app-safe-header sticky top-0 z-40 flex items-center justify-between px-4 w-full transition-colors duration-300 bg-[#FAF9F5] dark:bg-[#1C1C1E]"
       >
         <button
           onClick={goBack}
@@ -527,6 +539,25 @@ export default function Settings() {
               </div>
               <Toggle checked={settings.autoAdjustTime} onChange={(value) => updateSetting('autoAdjustTime', value)} />
             </div>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <SectionTitle title="账号同步" />
+          <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(47,52,46,0.02)] overflow-hidden">
+            <button
+              onClick={handleManualCloudSync}
+              className="w-full flex items-center justify-between px-5 py-4 active:bg-surface-container-low transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <RefreshCw className="w-5 h-5 text-primary" />
+                <div className="flex flex-col items-start gap-1">
+                  <span className="text-[15px] font-medium">立即同步账号日志</span>
+                  <span className="text-xs text-on-surface-variant">同一账号在手机、电脑和不同浏览器保持一致</span>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-outline-variant" />
+            </button>
           </div>
         </section>
 
@@ -822,7 +853,7 @@ export default function Settings() {
 
       {activeSheet === 'fontSettings' && (
         <div className="fixed inset-0 z-[100] bg-surface flex flex-col animate-in slide-in-from-bottom duration-300">
-          <header className="flex items-center h-[56px] px-4 border-b border-surface-container-high/50 flex-shrink-0 relative justify-between">
+          <header className="app-safe-header flex items-center px-4 border-b border-surface-container-high/50 flex-shrink-0 relative justify-between">
             <button
               onClick={() => setActiveSheet(null)}
               className="flex items-center justify-center rounded-[12px] transition-colors duration-300 bg-transparent active:bg-[rgba(0,0,0,0.06)] dark:active:bg-[rgba(255,255,255,0.08)] text-[#1C1C1E] dark:text-[#F2F2F7] shrink-0 relative z-10"

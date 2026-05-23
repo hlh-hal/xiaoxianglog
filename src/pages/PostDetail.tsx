@@ -351,18 +351,17 @@ export default function PostDetail() {
       <header style={{
         position: 'fixed',
         top: 0, left: 0, right: 0,
-        height: '56px',
-        paddingTop: 'max(env(safe-area-inset-top), 0px)',
+        height: 'var(--app-total-header-height)',
         display: 'flex',
         alignItems: 'center',
-        padding: '0 16px',
+        padding: 'var(--app-safe-top) 16px 0',
         backgroundColor: isDark ? 'rgba(28,28,30,0.95)' : 'rgba(250,249,245,0.95)',
         backdropFilter: 'blur(12px)',
         WebkitBackdropFilter: 'blur(12px)',
         borderBottom: isScrolled ? `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}` : '1px solid transparent',
         transition: 'border-color 0.25s ease',
         zIndex: 50,
-        boxSizing: 'content-box',
+        boxSizing: 'border-box',
       }}>
         {/* 左：返回按钮（始终显示） */}
         <button
@@ -452,7 +451,7 @@ export default function PostDetail() {
         )}
       </header>
 
-      <main className="px-6 py-4" style={{ paddingTop: 'calc(56px + env(safe-area-inset-top, 0px) + 16px)' }}>
+      <main className="px-6 py-4" style={{ paddingTop: 'calc(var(--app-total-header-height) + 16px)' }}>
         {/* Post Content */}
         <div className="flex justify-between items-center mb-4">
           <div className="flex gap-3 items-center">
@@ -644,7 +643,7 @@ export default function PostDetail() {
         backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF',
         borderTop: `1px solid ${isDark ? '#3A3A3C' : '#F2F2F7'}`,
         padding: '8px 16px',
-        paddingBottom: keyboardInset > 0 ? '8px' : 'max(env(safe-area-inset-bottom), 8px)',
+        paddingBottom: keyboardInset > 0 ? '8px' : 'max(var(--app-safe-bottom), 8px)',
         display: 'flex', alignItems: 'flex-end', gap: '10px',
         zIndex: 100
       }}>
@@ -791,7 +790,7 @@ export default function PostDetail() {
             backgroundColor: isDark ? '#2C2C2E' : '#FFFFFF',
             borderTopLeftRadius: '20px',
             borderTopRightRadius: '20px',
-            padding: '20px 20px calc(32px + env(safe-area-inset-bottom))',
+            padding: '20px 20px calc(32px + var(--app-safe-bottom))',
             animation: 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
           }}>
             <style>{`
@@ -900,7 +899,7 @@ export default function PostDetail() {
 
       {/* Toast */}
       {toastMessage && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[300] bg-inverse-surface text-inverse-on-surface px-4 py-2 rounded-full shadow-lg text-sm animate-in fade-in slide-in-from-top-4 whitespace-nowrap">
+        <div className="fixed left-1/2 -translate-x-1/2 z-[300] bg-inverse-surface text-inverse-on-surface px-4 py-2 rounded-full shadow-lg text-sm animate-in fade-in slide-in-from-top-4 whitespace-nowrap" style={{ top: 'calc(var(--app-total-header-height) + 16px)' }}>
           {toastMessage}
         </div>
       )}

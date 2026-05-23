@@ -320,15 +320,15 @@ export default function Help() {
           top: 0,
           left: 0,
           right: 0,
-          height: '56px',
-          paddingTop: 'env(safe-area-inset-top)',
+          height: 'var(--app-total-header-height)',
           backgroundColor: isDark ? 'rgba(28, 28, 30, 0.9)' : 'rgba(250, 249, 245, 0.9)',
           backdropFilter: 'blur(10px)',
           zIndex: 50,
           display: 'flex',
           alignItems: 'center',
-          padding: '0 16px',
+          padding: 'var(--app-safe-top) 16px 0',
           borderBottom: `1px solid ${c.border}`,
+          boxSizing: 'border-box',
         }}
       >
         <button
@@ -347,8 +347,8 @@ export default function Help() {
         style={{
           flex: 1,
           overflowY: 'auto',
-          paddingTop: 'calc(56px + env(safe-area-inset-top))',
-          paddingBottom: 'calc(32px + env(safe-area-inset-bottom))',
+          paddingTop: 'var(--app-total-header-height)',
+          paddingBottom: 'calc(32px + var(--app-safe-bottom))',
         }}
       >
         <div style={{ padding: '20px 16px 8px' }}>
@@ -633,7 +633,7 @@ export default function Help() {
               backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF',
               borderTopLeftRadius: '24px',
               borderTopRightRadius: '24px',
-              padding: '24px 24px calc(24px + env(safe-area-inset-bottom))',
+              padding: '24px 24px calc(24px + var(--app-safe-bottom))',
             }}
             onClick={(e) => e.stopPropagation()}
           >

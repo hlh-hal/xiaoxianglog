@@ -150,15 +150,17 @@ export async function sendBrowserNotification(title: string, body: string): Prom
 
   new window.Notification(title, {
     body,
-    icon: '/favicon.ico',
-    badge: '/favicon.ico',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
     tag: 'xiang-inbox',
   });
   return true;
 }
 
 export async function scheduleDailyReminder(time: string, title: string, body: string): Promise<boolean> {
-  if (!isNativeAndroid()) return false;
+  if (!isNativeAndroid()) {
+    return getBrowserNotificationPermission() === 'granted';
+  }
   if ((await checkBrowserNotificationPermission()) !== 'granted') return false;
 
   const [hourRaw, minuteRaw] = time.split(':');

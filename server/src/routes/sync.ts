@@ -50,7 +50,11 @@ router.get('/pull', async (req: Request, res: Response) => {
       }
     }
 
-    const entries = await prisma.diaryEntry.findMany({ where, take: 1000 });
+    const entries = await prisma.diaryEntry.findMany({
+      where,
+      take: 1000,
+      orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+    });
 
     res.json({
       entries: await Promise.all(entries.map(formatSyncEntry)),
@@ -68,7 +72,17 @@ router.post('/push', async (req: Request, res: Response) => {
     const userId = req.user!.userId;
     const { entries } = req.body;
 
-    if (!Array.isArray(entries) || entries.length > 100) {
+    if (!Array.isArray(entries)) {
+      res.status(400).json({ error: 'Invalid sync payload: entries must be an array' });
+      return;
+    }
+
+    if (entries.length > 500) {
+      res.status(400).json({ error: 'Invalid sync payload: at most 500 entries per request' });
+      return;
+    }
+
+    if (!Array.isArray(entries) || entries.length > 500) {
       res.status(400).json({ error: '无效的数据格式' });
       return;
     }

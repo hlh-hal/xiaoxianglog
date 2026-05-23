@@ -25,11 +25,17 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 @CapacitorPlugin(name = "LocalVault")
 public class LocalVaultPlugin extends Plugin {
     private static final String PREFS_NAME = "xiaoxiang_local_vault";
     private static final String KEY_TREE_URI = "tree_uri";
+    private static final String USER_LOG_DIR = "用户日志";
+    private static final String EXPORT_DIR = "导出文件";
+    private static final String ATTACHMENT_DIR = "附件";
+    private static final String ATTACHMENT_IMAGE_DIR = "images";
+    private static final String TRASH_DIR = "回收站";
 
     @PluginMethod
     public void chooseVaultDirectory(PluginCall call) {
@@ -80,9 +86,9 @@ public class LocalVaultPlugin extends Plugin {
         }
 
         try {
-            DocumentFile file = getOrCreateFile(path, getMimeType(path, "text/plain"));
-            writeBytes(file, content.getBytes(StandardCharsets.UTF_8));
-            long size = verifiedSize(file, content.length() > 0, path);
+            byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+            DocumentFile file = writeVerifiedFile(path, getMimeType(path, "text/plain"), bytes);
+            long size = verifiedBytes(file, bytes, path);
             call.resolve(pathResult(path, size));
         } catch (Exception error) {
             call.reject("写入文本文件失败", error);
@@ -106,9 +112,8 @@ public class LocalVaultPlugin extends Plugin {
                 payload = payload.substring(commaIndex + 1);
             }
             byte[] bytes = Base64.decode(payload, Base64.DEFAULT);
-            DocumentFile file = getOrCreateFile(path, mimeType);
-            writeBytes(file, bytes);
-            long size = verifiedSize(file, bytes.length > 0, path);
+            DocumentFile file = writeVerifiedFile(path, mimeType, bytes);
+            long size = verifiedBytes(file, bytes, path);
             call.resolve(pathResult(path, size));
         } catch (Exception error) {
             call.reject("写入附件失败", error);
@@ -142,10 +147,12 @@ public class LocalVaultPlugin extends Plugin {
     public void listMarkdownFiles(PluginCall call) {
         String rootPath = call.getString("root", "");
         try {
-            DocumentFile root = rootPath.trim().isEmpty() ? requireVaultRoot() : findDirectory(rootPath, false);
+            DocumentFile vaultRoot = requireVaultRoot();
+            String physicalRootPath = mapPathToSelectedRoot(rootPath, vaultRoot);
+            DocumentFile root = physicalRootPath.trim().isEmpty() ? vaultRoot : findDirectory(rootPath, false);
             JSArray files = new JSArray();
             if (root != null && root.isDirectory()) {
-                walkMarkdownFiles(root, normalizeDirectoryPath(rootPath), files);
+                walkMarkdownFiles(root, normalizeDirectoryPath(physicalRootPath), files);
             }
             JSObject result = new JSObject();
             result.put("files", files);
@@ -190,9 +197,8 @@ public class LocalVaultPlugin extends Plugin {
                 return;
             }
             byte[] bytes = readBytes(source);
-            DocumentFile target = getOrCreateFile(toPath, getMimeType(toPath, source.getType() == null ? "application/octet-stream" : source.getType()));
-            writeBytes(target, bytes);
-            verifiedSize(target, bytes.length > 0, toPath);
+            DocumentFile target = writeVerifiedFile(toPath, getMimeType(toPath, source.getType() == null ? "application/octet-stream" : source.getType()), bytes);
+            verifiedBytes(target, bytes, toPath);
             source.delete();
             JSObject result = new JSObject();
             result.put("fromPath", fromPath);
@@ -222,11 +228,13 @@ public class LocalVaultPlugin extends Plugin {
 
     private void ensureVaultStructure() throws IOException {
         DocumentFile root = requireVaultRoot();
-        findOrCreateDirectory(root, "用户日志");
-        findOrCreateDirectory(root, "导出文件");
-        DocumentFile attachments = findOrCreateDirectory(root, "附件");
-        findOrCreateDirectory(attachments, "images");
-        findOrCreateDirectory(root, "回收站");
+        if (isVaultRoot(root)) {
+            findOrCreateDirectory(root, USER_LOG_DIR);
+        }
+        findOrCreateDirectory(root, EXPORT_DIR);
+        DocumentFile attachments = findOrCreateDirectory(root, ATTACHMENT_DIR);
+        findOrCreateDirectory(attachments, ATTACHMENT_IMAGE_DIR);
+        findOrCreateDirectory(root, TRASH_DIR);
         findOrCreateDirectory(root, ".xiaoxiang");
     }
 
@@ -272,8 +280,8 @@ public class LocalVaultPlugin extends Plugin {
     }
 
     private DocumentFile getOrCreateFile(String path, String mimeType) throws IOException {
-        String[] segments = cleanSegments(path, false);
         DocumentFile parent = requireVaultRoot();
+        String[] segments = cleanSegments(mapPathToSelectedRoot(path, parent), false);
         for (int i = 0; i < segments.length - 1; i++) {
             parent = findOrCreateDirectory(parent, segments[i]);
         }
@@ -295,8 +303,8 @@ public class LocalVaultPlugin extends Plugin {
     }
 
     private DocumentFile findFile(String path) throws IOException {
-        String[] segments = cleanSegments(path, false);
         DocumentFile current = requireVaultRoot();
+        String[] segments = cleanSegments(mapPathToSelectedRoot(path, current), false);
         for (String segment : segments) {
             current = findChild(current, segment);
             if (current == null) {
@@ -307,8 +315,8 @@ public class LocalVaultPlugin extends Plugin {
     }
 
     private DocumentFile findDirectory(String path, boolean create) throws IOException {
-        String[] segments = cleanSegments(path, true);
         DocumentFile current = requireVaultRoot();
+        String[] segments = cleanSegments(mapPathToSelectedRoot(path, current), true);
         for (String segment : segments) {
             current = create ? findOrCreateDirectory(current, segment) : findChild(current, segment);
             if (current == null || !current.isDirectory()) {
@@ -344,22 +352,50 @@ public class LocalVaultPlugin extends Plugin {
 
     private void writeBytes(DocumentFile file, byte[] bytes) throws IOException {
         ContentResolver resolver = getContext().getContentResolver();
-        try (OutputStream output = resolver.openOutputStream(file.getUri(), "wt")) {
-            if (output == null) {
-                throw new IOException("无法打开输出流");
+        IOException lastError = null;
+        String[] modes = new String[] { "rwt", "wt", "w" };
+        for (String mode : modes) {
+            try (OutputStream output = resolver.openOutputStream(file.getUri(), mode)) {
+                if (output == null) {
+                    throw new IOException("无法打开输出流");
+                }
+                output.write(bytes);
+                output.flush();
+                return;
+            } catch (IOException error) {
+                lastError = error;
             }
-            output.write(bytes);
-            output.flush();
+        }
+        throw lastError == null ? new IOException("无法打开输出流") : lastError;
+    }
+
+    private DocumentFile writeVerifiedFile(String path, String mimeType, byte[] bytes) throws IOException {
+        DocumentFile file = getOrCreateFile(path, mimeType);
+        try {
+            writeBytes(file, bytes);
+            verifiedBytes(file, bytes, path);
+            return file;
+        } catch (IOException firstError) {
+            if (file.length() == 0 || bytes.length > 0) {
+                file.delete();
+                DocumentFile recreated = getOrCreateFile(path, mimeType);
+                writeBytes(recreated, bytes);
+                verifiedBytes(recreated, bytes, path);
+                return recreated;
+            }
+            throw firstError;
         }
     }
 
-    private long verifiedSize(DocumentFile file, boolean shouldHaveContent, String path) throws IOException {
-        long size = readBytes(file).length;
-        if (shouldHaveContent && size == 0) {
-            file.delete();
-            throw new IOException("写入失败，文件为空: " + path);
+    private long verifiedBytes(DocumentFile file, byte[] expected, String path) throws IOException {
+        byte[] actual = readBytes(file);
+        if (!Arrays.equals(actual, expected)) {
+            if (actual.length == 0) {
+                file.delete();
+            }
+            throw new IOException("写入校验失败: " + path);
         }
-        return size;
+        return actual.length;
     }
 
     private byte[] readBytes(DocumentFile file) throws IOException {
@@ -378,14 +414,18 @@ public class LocalVaultPlugin extends Plugin {
         }
     }
 
-    private void walkMarkdownFiles(DocumentFile directory, String relativeRoot, JSArray result) {
+    private void walkMarkdownFiles(DocumentFile directory, String relativeRoot, JSArray result) throws IOException {
+        DocumentFile root = requireVaultRoot();
         for (DocumentFile child : directory.listFiles()) {
+            if (relativeRoot.isEmpty() && !isVaultRoot(root) && child.isDirectory() && isSelectedRootSystemDirectory(child.getName())) {
+                continue;
+            }
             String childPath = relativeRoot.isEmpty() ? child.getName() : relativeRoot + "/" + child.getName();
             if (child.isDirectory()) {
                 walkMarkdownFiles(child, childPath, result);
             } else if (child.isFile() && child.getName() != null && child.getName().toLowerCase().endsWith(".md")) {
                 JSObject item = new JSObject();
-                item.put("path", childPath);
+                item.put("path", mapPathFromSelectedRoot(childPath, root));
                 item.put("name", child.getName());
                 item.put("lastModified", child.lastModified());
                 item.put("size", child.length());
@@ -428,6 +468,83 @@ public class LocalVaultPlugin extends Plugin {
 
     private String normalizeDirectoryPath(String path) {
         String normalized = path == null ? "" : path.replace('\\', '/').replaceAll("^/+", "").replaceAll("/+$", "").trim();
+        return normalized;
+    }
+
+    private boolean isYearDirectoryName(String name) {
+        return name != null && name.matches("\\d{4}");
+    }
+
+    private boolean isUserLogRoot(DocumentFile root) {
+        return USER_LOG_DIR.equals(root.getName());
+    }
+
+    private boolean isYearRoot(DocumentFile root) {
+        return isYearDirectoryName(root.getName());
+    }
+
+    private boolean isVaultRoot(DocumentFile root) {
+        return !isUserLogRoot(root) && !isYearRoot(root);
+    }
+
+    private boolean isSelectedRootSystemDirectory(String name) {
+        return EXPORT_DIR.equals(name) || ATTACHMENT_DIR.equals(name) || TRASH_DIR.equals(name) || ".xiaoxiang".equals(name);
+    }
+
+    private String mapPathToSelectedRoot(String path, DocumentFile root) {
+        String normalized = normalizeDirectoryPath(path);
+
+        if (isUserLogRoot(root)) {
+            if (USER_LOG_DIR.equals(normalized)) {
+                return "";
+            }
+            String prefix = USER_LOG_DIR + "/";
+            if (normalized.startsWith(prefix)) {
+                return normalized.substring(prefix.length());
+            }
+        }
+
+        if (isYearRoot(root)) {
+            String rootName = root.getName();
+            String currentYearRoot = USER_LOG_DIR + "/" + rootName;
+            if (currentYearRoot.equals(normalized)) {
+                return "";
+            }
+            String currentYearPrefix = currentYearRoot + "/";
+            if (normalized.startsWith(currentYearPrefix)) {
+                return normalized.substring(currentYearPrefix.length());
+            }
+            if (USER_LOG_DIR.equals(normalized)) {
+                return "";
+            }
+            String userLogPrefix = USER_LOG_DIR + "/";
+            if (normalized.startsWith(userLogPrefix)) {
+                return normalized.substring(userLogPrefix.length());
+            }
+        }
+
+        return normalized;
+    }
+
+    private String mapPathFromSelectedRoot(String path, DocumentFile root) {
+        String normalized = normalizeDirectoryPath(path);
+
+        if (isUserLogRoot(root)) {
+            return normalized.isEmpty() ? USER_LOG_DIR : USER_LOG_DIR + "/" + normalized;
+        }
+
+        if (isYearRoot(root)) {
+            String rootName = root.getName();
+            if (normalized.isEmpty()) {
+                return USER_LOG_DIR + "/" + rootName;
+            }
+            String firstSegment = normalized.contains("/") ? normalized.substring(0, normalized.indexOf('/')) : normalized;
+            if (isYearDirectoryName(firstSegment)) {
+                return USER_LOG_DIR + "/" + normalized;
+            }
+            return USER_LOG_DIR + "/" + rootName + "/" + normalized;
+        }
+
         return normalized;
     }
 

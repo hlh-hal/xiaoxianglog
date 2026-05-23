@@ -471,7 +471,7 @@ export default function OnThisDay() {
       </div>
       
       <header 
-        className="w-full z-40 flex items-center justify-between px-4 h-16 shrink-0"
+        className="app-safe-header w-full z-40 flex items-center justify-between px-4 shrink-0"
         style={{
           backgroundColor: c.appBarBg,
           backdropFilter: 'blur(12px)',

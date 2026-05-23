@@ -601,14 +601,15 @@ export default function AIChat() {
     >
       {/* AppBar */}
       <header style={{
-        height: '56px',
+        height: 'var(--app-total-header-height)',
         display: 'flex',
         alignItems: 'center',
-        padding: '0 20px',
+        padding: 'var(--app-safe-top) 20px 0',
         backgroundColor: isDark ? '#1C1C1E' : '#FAF9F5',
         borderBottom: `1px solid ${isDark ? '#3A3A3C' : '#F2F2F7'}`,
         flexShrink: 0,
         zIndex: 10,
+        boxSizing: 'border-box',
       }}>
         {/* 宸︿晶锛氬巻鍙插璇濓紙娴嚭鎰熷崱鐗囷級 */}
         <button
@@ -838,7 +839,7 @@ export default function AIChat() {
           transform: `translateY(-${keyboardInset}px)`,
           backgroundColor: isDark ? '#1C1C1E' : '#FAF9F5',
           borderTop: `1px solid ${isDark ? '#3A3A3C' : '#F2F2F7'}`,
-          paddingBottom: keyboardInset > 0 ? '0px' : 'env(safe-area-inset-bottom)',
+          paddingBottom: keyboardInset > 0 ? '0px' : 'var(--app-safe-bottom)',
           zIndex: 50,
         }}
       >
@@ -979,7 +980,7 @@ export default function AIChat() {
             backgroundColor: isDark ? '#2C2C2E' : '#FFFFFF',
             borderTopLeftRadius: '20px',
             borderTopRightRadius: '20px',
-            padding: '12px 16px calc(24px + env(safe-area-inset-bottom))',
+            padding: '12px 16px calc(24px + var(--app-safe-bottom))',
             transform: isSheetVisible ? `translateY(-${keyboardInset}px)` : `translateY(100%)`,
             transition: 'transform 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94)',
             boxShadow: '0 -4px 24px rgba(0,0,0,0.08)',
@@ -1059,7 +1060,7 @@ export default function AIChat() {
         transition: 'transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
         display: 'flex',
         flexDirection: 'column',
-        paddingTop: 'env(safe-area-inset-top)',
+        paddingTop: 'var(--app-safe-top)',
       }}>
 
         {/* 渚ц竟鏍忛《閮細鎼滅储妗?*/}
@@ -1325,7 +1326,7 @@ export default function AIChat() {
             style={{ 
               transform: isModelSheetVisible ? 'translateY(0)' : 'translateY(100%)',
               backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF',
-              paddingBottom: 'env(safe-area-inset-bottom)',
+              paddingBottom: 'var(--app-safe-bottom)',
               zIndex: 160
             }}
           >
@@ -1396,7 +1397,7 @@ export default function AIChat() {
             position: 'relative',
             backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF',
             borderTopLeftRadius: 24, borderTopRightRadius: 24,
-            paddingBottom: 'max(env(safe-area-inset-bottom), 24px)',
+            paddingBottom: 'max(var(--app-safe-bottom), 24px)',
             transform: styleSheetVisible ? 'translateY(0)' : 'translateY(100%)',
             transition: 'transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
           }}>

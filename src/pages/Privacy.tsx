@@ -7,7 +7,7 @@ export default function Privacy() {
 
   return (
     <div className="min-h-screen bg-surface font-body">
-      <header className="sticky top-0 z-40 flex items-center px-4 h-14 bg-surface border-b border-surface-container-high/50">
+      <header className="app-safe-header sticky top-0 z-40 flex items-center px-4 bg-surface border-b border-surface-container-high/50">
         <button onClick={() => navigate(-1)} className="p-2 -ml-2 rounded-full hover:bg-surface-container transition-colors">
           <ArrowLeft className="w-6 h-6 text-on-surface" />
         </button>

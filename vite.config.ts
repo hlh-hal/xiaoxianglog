@@ -25,9 +25,7 @@ export default defineConfig(({mode}) => {
             host: '10.0.2.2',
             clientPort: 3000,
           }
-        : {
-            clientPort: 443,
-          },
+        : undefined,
       proxy: {
         '/api': {
           target: apiProxyTarget,

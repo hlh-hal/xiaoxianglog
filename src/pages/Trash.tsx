@@ -55,8 +55,7 @@ export default function Trash() {
   return (
     <div className="min-h-screen bg-surface text-on-surface pb-12 animate-in fade-in slide-in-from-right-8 duration-300 ease-out">
       <header 
-        className="sticky top-0 z-40 flex items-center justify-between px-4 w-full transition-colors duration-300 bg-[#FAF9F5] dark:bg-[#1C1C1E]"
-        style={{ height: '56px' }}
+        className="app-safe-header sticky top-0 z-40 flex items-center justify-between px-4 w-full transition-colors duration-300 bg-[#FAF9F5] dark:bg-[#1C1C1E]"
       >
         <button 
           onClick={goBack}

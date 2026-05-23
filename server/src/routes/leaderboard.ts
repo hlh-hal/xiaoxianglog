@@ -151,11 +151,6 @@ router.post('/:id/like', async (req: Request, res: Response) => {
   try {
     const targetUserId = paramString(req, 'id');
     const fromUserId = req.user!.userId;
-    if (targetUserId === fromUserId) {
-      res.status(400).json({ error: '不能给自己点赞' });
-      return;
-    }
-
     const target = await prisma.user.findUnique({
       where: { id: targetUserId },
       select: { id: true },

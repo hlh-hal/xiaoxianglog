@@ -3,8 +3,14 @@
  * 统一处理 HTTP 请求、JWT Token 管理、自动刷新
  */
 
-const configuredApiBase = import.meta.env.VITE_API_BASE_URL || '/api';
-const API_BASE = configuredApiBase.replace(/\/$/, '');
+import { Capacitor } from '@capacitor/core';
+
+const DEFAULT_NATIVE_API_BASE = 'https://www.xiaoxianglog.cn/api';
+const configuredApiBase = import.meta.env.VITE_API_BASE_URL || '';
+const API_BASE = (
+  configuredApiBase
+  || (Capacitor.isNativePlatform() ? DEFAULT_NATIVE_API_BASE : '/api')
+).replace(/\/$/, '');
 
 // Token 存储键
 const ACCESS_TOKEN_KEY = 'xiang_access_token';
