@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useLayoutEffect } from 'react';
-import { diaryService, DiaryEntry } from '../services/diaryService';
+import { DIARY_SYNC_EVENT, diaryService, DiaryEntry } from '../services/diaryService';
 import { format, isSameDay } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { useOutletContext, useNavigate } from 'react-router-dom';
@@ -47,6 +47,25 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
       loadData();
     }
   }, [isDrawerOpen, isBackdrop]);
+
+  useEffect(() => {
+    if (isBackdrop) return;
+
+    const reload = () => {
+      if (!isDrawerOpen) {
+        loadData();
+      }
+    };
+
+    window.addEventListener(DIARY_SYNC_EVENT, reload);
+    window.addEventListener('focus', reload);
+    window.addEventListener('pageshow', reload);
+    return () => {
+      window.removeEventListener(DIARY_SYNC_EVENT, reload);
+      window.removeEventListener('focus', reload);
+      window.removeEventListener('pageshow', reload);
+    };
+  }, [isBackdrop, isDrawerOpen]);
 
   // Restore scroll position after data is loaded
   useLayoutEffect(() => {

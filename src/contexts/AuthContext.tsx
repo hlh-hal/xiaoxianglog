@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { authService, Session } from '../services/authService';
-import { api } from '../services/apiClient';
+import { diaryService } from '../services/diaryService';
 
 interface AuthContextType {
   user: Session | null;
@@ -30,6 +30,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const remoteSession = await authService.fetchSession();
         if (remoteSession) {
           setUser(remoteSession);
+          diaryService.syncCurrentAccount().catch(error => {
+            console.warn('Failed to sync diary after session restore:', error);
+          });
         } else {
           setUser(null);
         }
@@ -45,6 +48,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = (session: Session) => {
     setUser(session);
+    diaryService.syncCurrentAccount().catch(error => {
+      console.warn('Failed to sync diary after login:', error);
+    });
   };
 
   const logout = async () => {

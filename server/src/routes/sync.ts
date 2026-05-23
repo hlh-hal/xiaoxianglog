@@ -1,5 +1,4 @@
 import { Router, Request, Response } from 'express';
-import { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { stringArray } from '../utils/request.js';
@@ -17,6 +16,15 @@ function parseJsonArray(value?: string | null): string[] {
   } catch {
     return [];
   }
+}
+
+function syncImageArray(value: unknown): string[] {
+  if (Array.isArray(value) && value.some(item => typeof item === 'string' && item.trim().startsWith('data:image/'))) {
+    const error = new Error('Images must be uploaded before sync');
+    (error as any).status = 400;
+    throw error;
+  }
+  return stringArray(value, 20, 4096);
 }
 
 async function formatSyncEntry(entry: any) {
@@ -50,7 +58,8 @@ router.get('/pull', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('拉取同步数据失败:', err);
-    res.status(500).json({ error: '同步失败' });
+    const status = err?.status === 400 ? 400 : 500;
+    res.status(status).json({ error: status === 400 ? err.message : '同步失败' });
   }
 });
 
@@ -69,6 +78,7 @@ router.post('/push', async (req: Request, res: Response) => {
     for (const entry of entries) {
       const id = String(entry.id || '');
       if (!id) continue;
+      const nextImages = syncImageArray(entry.images);
 
       try {
         const existing = await prisma.diaryEntry.findUnique({
@@ -87,7 +97,6 @@ router.post('/push', async (req: Request, res: Response) => {
           }
 
           const nextContent = String(entry.content || '').slice(0, 200000);
-          const nextImages = entry.images ? stringArray(entry.images, 20, 2000) : [];
           const contentChanged = nextContent !== existing.content;
           const imagesChanged = !areStringArraysEqual(nextImages, parseStoredStringArray(existing.images));
           if (contentChanged || imagesChanged) {
@@ -132,7 +141,7 @@ router.post('/push', async (req: Request, res: Response) => {
               weather: entry.weather,
               tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
               themeId: entry.themeId,
-              images: entry.images ? JSON.stringify(stringArray(entry.images, 20, 2000)) : null,
+              images: nextImages.length > 0 ? JSON.stringify(nextImages) : null,
               isPinned: Boolean(entry.isPinned),
               isHidden: Boolean(entry.isHidden),
               trashReason: entry.trashReason,
@@ -148,7 +157,7 @@ router.post('/push', async (req: Request, res: Response) => {
           results.push({ id, status: 'created' });
         }
       } catch (err: any) {
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        if (err?.code === 'P2002') {
           results.push({ id, status: 'conflict' });
           continue;
         }
@@ -160,7 +169,8 @@ router.post('/push', async (req: Request, res: Response) => {
     res.json({ results, serverTime: new Date().toISOString() });
   } catch (err: any) {
     console.error('推送同步数据失败:', err);
-    res.status(500).json({ error: '同步失败' });
+    const status = err?.status === 400 ? 400 : 500;
+    res.status(status).json({ error: status === 400 ? err.message : '同步失败' });
   }
 });
 

@@ -4,7 +4,7 @@
  * 对于其他数据(模板/聊天/历史)，使用在线优先+本地兜底
  */
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
-import { api, isAuthenticated } from './apiClient';
+import { api, isAuthenticated, uploadImages } from './apiClient';
 import { localVaultService, VaultSyncResult } from './localVaultService';
 import { createClientId } from '../utils/id';
 
@@ -29,6 +29,7 @@ export type EntryStatus = 'active' | 'draft' | 'trashed';
 
 export interface DiaryEntry {
   id: string;
+  userId?: string;
   title?: string;
   content: string;
   images: string[];
@@ -176,6 +177,76 @@ function withTimeout<T>(promise: Promise<T>, ms = 4000): Promise<T> {
 
 let activeEntriesCache: DiaryEntry[] | null = null;
 let syncTimeout: any = null;
+let autoSyncStarted = false;
+
+export const DIARY_SYNC_EVENT = 'xiang-diary-sync-complete';
+
+type SyncOptions = {
+  forceFullPull?: boolean;
+  pushAll?: boolean;
+  immediate?: boolean;
+};
+
+const SESSION_KEY = 'app_session';
+const LAST_SYNC_KEY = 'xiang_last_sync_time';
+const LAST_PUSH_KEY = 'xiang_last_push_time';
+
+function getCurrentUserId(): string | null {
+  try {
+    const session = localStorage.getItem(SESSION_KEY);
+    if (!session) return null;
+    const parsed = JSON.parse(session);
+    return typeof parsed?.userId === 'string' && parsed.userId ? parsed.userId : null;
+  } catch {
+    return null;
+  }
+}
+
+function syncStorageKey(baseKey: string, userId: string | null): string {
+  return userId ? `${baseKey}:${userId}` : baseKey;
+}
+
+function clearSyncStorageKeys(): void {
+  localStorage.removeItem(LAST_SYNC_KEY);
+  localStorage.removeItem(LAST_PUSH_KEY);
+  for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+    const key = localStorage.key(i);
+    if (key && (key.startsWith(`${LAST_SYNC_KEY}:`) || key.startsWith(`${LAST_PUSH_KEY}:`))) {
+      localStorage.removeItem(key);
+    }
+  }
+}
+
+function emitDiarySyncEvent(changed: boolean): void {
+  if (!changed || typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(DIARY_SYNC_EVENT));
+}
+
+function isDataImage(value: string): boolean {
+  return value.trim().startsWith('data:image/');
+}
+
+function dataUrlToFile(dataUrl: string, filename: string): File {
+  const match = dataUrl.match(/^data:(image\/[^;,]+);base64,(.+)$/i);
+  if (!match) {
+    throw new Error('Invalid image data URL');
+  }
+  const mime = match[1];
+  const binary = atob(match[2].replace(/\s/g, ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new File([bytes], filename, { type: mime });
+}
+
+function extensionFromDataUrl(dataUrl: string): string {
+  const mime = dataUrl.match(/^data:(image\/[^;,]+)/i)?.[1]?.toLowerCase();
+  if (mime?.includes('png')) return 'png';
+  if (mime?.includes('webp')) return 'webp';
+  if (mime?.includes('gif')) return 'gif';
+  return 'jpg';
+}
 
 function parseEntryTime(value?: string): number {
   if (!value) return 0;
@@ -228,6 +299,41 @@ async function restoreVaultEntry(entry: DiaryEntry): Promise<DiaryEntry> {
   }
 }
 
+async function uploadEntryImagesForSync(db: IDBPDatabase<DiaryDB>, entry: DiaryEntry): Promise<{ entry: DiaryEntry; changed: boolean }> {
+  const images = filterValidImages(entry.images);
+  if (!images.some(isDataImage)) {
+    const changed = images.length !== (entry.images || []).length;
+    const normalizedEntry = { ...entry, images };
+    if (changed) {
+      await db.put('entries', normalizedEntry);
+    }
+    return { entry: normalizedEntry, changed };
+  }
+
+  const nextImages: string[] = [];
+  for (let index = 0; index < images.length; index += 1) {
+    const image = images[index];
+    if (!isDataImage(image)) {
+      nextImages.push(image);
+      continue;
+    }
+
+    const ext = extensionFromDataUrl(image);
+    const file = dataUrlToFile(image, `diary-${entry.id}-${index}.${ext}`);
+    const [uploadedUrl] = await uploadImages([file]);
+    nextImages.push(uploadedUrl);
+  }
+
+  const syncedEntry: DiaryEntry = { ...entry, images: nextImages };
+  await db.put('entries', syncedEntry);
+  return { entry: syncedEntry, changed: true };
+}
+
+function toSyncPayload(entry: DiaryEntry): DiaryEntry {
+  const { syncVersion: _syncVersion, userId: _userId, ...payload } = entry;
+  return payload as DiaryEntry;
+}
+
 async function saveLocalHistorySnapshot(history: Omit<EditHistory, 'id' | 'summary'>): Promise<void> {
   const db = await initDB();
   const content = history.content || '';
@@ -273,7 +379,46 @@ export const diaryService = {
   async init(): Promise<void> {
     await initDB();
     await this.getActiveEntries();
+    this.startAutoSync();
     this.triggerSync();
+  },
+
+  startAutoSync(): void {
+    if (autoSyncStarted || typeof window === 'undefined') return;
+    autoSyncStarted = true;
+
+    const syncVisiblePage = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      this.triggerSync();
+    };
+
+    window.addEventListener('focus', syncVisiblePage);
+    window.addEventListener('pageshow', syncVisiblePage);
+    document.addEventListener('visibilitychange', syncVisiblePage);
+    window.setInterval(syncVisiblePage, 15000);
+  },
+
+  async syncCurrentAccount(): Promise<void> {
+    if (syncTimeout) {
+      clearTimeout(syncTimeout);
+      syncTimeout = null;
+    }
+    await this.syncWithServer({ forceFullPull: true, pushAll: true });
+  },
+
+  async syncAllEntriesToVault(): Promise<{ count: number }> {
+    const db = await initDB();
+    const entries = await db.getAll('entries');
+    let count = 0;
+    for (const entry of entries) {
+      const synced = entry.status === 'trashed'
+        ? await moveVaultEntryToTrash(entry)
+        : await syncEntryToVault(entry);
+      if (synced.vaultPath || synced.vaultTrashPath) count += 1;
+    }
+    activeEntriesCache = null;
+    emitDiarySyncEvent(count > 0);
+    return { count };
   },
 
   async clearLocalUserData(): Promise<void> {
@@ -294,24 +439,34 @@ export const diaryService = {
     await tx.done;
 
     activeEntriesCache = null;
-    localStorage.removeItem('xiang_last_sync_time');
-    localStorage.removeItem('xiang_last_push_time');
+    clearSyncStorageKeys();
     localStorage.removeItem('xiang_welcome_created');
   },
 
-  triggerSync() {
+  triggerSync(options: SyncOptions = {}) {
     if (!useApi()) return;
     if (syncTimeout) clearTimeout(syncTimeout);
-    syncTimeout = setTimeout(() => {
-      this.syncWithServer().catch(console.error);
-    }, 1000);
+    const run = () => {
+      syncTimeout = null;
+      this.syncWithServer(options).catch(console.error);
+    };
+    if (options.immediate) {
+      run();
+      return;
+    }
+    syncTimeout = setTimeout(run, 1000);
   },
 
-  async syncWithServer(): Promise<void> {
+  async syncWithServer(options: SyncOptions = {}): Promise<void> {
     if (!useApi()) return;
     try {
       const db = await initDB();
-      const lastSync = localStorage.getItem('xiang_last_sync_time') || '';
+      const userId = getCurrentUserId();
+      const lastSyncKey = syncStorageKey(LAST_SYNC_KEY, userId);
+      const lastPushKey = syncStorageKey(LAST_PUSH_KEY, userId);
+      const lastSync = options.forceFullPull ? '' : localStorage.getItem(lastSyncKey) || '';
+      let localEntriesChanged = false;
+      const acceptedEntryIds = new Set<string>();
       
       // 1. Pull changes from server
       const url = lastSync ? `/sync/pull?since=${encodeURIComponent(lastSync)}` : '/sync/pull';
@@ -327,35 +482,48 @@ export const diaryService = {
           }
           await tx.store.put(entry);
           acceptedEntries.push(entry);
+          acceptedEntryIds.add(entry.id);
         }
         await tx.done;
         await Promise.all(acceptedEntries.map(entry => syncEntryToVault(entry)));
         if (acceptedEntries.length > 0) {
-          activeEntriesCache = null; // Invalidate cache
+          activeEntriesCache = null;
+          localEntriesChanged = true;
         }
       }
       
       if (pullData.serverTime) {
-        localStorage.setItem('xiang_last_sync_time', pullData.serverTime);
+        localStorage.setItem(lastSyncKey, pullData.serverTime);
       }
 
       // 2. Push local changes
-      const lastPush = localStorage.getItem('xiang_last_push_time') || '';
+      const lastPush = options.pushAll ? '' : localStorage.getItem(lastPushKey) || '';
       const allLocal = await db.getAll('entries');
-      const toPush = lastPush 
+      const candidates = lastPush
         ? allLocal.filter(e => {
             const pushTime = new Date(lastPush).getTime();
             return getEntryChangeTime(e) > pushTime;
           })
         : allLocal;
+      const toPush: DiaryEntry[] = [];
+      for (const entry of candidates) {
+        if (acceptedEntryIds.has(entry.id)) continue;
+        const prepared = await uploadEntryImagesForSync(db, entry);
+        if (prepared.changed) {
+          activeEntriesCache = null;
+          localEntriesChanged = true;
+        }
+        toPush.push(toSyncPayload(prepared.entry));
+      }
 
       if (toPush.length > 0) {
         const pushResult = await api.post<{ serverTime: string }>('/sync/push', { entries: toPush });
         if (pushResult.serverTime) {
-          localStorage.setItem('xiang_last_push_time', pushResult.serverTime);
-          localStorage.setItem('xiang_last_sync_time', pushResult.serverTime);
+          localStorage.setItem(lastPushKey, pushResult.serverTime);
+          localStorage.setItem(lastSyncKey, pushResult.serverTime);
         }
       }
+      emitDiarySyncEvent(localEntriesChanged);
     } catch (err) {
       console.warn('Sync with server failed (offline or network error):', err);
     }
@@ -598,16 +766,39 @@ export const diaryService = {
     const db = await initDB(); await db.delete('chatSessions', id);
   },
 
-  async restoreEntriesFromVault(): Promise<{ successCount: number; failCount: number }> {
-    const vaultEntries = await localVaultService.readEntriesFromVault();
+  async syncEntriesFromVault(): Promise<{ successCount: number; updatedCount: number; trashedCount: number; failCount: number; skippedEmptyCount: number }> {
+    const scan = await localVaultService.scanEntriesFromVault();
     const db = await initDB();
     const existingEntries = await db.getAll('entries');
     const existingIds = new Set(existingEntries.map(entry => entry.id));
     const existingVaultPaths = new Set(existingEntries.map(entry => entry.vaultPath).filter(Boolean));
     let successCount = 0;
+    let updatedCount = 0;
+    let trashedCount = 0;
     let failCount = 0;
 
-    for (const vaultEntry of vaultEntries) {
+    for (const entryId of scan.deletedEntryIds) {
+      const existing = await db.get('entries', entryId);
+      if (!existing || existing.status === 'trashed') continue;
+      try {
+        const now = new Date().toISOString();
+        const trashedEntry: DiaryEntry = {
+          ...existing,
+          status: 'trashed',
+          trashReason: 'deleted',
+          trashedAt: now,
+          updatedAt: now,
+        };
+        await db.put('entries', trashedEntry);
+        await moveVaultEntryToTrash(trashedEntry);
+        trashedCount += 1;
+      } catch (error) {
+        console.warn('Move missing vault entry to trash failed:', error);
+        failCount += 1;
+      }
+    }
+
+    for (const vaultEntry of scan.entries) {
       try {
         if (!vaultEntry.id && existingVaultPaths.has(vaultEntry.vaultPath)) {
           continue;
@@ -616,6 +807,7 @@ export const diaryService = {
         const id = vaultEntry.id || createClientId();
         const existing = existingIds.has(id) ? await db.get('entries', id) : undefined;
         const now = new Date().toISOString();
+        const updatedAt = vaultEntry.updatedAt || now;
         const entry: DiaryEntry = {
           ...(existing || {}),
           id,
@@ -623,13 +815,20 @@ export const diaryService = {
           content: vaultEntry.content,
           images: existing?.images || [],
           createdAt: existing?.createdAt || now,
-          updatedAt: now,
+          updatedAt,
           diaryDate: vaultEntry.diaryDate,
           status: 'active',
           vaultPath: vaultEntry.vaultPath,
         };
         await db.put('entries', entry);
-        successCount += 1;
+        await syncEntryToVault(entry);
+        if (existing) {
+          updatedCount += 1;
+        } else {
+          successCount += 1;
+          existingIds.add(id);
+          existingVaultPaths.add(vaultEntry.vaultPath);
+        }
       } catch (error) {
         console.warn('Restore local vault entry failed:', error);
         failCount += 1;
@@ -637,7 +836,23 @@ export const diaryService = {
     }
 
     activeEntriesCache = null;
-    return { successCount, failCount };
+    emitDiarySyncEvent(successCount + updatedCount + trashedCount > 0);
+    this.triggerSync({ immediate: true });
+    return {
+      successCount,
+      updatedCount,
+      trashedCount,
+      failCount,
+      skippedEmptyCount: scan.skippedEmptyCount,
+    };
+  },
+
+  async restoreEntriesFromVault(): Promise<{ successCount: number; failCount: number }> {
+    const result = await this.syncEntriesFromVault();
+    return {
+      successCount: result.successCount + result.updatedCount,
+      failCount: result.failCount,
+    };
   },
 
   // 自定义字体（纯本地）

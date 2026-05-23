@@ -218,7 +218,12 @@ export default function Settings() {
     try {
       const status = await localVaultService.chooseVaultDirectory();
       setVaultStatus(status);
-      showToast(status.available ? '本地日志文件夹已开启' : (status.unavailableReason || '文件夹授权未完成'));
+      if (status.available) {
+        const result = await diaryService.syncAllEntriesToVault();
+        showToast(result.count > 0 ? `本地日志文件夹已开启，已同步 ${result.count} 篇` : '本地日志文件夹已开启');
+      } else {
+        showToast(status.unavailableReason || '文件夹授权未完成');
+      }
     } catch (error: any) {
       console.error(error);
       showToast(error?.message || '选择本地日志文件夹失败');
@@ -240,11 +245,18 @@ export default function Settings() {
         return;
       }
 
-      const result = await diaryService.restoreEntriesFromVault();
-      showToast(`已从本地文件夹恢复 ${result.successCount} 篇日志${result.failCount ? `，失败 ${result.failCount} 篇` : ''}`);
+      const result = await diaryService.syncEntriesFromVault();
+      const details = [
+        result.successCount ? `新增 ${result.successCount} 篇` : '',
+        result.updatedCount ? `更新 ${result.updatedCount} 篇` : '',
+        result.trashedCount ? `移入回收站 ${result.trashedCount} 篇` : '',
+        result.skippedEmptyCount ? `跳过空文件 ${result.skippedEmptyCount} 个` : '',
+        result.failCount ? `失败 ${result.failCount} 篇` : '',
+      ].filter(Boolean).join('，');
+      showToast(details ? `本地同步完成：${details}` : '本地同步完成，无新增修改');
     } catch (error: any) {
       console.error(error);
-      showToast(error?.message || '从本地日志文件夹恢复失败');
+      showToast(error?.message || '从本地日志文件夹同步失败');
     } finally {
       setIsLoading(false);
     }
@@ -539,7 +551,7 @@ export default function Settings() {
               onClick={handleRestoreFromVault}
               className="w-full flex items-center justify-between px-5 py-4 active:bg-surface-container-low transition-colors"
             >
-              <span className="text-[15px] font-medium">从本地日志文件夹恢复索引</span>
+              <span className="text-[15px] font-medium">手动从本地文件夹同步</span>
               <ChevronRight className="w-5 h-5 text-outline-variant" />
             </button>
           </div>

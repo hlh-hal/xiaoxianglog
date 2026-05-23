@@ -29,13 +29,20 @@ export interface VaultImportedEntry {
   content: string;
   diaryDate: string;
   vaultPath: string;
+  updatedAt?: string;
+}
+
+export interface VaultImportScanResult {
+  entries: VaultImportedEntry[];
+  deletedEntryIds: string[];
+  skippedEmptyCount: number;
 }
 
 interface LocalVaultPlugin {
   chooseVaultDirectory(): Promise<VaultStatus>;
   getVaultStatus(): Promise<VaultStatus>;
-  writeTextFile(options: { path: string; content: string }): Promise<{ path: string }>;
-  writeBase64File(options: { path: string; base64: string; mimeType: string }): Promise<{ path: string }>;
+  writeTextFile(options: { path: string; content: string }): Promise<{ path: string; size?: number }>;
+  writeBase64File(options: { path: string; base64: string; mimeType: string }): Promise<{ path: string; size?: number }>;
   readTextFile(options: { path: string }): Promise<{ path: string; content: string }>;
   listMarkdownFiles(options: { root?: string }): Promise<{ files: VaultMarkdownFile[] }>;
   deleteFile(options: { path: string }): Promise<{ path: string; deleted: boolean }>;
@@ -46,8 +53,8 @@ interface VaultBackend {
   isSupported(): boolean;
   chooseVaultDirectory(): Promise<VaultStatus>;
   getVaultStatus(): Promise<VaultStatus>;
-  writeTextFile(path: string, content: string): Promise<{ path: string }>;
-  writeBase64File(path: string, base64: string, mimeType: string): Promise<{ path: string }>;
+  writeTextFile(path: string, content: string): Promise<{ path: string; size?: number }>;
+  writeBase64File(path: string, base64: string, mimeType: string): Promise<{ path: string; size?: number }>;
   readTextFile(path: string): Promise<{ path: string; content: string }>;
   listMarkdownFiles(root?: string): Promise<{ files: VaultMarkdownFile[] }>;
   deleteFile(path: string): Promise<{ path: string; deleted: boolean }>;
@@ -59,6 +66,8 @@ interface VaultEntryRecord {
   path?: string;
   trashPath?: string;
   attachmentPaths?: string[];
+  imageSources?: string[];
+  contentHash?: string;
   diaryDate?: string;
   updatedAt?: string;
   status?: EntryStatus;
@@ -211,6 +220,53 @@ function parseDateFromMarkdown(path: string, content: string): string {
 
 function removeDateHeading(content: string): string {
   return content.replace(/^#\s*\d{4}-\d{2}-\d{2}\s*\r?\n?/, '').trim();
+}
+
+function extractEntryIdFromMarkdown(content: string): string | undefined {
+  return content.match(/<!--\s*xiaoxiang:id=([a-zA-Z0-9_-]+)\s*-->/)?.[1];
+}
+
+function removeVaultMetadata(content: string): string {
+  return content.replace(/<!--\s*xiaoxiang:id=[a-zA-Z0-9_-]+\s*-->\s*/g, '').trim();
+}
+
+function stableHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function extensionFromMimeType(mimeType: string): string {
+  const lower = mimeType.toLowerCase();
+  if (lower.includes('png')) return 'png';
+  if (lower.includes('webp')) return 'webp';
+  if (lower.includes('gif')) return 'gif';
+  if (lower.includes('svg')) return 'svg';
+  return 'jpg';
+}
+
+function extensionFromUrl(url: string): string | null {
+  try {
+    const base = typeof window === 'undefined' ? 'http://localhost/' : window.location.href;
+    const pathname = new URL(url, base).pathname.toLowerCase();
+    const match = pathname.match(/\.([a-z0-9]{2,5})$/);
+    return match ? match[1].replace('jpeg', 'jpg') : null;
+  } catch {
+    const match = url.toLowerCase().match(/\.([a-z0-9]{2,5})(?:[?#]|$)/);
+    return match ? match[1].replace('jpeg', 'jpg') : null;
+  }
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read image blob'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 function dataUrlToBlob(data: string, mimeType: string): Blob {
@@ -555,22 +611,30 @@ const webDirectoryBackend: VaultBackend = {
     });
   },
 
-  async writeTextFile(path: string, content: string): Promise<{ path: string }> {
+  async writeTextFile(path: string, content: string): Promise<{ path: string; size?: number }> {
     const root = await requireWebRoot();
     const handle = await getOrCreateWebFile(root, path);
     const writable = await handle.createWritable();
     await writable.write(content);
     await writable.close();
-    return { path };
+    const file = await handle.getFile();
+    if (content.length > 0 && file.size === 0) {
+      throw new Error(`写入失败，文件为空: ${path}`);
+    }
+    return { path, size: file.size };
   },
 
-  async writeBase64File(path: string, base64: string, mimeType: string): Promise<{ path: string }> {
+  async writeBase64File(path: string, base64: string, mimeType: string): Promise<{ path: string; size?: number }> {
     const root = await requireWebRoot();
     const handle = await getOrCreateWebFile(root, path);
     const writable = await handle.createWritable();
     await writable.write(dataUrlToBlob(base64, mimeType));
     await writable.close();
-    return { path };
+    const file = await handle.getFile();
+    if (file.size === 0) {
+      throw new Error(`写入失败，附件为空: ${path}`);
+    }
+    return { path, size: file.size };
   },
 
   async readTextFile(path: string): Promise<{ path: string; content: string }> {
@@ -714,34 +778,72 @@ async function uniqueEntryPath(
   return `${rootYear}/${stem}-${Date.now()}.md`;
 }
 
-async function writeEntryImages(entry: DiaryEntry, backend: VaultBackend): Promise<string[]> {
+async function writeEntryImages(
+  entry: DiaryEntry,
+  backend: VaultBackend,
+  previousRecord?: VaultEntryRecord,
+): Promise<{ paths: string[]; sources: string[] }> {
   const paths: string[] = [];
+  const sources: string[] = [];
   const images = entry.images || [];
 
   for (let index = 0; index < images.length; index += 1) {
     const image = images[index];
-    if (!image || !image.startsWith('data:image/')) continue;
+    if (!image) continue;
 
-    const { extension, mimeType } = mimeExtensionFromDataUrl(image);
-    const path = `${ATTACHMENT_IMAGE_DIR}/${entry.id}/${index + 1}.${extension}`;
-    await backend.writeBase64File(path, image, mimeType);
-    paths.push(path);
+    const previousSource = previousRecord?.imageSources?.[index];
+    const previousPath = previousRecord?.attachmentPaths?.[index];
+    if (previousPath && previousSource === image) {
+      paths.push(previousPath);
+      sources.push(image);
+      continue;
+    }
+
+    try {
+      if (image.startsWith('data:image/')) {
+        const { extension, mimeType } = mimeExtensionFromDataUrl(image);
+        const path = `${ATTACHMENT_IMAGE_DIR}/${entry.id}/${index + 1}.${extension}`;
+        await backend.writeBase64File(path, image, mimeType);
+        paths.push(path);
+        sources.push(image);
+        continue;
+      }
+
+      const response = await fetch(image, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      if (blob.size === 0) throw new Error('empty image response');
+      const mimeType = blob.type || 'image/jpeg';
+      const extension = extensionFromUrl(image) || extensionFromMimeType(mimeType);
+      const path = `${ATTACHMENT_IMAGE_DIR}/${entry.id}/${index + 1}.${extension}`;
+      await backend.writeBase64File(path, await blobToDataUrl(blob), mimeType);
+      paths.push(path);
+      sources.push(image);
+    } catch (error) {
+      console.warn('Write local vault image failed:', image, error);
+    }
   }
 
-  return paths;
+  return { paths, sources };
 }
 
-async function renderEntryMarkdown(entry: DiaryEntry, targetPath: string, attachmentPaths: string[]): Promise<string> {
+async function renderEntryMarkdown(
+  entry: DiaryEntry,
+  targetPath: string,
+  attachmentPaths: string[],
+  attachmentSources: string[],
+): Promise<string> {
   const dateKey = formatEntryDate(entry);
   const body = buildBodyMarkdown(entry);
+  const metadata = `<!-- xiaoxiang:id=${entry.id} -->`;
   const imageMarkdown = attachmentPaths.map((path) => `![](${relativePath(targetPath, path)})`).join('\n\n');
   const remoteImageMarkdown = (entry.images || [])
-    .filter((image) => image && !image.startsWith('data:image/'))
+    .filter((image) => image && !image.startsWith('data:image/') && !attachmentSources.includes(image))
     .map((image) => `![](${image})`)
     .join('\n\n');
 
   const sections = [body, imageMarkdown, remoteImageMarkdown].filter((section) => section.trim().length > 0);
-  return `# ${dateKey}\n\n${sections.join('\n\n').trim()}\n`;
+  return `# ${dateKey}\n${metadata}\n\n${sections.join('\n\n').trim()}\n`;
 }
 
 export const localVaultService = {
@@ -807,9 +909,14 @@ export const localVaultService = {
       targetPath = await uniqueEntryPath(entry, manifest, root, backend);
     }
 
-    const attachmentPaths = await writeEntryImages(entry, backend);
-    const markdown = await renderEntryMarkdown(entry, targetPath, attachmentPaths);
+    const { paths: attachmentPaths, sources: imageSources } = await writeEntryImages(entry, backend, record);
+    const markdown = await renderEntryMarkdown(entry, targetPath, attachmentPaths, imageSources);
     await backend.writeTextFile(targetPath, markdown);
+    await Promise.all(
+      (record.attachmentPaths || [])
+        .filter((path) => !attachmentPaths.includes(path))
+        .map((path) => backend.deleteFile(path).catch(() => undefined)),
+    );
 
     if (entry.status === 'trashed') {
       if (record.path && record.path !== targetPath) {
@@ -826,6 +933,8 @@ export const localVaultService = {
     }
 
     record.attachmentPaths = attachmentPaths;
+    record.imageSources = imageSources;
+    record.contentHash = stableHash(markdown);
     record.diaryDate = entry.diaryDate;
     record.updatedAt = entry.updatedAt;
     record.status = entry.status;
@@ -920,10 +1029,10 @@ export const localVaultService = {
     await writeManifest(manifest, backend);
   },
 
-  async readEntriesFromVault(): Promise<VaultImportedEntry[]> {
+  async scanEntriesFromVault(): Promise<VaultImportScanResult> {
     const backend = getBackend();
     const status = await getStatusOrUnavailable(backend);
-    if (!status.available) return [];
+    if (!status.available) return { entries: [], deletedEntryIds: [], skippedEmptyCount: 0 };
 
     const manifest = await readManifest(backend);
     const idByPath = new Map<string, string>();
@@ -932,22 +1041,42 @@ export const localVaultService = {
     }
 
     const files = await this.listMarkdownFiles(USER_LOG_DIR);
+    const filePathSet = new Set(files.map((file) => normalizePath(file.path)));
     const entries: VaultImportedEntry[] = [];
+    const seenEntryIds = new Set<string>();
+    let skippedEmptyCount = 0;
+
     for (const file of files) {
+      if ((file.size || 0) === 0) {
+        skippedEmptyCount += 1;
+        continue;
+      }
       const content = await this.readTextFile(file.path);
       if (!content) continue;
 
+      const id = extractEntryIdFromMarkdown(content) || idByPath.get(normalizePath(file.path));
       const date = parseDateFromMarkdown(file.path, content);
-      const body = removeDateHeading(content);
+      const body = removeVaultMetadata(removeDateHeading(content));
       const title = stripMarkdownForTitle(body).slice(0, 30) || date;
+      if (id) seenEntryIds.add(id);
       entries.push({
-        id: idByPath.get(normalizePath(file.path)),
+        id,
         title,
         content: body,
         diaryDate: new Date(date).toISOString(),
         vaultPath: file.path,
+        updatedAt: file.lastModified ? new Date(file.lastModified).toISOString() : undefined,
       });
     }
-    return entries;
+
+    const deletedEntryIds = Object.values(manifest.entries)
+      .filter((record) => record.status !== 'trashed' && record.path && !filePathSet.has(normalizePath(record.path)) && !seenEntryIds.has(record.id))
+      .map((record) => record.id);
+
+    return { entries, deletedEntryIds, skippedEmptyCount };
+  },
+
+  async readEntriesFromVault(): Promise<VaultImportedEntry[]> {
+    return (await this.scanEntriesFromVault()).entries;
   },
 };

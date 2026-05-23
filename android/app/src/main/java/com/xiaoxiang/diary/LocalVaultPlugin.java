@@ -82,7 +82,8 @@ public class LocalVaultPlugin extends Plugin {
         try {
             DocumentFile file = getOrCreateFile(path, getMimeType(path, "text/plain"));
             writeBytes(file, content.getBytes(StandardCharsets.UTF_8));
-            call.resolve(pathResult(path));
+            long size = verifiedSize(file, content.length() > 0, path);
+            call.resolve(pathResult(path, size));
         } catch (Exception error) {
             call.reject("写入文本文件失败", error);
         }
@@ -107,7 +108,8 @@ public class LocalVaultPlugin extends Plugin {
             byte[] bytes = Base64.decode(payload, Base64.DEFAULT);
             DocumentFile file = getOrCreateFile(path, mimeType);
             writeBytes(file, bytes);
-            call.resolve(pathResult(path));
+            long size = verifiedSize(file, bytes.length > 0, path);
+            call.resolve(pathResult(path, size));
         } catch (Exception error) {
             call.reject("写入附件失败", error);
         }
@@ -190,6 +192,7 @@ public class LocalVaultPlugin extends Plugin {
             byte[] bytes = readBytes(source);
             DocumentFile target = getOrCreateFile(toPath, getMimeType(toPath, source.getType() == null ? "application/octet-stream" : source.getType()));
             writeBytes(target, bytes);
+            verifiedSize(target, bytes.length > 0, toPath);
             source.delete();
             JSObject result = new JSObject();
             result.put("fromPath", fromPath);
@@ -350,6 +353,15 @@ public class LocalVaultPlugin extends Plugin {
         }
     }
 
+    private long verifiedSize(DocumentFile file, boolean shouldHaveContent, String path) throws IOException {
+        long size = readBytes(file).length;
+        if (shouldHaveContent && size == 0) {
+            file.delete();
+            throw new IOException("写入失败，文件为空: " + path);
+        }
+        return size;
+    }
+
     private byte[] readBytes(DocumentFile file) throws IOException {
         ContentResolver resolver = getContext().getContentResolver();
         try (InputStream input = resolver.openInputStream(file.getUri())) {
@@ -437,6 +449,12 @@ public class LocalVaultPlugin extends Plugin {
     private JSObject pathResult(String path) {
         JSObject result = new JSObject();
         result.put("path", path);
+        return result;
+    }
+
+    private JSObject pathResult(String path, long size) {
+        JSObject result = pathResult(path);
+        result.put("size", size);
         return result;
     }
 }

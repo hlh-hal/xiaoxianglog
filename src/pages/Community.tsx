@@ -195,7 +195,7 @@ export default function Community() {
           ) : (
             posts.map((post) => (
               <article id={post.id} key={post.id} className="bg-surface-container-lowest rounded-2xl p-6 flex flex-col gap-5 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)] relative">
-                <header className="flex items-center gap-3">
+                <header className="flex items-start gap-3">
                   <UserAvatar
                     userId={post.user.id}
                     src={post.user.avatar}
@@ -203,8 +203,13 @@ export default function Community() {
                     className="w-10 h-10 rounded-full"
                     fallbackClassName="bg-surface-container flex items-center justify-center text-outline font-serif text-lg"
                   />
-                  <div>
-                    <h3 className="text-sm font-bold text-on-surface font-body">{post.user.name}</h3>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm font-bold text-on-surface font-body truncate">{post.user.name}</h3>
+                    {typeof post.user.bio === 'string' && post.user.bio.trim() && (
+                      <p className="mt-0.5 text-[12px] leading-4 text-outline/80 line-clamp-1 break-words">
+                        {post.user.bio.trim()}
+                      </p>
+                    )}
                   </div>
                   <div className="ml-auto flex items-center gap-3">
                     {user && post.user.id === user.userId && (
