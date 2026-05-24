@@ -137,11 +137,6 @@ function isAndroid(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 }
 
-function isMobileWeb(): boolean {
-  if (typeof navigator === 'undefined') return false;
-  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-}
-
 function getWebWindow(): WebFileSystemWindow | null {
   if (typeof window === 'undefined') return null;
   return window as WebFileSystemWindow;
@@ -400,7 +395,6 @@ function webStatus(partial: Partial<VaultStatus>): VaultStatus {
 }
 
 function supportsWebDirectoryPicker(): boolean {
-  if (isMobileWeb()) return false;
   return typeof getWebWindow()?.showDirectoryPicker === 'function';
 }
 

@@ -4,6 +4,7 @@ import { settingsService, FontSettings, CustomFont, PRESET_FONTS } from '../serv
 import { diaryService, StoredFont } from '../services/diaryService';
 import { createClientId } from '../utils/id';
 import { motion, AnimatePresence } from 'motion/react';
+import { AppToast } from './AppToast';
 
 interface FontToolbarProps {
   fontSettings: FontSettings;
@@ -487,21 +488,7 @@ export const FontToolbar: React.FC<FontToolbarProps> = ({ fontSettings, onChange
       </div>
       
       {/* Toast Notification */}
-      <AnimatePresence>
-        {toastMsg && (
-          <motion.div
-            initial={{ opacity: 0, y: 20, scale: 0.95, x: '-50%' }}
-            animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
-            exit={{ opacity: 0, y: -20, scale: 0.95, x: '-50%' }}
-            className="fixed top-20 left-1/2 z-50 pointer-events-none"
-          >
-            <div className="bg-[#1C1C1E] dark:bg-[#F2F2F7] text-white dark:text-[#1C1C1E] px-6 py-3 rounded-full shadow-lg font-medium text-sm flex items-center gap-2 whitespace-nowrap">
-              {toastMsg}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <AppToast message={toastMsg} />
     </div>
   );
 };
-

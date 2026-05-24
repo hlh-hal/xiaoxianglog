@@ -175,7 +175,7 @@ export default function Gallery() {
         </div>
       </header>
 
-      <main className="px-4 max-w-lg mx-auto">
+      <main className="app-content-container">
         {!loading && images.length === 0 ? (
           <div className="flex flex-col items-center justify-center pt-32">
             <ImageIcon className="w-12 h-12 text-outline mb-4 opacity-50" />
@@ -193,7 +193,7 @@ export default function Gallery() {
                   <h3 className="text-[12px] text-outline mt-3 mb-1.5">
                     {dayGroup.dayLabel}
                   </h3>
-                  <div className="grid grid-cols-3 gap-[6px]">
+                  <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-[6px] md:gap-2">
                     {dayGroup.images.map((img, idx) => (
                       <div 
                         key={`${img.entryId}-${idx}`} 

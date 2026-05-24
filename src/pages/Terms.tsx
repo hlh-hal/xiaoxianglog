@@ -13,7 +13,7 @@ export default function Terms() {
         </button>
         <h1 className="text-lg font-headline font-semibold text-on-surface mx-auto pr-8">用户协议</h1>
       </header>
-      <main className="px-6 py-8 max-w-[800px] mx-auto prose dark:prose-invert text-on-surface-variant">
+      <main className="app-reading-container py-8 prose dark:prose-invert text-on-surface-variant">
         <h2>1. 服务说明</h2>
         <p>小象日志是一款为用户提供个人日记记录、云端同步以及社区分享功能的应用程序。在使用本服务前，请您务必仔细阅读本协议。</p>
 

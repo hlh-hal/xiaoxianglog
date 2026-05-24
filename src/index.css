@@ -36,6 +36,9 @@
   --diary-line-height: 1.7;
   --diary-font-family: "Noto Sans SC", "Inter", ui-sans-serif, system-ui, sans-serif;
   --diary-font-color: auto;
+  --app-sidebar-width: 18rem;
+  --app-reading-max-width: 920px;
+  --app-content-max-width: 1040px;
   --app-safe-top: env(safe-area-inset-top, 0px);
   --app-safe-bottom: env(safe-area-inset-bottom, 0px);
   --app-header-height: 56px;
@@ -80,6 +83,79 @@ html {
   height: var(--app-total-header-height);
   padding-top: var(--app-safe-top);
   box-sizing: border-box;
+}
+
+.app-reading-container,
+.app-content-container {
+  width: 100%;
+  margin-inline: auto;
+}
+
+.app-reading-container {
+  max-width: min(var(--app-reading-max-width), calc(100vw - 1.5rem));
+  padding-inline: 0.75rem;
+}
+
+.app-content-container {
+  max-width: min(var(--app-content-max-width), calc(100vw - 2rem));
+  padding-inline: 1rem;
+}
+
+.app-main-topbar {
+  padding-inline: 16px;
+}
+
+.app-main-fixed-header {
+  left: 0;
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .app-reading-container {
+    max-width: min(var(--app-reading-max-width), calc(100vw - var(--app-sidebar-width) - 4rem));
+    padding-inline: 1.5rem;
+  }
+
+  .app-content-container {
+    max-width: min(var(--app-content-max-width), calc(100vw - var(--app-sidebar-width) - 4rem));
+    padding-inline: 1.5rem;
+  }
+
+  .app-main-topbar {
+    margin-left: var(--app-sidebar-width);
+    width: calc(100% - var(--app-sidebar-width));
+    padding-inline: max(24px, calc((100vw - var(--app-sidebar-width) - var(--app-reading-max-width)) / 2));
+  }
+
+  .app-main-fixed-header {
+    left: var(--app-sidebar-width);
+    width: calc(100% - var(--app-sidebar-width));
+  }
+
+  .app-desktop-fab {
+    right: max(1.5rem, calc((100vw - var(--app-sidebar-width) - var(--app-reading-max-width)) / 2 + 1.5rem));
+    bottom: 2rem !important;
+  }
+}
+
+.app-toast {
+  bottom: calc(max(var(--app-safe-bottom), 0px) + 28px);
+  animation: appToastIn 180ms ease-out;
+}
+
+@media (min-width: 768px) {
+  .app-toast {
+    bottom: calc(max(var(--app-safe-bottom), 0px) + 36px);
+  }
+}
+
+@keyframes appToastIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* 全局过渡，切换时平滑 */

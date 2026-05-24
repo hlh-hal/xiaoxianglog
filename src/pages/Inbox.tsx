@@ -3,6 +3,7 @@ import { ChevronLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { sendBrowserNotification } from '../utils/notify';
 import { api } from '../services/apiClient';
+import { AppToast } from '../components/AppToast';
 import { UserAvatar } from '../components/UserAvatar';
 
 type FriendStatus = 'none' | 'pending' | 'accepted' | 'declined';
@@ -393,22 +394,7 @@ export default function Inbox() {
           </div>
         )}
       </div>
-      {/* Toast */}
-      {toastMessage && (
-        <div style={{
-          position: 'fixed', bottom: '100px', left: '50%', transform: 'translateX(-50%)',
-          backgroundColor: isDark ? '#3A3A3C' : '#1C1C1E',
-          color: '#FFFFFF',
-          padding: '12px 24px',
-          borderRadius: '24px',
-          fontSize: '14px',
-          zIndex: 110,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-          animation: 'fadeIn 0.3s ease'
-        }}>
-          {toastMessage}
-        </div>
-      )}
+      <AppToast message={toastMessage} />
     </div>
   );
 }

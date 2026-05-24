@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'xiaoxiang-pwa-v1';
+const CACHE_VERSION = 'xiaoxiang-pwa-v2';
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 const PRIVATE_PREFIXES = ['/api/', '/uploads/'];
 

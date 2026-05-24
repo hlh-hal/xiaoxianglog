@@ -5,6 +5,7 @@ import { authService } from '../services/authService';
 import { diaryService } from '../services/diaryService';
 import { AppSettings, FontSettings, settingsService } from '../services/settingsService';
 import { localVaultService, VaultStatus } from '../services/localVaultService';
+import { AppToast } from '../components/AppToast';
 import { FontToolbar } from '../components/FontToolbar';
 import {
   exportDiariesToMarkdown,
@@ -429,11 +430,7 @@ export default function Settings() {
 
   return (
     <div className="min-h-screen bg-surface text-on-surface font-body pb-10 relative animate-in fade-in slide-in-from-right-8 duration-300 ease-out">
-      {toastMessage && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] bg-inverse-surface text-inverse-on-surface px-4 py-2 rounded-full shadow-lg text-sm animate-in fade-in slide-in-from-top-4">
-          {toastMessage}
-        </div>
-      )}
+      <AppToast message={toastMessage} />
 
       {isLoading && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/20 backdrop-blur-sm">
@@ -463,7 +460,7 @@ export default function Settings() {
         <div className="shrink-0" style={{ width: '40px', height: '40px' }} />
       </header>
 
-      <main className="w-full max-w-[800px] mx-auto px-4 space-y-8 pt-6">
+      <main className="app-content-container space-y-8 pt-6">
         <section className="space-y-3">
           <SectionTitle title="提醒" />
           <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(47,52,46,0.02)] overflow-hidden">

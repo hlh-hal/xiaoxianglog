@@ -59,7 +59,7 @@ export function TimelineList({ journals, isMultiSelectMode, selectedJournals, ha
               </div>
             </header>
 
-            <div className={`bg-surface-container-lowest px-4 py-[14px] rounded-[28px] shadow-[0_4px_20px_rgba(0,0,0,0.02)] transition-all duration-500 ${isMultiSelectMode && selectedJournals.has(journal.id) ? 'ring-2 ring-primary bg-primary/5' : 'hover:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.04)]'}`}>
+            <div className={`bg-surface-container-lowest px-4 md:px-5 py-[14px] rounded-[28px] md:rounded-[24px] shadow-[0_4px_20px_rgba(0,0,0,0.02)] transition-all duration-500 ${isMultiSelectMode && selectedJournals.has(journal.id) ? 'ring-2 ring-primary bg-primary/5' : 'hover:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.04)]'}`}>
               {/* 
               {journal.title && (
                 <h3 className="font-headline text-xl font-bold text-on-surface mb-3 leading-tight tracking-tight">
@@ -96,7 +96,7 @@ export function TimelineList({ journals, isMultiSelectMode, selectedJournals, ha
                     validImages.length === 4 ? 'grid-cols-2' : 'grid-cols-3'
                   }`}>
                     {validImages.map((img, idx) => (
-                      <div key={idx} className={validImages.length === 1 ? 'aspect-[4/3]' : 'aspect-square'}>
+                      <div key={idx} className={validImages.length === 1 ? 'aspect-[4/3] md:aspect-[16/10]' : 'aspect-square'}>
                         <SafeImage
                           src={img} 
                           alt="Journal attachment" 

@@ -13,7 +13,7 @@ export default function Privacy() {
         </button>
         <h1 className="text-lg font-headline font-semibold text-on-surface mx-auto pr-8">隐私政策</h1>
       </header>
-      <main className="px-6 py-8 max-w-[800px] mx-auto prose dark:prose-invert text-on-surface-variant">
+      <main className="app-reading-container py-8 prose dark:prose-invert text-on-surface-variant">
         <h2>1. 信息收集</h2>
         <p>我们收集的信息仅限于您主动提供的邮箱地址、昵称，以及您在使用小象日志过程中创建的日记、上传的图片和相关互动数据。这些数据仅用于为您提供核心的日记记录、社区分享和多设备同步功能。</p>
         

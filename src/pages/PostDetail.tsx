@@ -11,6 +11,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import { api } from '../services/apiClient';
 import { useAuth } from '../contexts/AuthContext';
+import { AppToast } from '../components/AppToast';
 import { UserAvatar } from '../components/UserAvatar';
 import { SafeImage } from '../components/SafeImage';
 
@@ -897,12 +898,7 @@ export default function PostDetail() {
         </div>
       )}
 
-      {/* Toast */}
-      {toastMessage && (
-        <div className="fixed left-1/2 -translate-x-1/2 z-[300] bg-inverse-surface text-inverse-on-surface px-4 py-2 rounded-full shadow-lg text-sm animate-in fade-in slide-in-from-top-4 whitespace-nowrap" style={{ top: 'calc(var(--app-total-header-height) + 16px)' }}>
-          {toastMessage}
-        </div>
-      )}
+      <AppToast message={toastMessage} />
     </div>
   );
 }

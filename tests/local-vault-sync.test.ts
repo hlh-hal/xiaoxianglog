@@ -67,11 +67,18 @@ class MemoryDirectoryHandle {
 }
 
 const yearRoot = new MemoryDirectoryHandle('2026');
+Object.defineProperty(globalThis, 'navigator', {
+  configurable: true,
+  value: {
+    userAgent: 'Mozilla/5.0 (Linux; Android 15; Mobile) AppleWebKit/537.36 Chrome/125.0.0.0 Mobile Safari/537.36',
+  },
+});
 (globalThis as any).window = {
   isSecureContext: true,
   showDirectoryPicker: async () => yearRoot,
 };
 
+assert.equal(localVaultService.isSupported(), true);
 const status = await localVaultService.chooseVaultDirectory();
 assert.equal(status.available, true);
 

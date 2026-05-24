@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
+import { AppToast } from '../components/AppToast';
 
 const FEEDBACK_EMAIL = '1647810838@qq.com';
 
@@ -707,26 +708,7 @@ export default function Help() {
         </div>
       )}
 
-      {toastMessage && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: '100px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            backgroundColor: isDark ? '#3A3A3C' : '#1C1C1E',
-            color: '#FFFFFF',
-            padding: '12px 24px',
-            borderRadius: '24px',
-            fontSize: '14px',
-            zIndex: 110,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {toastMessage}
-        </div>
-      )}
+      <AppToast message={toastMessage} />
     </div>
   );
 }

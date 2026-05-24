@@ -162,14 +162,14 @@ export default function Community() {
 
   return (
     <div className="bg-surface min-h-screen">
-      <header className="app-safe-header fixed top-0 w-full z-40 flex justify-between items-center px-6 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/10">
+      <header className="app-main-fixed-header app-safe-header fixed top-0 z-40 flex justify-between items-center px-6 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/10">
         <div className="flex items-center gap-2">
           <BookOpen className="w-6 h-6 text-outline" />
           <h1 className="text-xl font-bold tracking-tight text-on-surface font-body">日志圈</h1>
         </div>
       </header>
 
-      <main className="pt-[calc(var(--app-total-header-height)+12px)] pb-24 px-4 w-full max-w-[800px] mx-auto">
+      <main className="app-content-container pt-[calc(var(--app-total-header-height)+12px)] pb-24 md:pb-10">
         <nav className="flex justify-center gap-10 mb-6 sticky top-[var(--app-total-header-height)] z-30 py-2 bg-surface/90 backdrop-blur-md">
           <button 
             onClick={() => setActiveTab('recommend')}

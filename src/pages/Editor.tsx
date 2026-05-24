@@ -25,6 +25,7 @@ import { api, getAccessToken } from '../services/apiClient';
 import { createRoot } from 'react-dom/client';
 import { motion, AnimatePresence } from 'motion/react';
 import ImageViewer from '../components/ImageViewer';
+import { AppToast } from '../components/AppToast';
 import { SafeImage } from '../components/SafeImage';
 
 export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: DiaryEntry | { diaryDate: number }, theme: DiaryTheme, htmlContent: string, images: string[] }) => {
@@ -2599,22 +2600,7 @@ export default function Editor() {
         )}
       </AnimatePresence>
 
-      {/* Toast */}
-      {toastMessage && (
-        <div style={{
-          position: 'fixed', bottom: '100px', left: '50%', transform: 'translateX(-50%)',
-          backgroundColor: isDark ? '#3A3A3C' : '#1C1C1E',
-          color: '#FFFFFF',
-          padding: '12px 24px',
-          borderRadius: '24px',
-          fontSize: '14px',
-          zIndex: 9999,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-          animation: 'fadeIn 0.3s ease'
-        }}>
-          {toastMessage}
-        </div>
-      )}
+      <AppToast message={toastMessage} />
     </div>
   );
 }

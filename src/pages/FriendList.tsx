@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../services/apiClient';
+import { AppToast } from '../components/AppToast';
 import { UserAvatar } from '../components/UserAvatar';
 
 interface Friend {
@@ -350,25 +351,7 @@ export default function FriendList() {
         ))}
       </main>
 
-      {toastMessage && (
-        <div style={{
-          position: 'fixed',
-          bottom: 'max(var(--app-safe-bottom), 24px)',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          backgroundColor: isDark ? '#F2F2F7' : '#1C1C1E',
-          color: isDark ? '#1C1C1E' : '#F2F2F7',
-          padding: '12px 24px',
-          borderRadius: 24,
-          fontSize: 14,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-          zIndex: 9999,
-          pointerEvents: 'none',
-          whiteSpace: 'nowrap'
-        }}>
-          {toastMessage}
-        </div>
-      )}
+      <AppToast message={toastMessage} />
     </div>
   );
 }

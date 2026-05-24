@@ -4,7 +4,7 @@ import {
   Menu, Search, MoreVertical, BookOpen, Compass, User, 
   Image as ImageIcon, Footprints, History, Moon, Sun, Cloud, 
   Trash2, Settings, HelpCircle, Plus, ChevronLeft, ChevronRight,
-  Check, X
+  Check, X, Download, RefreshCw
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, isToday, addMonths, subMonths, format } from 'date-fns';
@@ -15,12 +15,14 @@ import { getDailyQuote } from '../utils/quotes';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { UserAvatar } from './UserAvatar';
+import { usePwaInstall } from '../hooks/usePwaInstall';
 
 export type ListStyle = 'timeline' | 'card_flow' | 'briefing' | 'magazine';
 
 export default function Layout() {
   const { isDark, toggleTheme } = useTheme();
   const { user } = useAuth();
+  const pwaInstall = usePwaInstall();
   const isLoggedIn = !!user;
   const location = useLocation();
   const navigate = useNavigate();
@@ -42,6 +44,8 @@ export default function Layout() {
   // Menu and List Style State
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isStyleSheetOpen, setIsStyleSheetOpen] = useState(false);
+  const [isInstallSheetOpen, setIsInstallSheetOpen] = useState(false);
+  const [installMessage, setInstallMessage] = useState('');
   const [listStyle, setListStyle] = useState<ListStyle>(() => {
     return (localStorage.getItem('diary_list_style') as ListStyle) || 'timeline';
   });
@@ -200,6 +204,31 @@ export default function Layout() {
     setIsStyleSheetOpen(false);
   };
 
+  const openInstallSheet = () => {
+    setInstallMessage('');
+    setIsMenuOpen(false);
+    setIsInstallSheetOpen(true);
+  };
+
+  const handlePromptInstall = async () => {
+    setInstallMessage('');
+    const outcome = await pwaInstall.promptInstall();
+    if (outcome === 'accepted') {
+      setInstallMessage('安装已开始，请按浏览器提示完成。');
+      return;
+    }
+    if (outcome === 'dismissed') {
+      setInstallMessage('你刚才取消了安装。可以点“重新检测”后再试一次，或按下方步骤手动添加。');
+      return;
+    }
+    setInstallMessage('当前浏览器没有开放自动安装弹窗，请按下方步骤从浏览器菜单添加到桌面。');
+  };
+
+  const handleRefreshInstall = async () => {
+    await pwaInstall.refreshInstallState();
+    setInstallMessage('已重新检测。若仍无法弹出，请刷新页面，或按下方步骤手动添加。');
+  };
+
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(monthStart);
   const startDate = startOfWeek(monthStart, { weekStartsOn: 1 });
@@ -227,11 +256,7 @@ export default function Layout() {
       {/* Top App Bar (Only on Home) */}
       {location.pathname === '/' && (
         <header 
-          className="app-safe-header sticky top-0 left-0 w-full z-40 flex items-center justify-between bg-surface/80 backdrop-blur-md"
-          style={{
-            paddingLeft: '16px',
-            paddingRight: '16px',
-          }}
+          className="app-main-topbar app-safe-header sticky top-0 left-0 w-full z-40 flex items-center justify-between bg-surface/80 backdrop-blur-md"
         >
           <div className="flex items-center">
             <button 
@@ -366,6 +391,17 @@ export default function Layout() {
                       >
                         <span className="font-headline text-[15px] text-on-surface">设置</span>
                       </button>
+                      {!pwaInstall.isInstalled && (
+                        <>
+                          <div className="h-[1px] bg-outline-variant/20 mx-4"></div>
+                          <button
+                            onClick={openInstallSheet}
+                            className="flex items-center px-4 py-3.5 hover:bg-surface-container active:bg-surface-container-high transition-colors duration-200"
+                          >
+                            <span className="font-headline text-[15px] text-on-surface">安装到桌面</span>
+                          </button>
+                        </>
+                      )}
                       <div className="h-[1px] bg-outline-variant/20 mx-4"></div>
                       <button 
                         onClick={() => { setIsMenuOpen(false); setIsStyleSheetOpen(true); }}
@@ -620,6 +656,12 @@ export default function Layout() {
             <Cloud className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
             <span className="text-[15px]">云盘管理</span>
           </button>
+          {!pwaInstall.isInstalled && (
+            <button onClick={openInstallSheet} className="flex items-center gap-4 text-on-surface px-10 py-3 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
+              <Download className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
+              <span className="text-[15px]">安装到桌面</span>
+            </button>
+          )}
           <Link to="/trash" state={{ fromDrawer: true }} onClick={(e) => handleNavClick(e, '/trash')} className="flex items-center gap-4 text-on-surface px-10 py-3 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
             <Trash2 className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
             <span className="text-[15px]">回收站</span>
@@ -637,8 +679,8 @@ export default function Layout() {
 
       {/* Main Content */}
       <main className={cn(
-        "md:ml-72 transition-all duration-500 min-h-screen flex flex-col relative",
-        ['/', '/community', '/profile'].includes(location.pathname) ? "pb-[calc(72px+var(--app-safe-bottom))]" : "pb-0"
+        "md:ml-[var(--app-sidebar-width)] transition-all duration-500 min-h-screen flex flex-col relative",
+        ['/', '/community', '/profile'].includes(location.pathname) ? "pb-[calc(72px+var(--app-safe-bottom))] md:pb-0" : "pb-0"
       )}>
         <div className="flex-1 w-full flex flex-col">
           <AnimatePresence mode="wait">
@@ -710,6 +752,77 @@ export default function Layout() {
         )}
       </AnimatePresence>
 
+      {/* PWA Install Bottom Sheet */}
+      <AnimatePresence>
+        {isInstallSheetOpen && !pwaInstall.isInstalled && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] flex items-end justify-center bg-black/40"
+            onClick={() => setIsInstallSheetOpen(false)}
+          >
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="bg-surface w-full max-w-md rounded-t-3xl flex flex-col overflow-hidden shadow-2xl"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex justify-center pt-3 pb-2">
+                <div className="w-12 h-1.5 bg-outline-variant/50 rounded-full"></div>
+              </div>
+              <div className="flex items-center justify-between px-6 py-2 border-b border-surface-container-high">
+                <h3 className="font-headline font-semibold text-lg text-on-surface">安装到桌面</h3>
+                <button onClick={() => setIsInstallSheetOpen(false)} className="p-2 -mr-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="px-6 py-5 space-y-4">
+                <div className="rounded-2xl bg-surface-container-low px-4 py-3 text-sm leading-6 text-on-surface-variant">
+                  {pwaInstall.canPromptInstall
+                    ? '当前浏览器支持一键安装。删除旧图标后，可以在这里重新触发安装。'
+                    : '当前浏览器没有开放一键安装弹窗，请按下面步骤从浏览器菜单添加。'}
+                </div>
+
+                {installMessage && (
+                  <div className="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm leading-6 text-on-surface">
+                    {installMessage}
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  {pwaInstall.manualSteps.map((step, index) => (
+                    <div key={step} className="flex gap-3 text-sm leading-6 text-on-surface">
+                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-xs text-white">{index + 1}</span>
+                      <span>{step}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 pt-1">
+                  <button
+                    onClick={handlePromptInstall}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-medium text-white active:scale-[0.98] transition-transform"
+                  >
+                    <Download className="w-4 h-4" />
+                    {pwaInstall.canPromptInstall ? '立即安装' : '查看手动步骤'}
+                  </button>
+                  <button
+                    onClick={handleRefreshInstall}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-surface-container px-4 py-3 text-sm font-medium text-primary active:scale-[0.98] transition-transform"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    重新检测安装状态
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Floating Action Button (only on home) */}
       {location.pathname === '/' && (
         <button 
@@ -717,7 +830,7 @@ export default function Layout() {
             sessionStorage.removeItem('timeline_scroll');
             navigate('/editor');
           }}
-          className="fixed bottom-28 right-6 w-14 h-14 rounded-2xl bg-primary text-white shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] flex items-center justify-center hover:bg-primary-dim active:scale-90 transition-all z-[40]"
+          className="app-desktop-fab fixed bottom-28 right-6 w-14 h-14 rounded-2xl bg-primary text-white shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] flex items-center justify-center hover:bg-primary-dim active:scale-90 transition-all z-[40]"
           style={{ bottom: 'calc(7rem + var(--app-safe-bottom))' }}
         >
           <Plus className="w-8 h-8" />
@@ -727,7 +840,7 @@ export default function Layout() {
       {/* Bottom Navigation Bar */}
       {['/', '/community', '/profile'].includes(location.pathname) && (
         <nav 
-          className="fixed bottom-0 left-0 w-full md:w-[calc(100%-18rem)] md:ml-72 flex justify-around items-center px-4 bg-surface/90 backdrop-blur-xl z-50 rounded-t-[24px] shadow-[0_-10px_40px_rgba(0,0,0,0.03)] border-t border-outline-variant/10"
+          className="fixed bottom-0 left-0 w-full md:hidden flex justify-around items-center px-4 bg-surface/90 backdrop-blur-xl z-50 rounded-t-[24px] shadow-[0_-10px_40px_rgba(0,0,0,0.03)] border-t border-outline-variant/10"
           style={{ paddingTop: '6px', paddingBottom: 'var(--app-safe-bottom)' }}
         >
           {navItems.map((item) => {

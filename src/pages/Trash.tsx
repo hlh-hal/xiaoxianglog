@@ -83,7 +83,7 @@ export default function Trash() {
         </div>
       </header>
 
-      <main className="pt-6 px-4 md:px-6 w-full max-w-[800px] mx-auto">
+      <main className="app-reading-container pt-6">
         {items.length > 0 ? (
           <>
             <header className="mb-8">

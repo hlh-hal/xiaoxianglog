@@ -5,6 +5,7 @@ import { diaryService } from '../services/diaryService';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { api } from '../services/apiClient';
+import { AppToast } from '../components/AppToast';
 import { UserAvatar } from '../components/UserAvatar';
 
 interface LeaderboardUser {
@@ -450,12 +451,7 @@ export default function Leaderboard() {
         </span>
       </div>
 
-      {/* Toast */}
-      {toastMessage && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[300] px-4 py-2 rounded-lg shadow-lg text-sm text-white bg-black/80 backdrop-blur-sm animate-in fade-in zoom-in duration-200">
-          {toastMessage}
-        </div>
-      )}
+      <AppToast message={toastMessage} />
 
       {showSearchPage && (
         <div style={{

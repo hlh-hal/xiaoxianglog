@@ -86,7 +86,7 @@ export function CardFlowList({ journals, isMultiSelectMode, selectedJournals, ha
                   validImages.length === 4 ? 'grid-cols-2' : 'grid-cols-3'
                 }`}>
                   {validImages.map((img, idx) => (
-                    <div key={idx} className={validImages.length === 1 ? 'aspect-[4/3]' : 'aspect-square'}>
+                    <div key={idx} className={validImages.length === 1 ? 'aspect-[4/3] md:aspect-[16/10]' : 'aspect-square'}>
                       <SafeImage
                         src={img} 
                         alt="Journal attachment" 

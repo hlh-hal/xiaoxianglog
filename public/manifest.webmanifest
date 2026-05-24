@@ -1,9 +1,9 @@
 {
-  "id": "/",
+  "id": "/?app=xiaoxiang-log-pwa",
   "name": "小象日志",
   "short_name": "小象日志",
   "description": "记录日常、同步日记，并通过日志圈分享生活片段。",
-  "start_url": "/",
+  "start_url": "/?app=xiaoxiang-log-pwa",
   "scope": "/",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "browser"],
@@ -13,13 +13,13 @@
   "categories": ["productivity", "lifestyle"],
   "icons": [
     {
-      "src": "/icons/icon-192.png",
+      "src": "/icons/xiaoxiang-pwa-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/icons/icon-512.png",
+      "src": "/icons/xiaoxiang-pwa-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
