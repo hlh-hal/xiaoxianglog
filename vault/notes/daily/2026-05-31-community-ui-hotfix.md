@@ -26,3 +26,8 @@
   - 线上 JS SHA256 与本地一致：`87E6A00D1E009E3A6868D71C46D121C78990E6C04C93228DC080F420682D9765`。
   - 线上 CSS SHA256 与本地一致：`15BA61B9089DAD6903C0302317EEC8A26B9055075CD39BBA23B79FEA381C2A9B`。
   - 线上 CSS 已确认包含 `border-left-color:#c5efad`。
+
+## 追加修正
+
+- 用户确认不需要正文左侧绿色竖线。
+- `src/pages/Community.tsx` 移除正文容器上的 `border-l-2 border-l-[#c5efad] pl-4`，保留移动端两侧留白和卡片内边距调整。

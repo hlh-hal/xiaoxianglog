@@ -221,7 +221,7 @@ export default function Community() {
                   </div>
                 </header>
 
-                <div className="border-l-2 border-l-[#c5efad] pl-4 cursor-pointer active:opacity-70 transition-opacity" onClick={() => { sessionStorage.setItem('last_viewed_community_post', post.id); navigate(`/post/${post.id}`); }}>
+                <div className="cursor-pointer active:opacity-70 transition-opacity" onClick={() => { sessionStorage.setItem('last_viewed_community_post', post.id); navigate(`/post/${post.id}`); }}>
                   <p className="text-on-surface leading-relaxed text-[15px] font-light whitespace-pre-wrap line-clamp-5 break-words">
                     {stripAllMarkdown(post.content || '').replace(/\n{3,}/g, '\n\n').trim()}
                   </p>
