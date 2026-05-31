@@ -3,6 +3,7 @@ import prisma from '../lib/prisma.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
 import { cleanText, paramString, positiveInt, queryString, stringArray } from '../utils/request.js';
 import { deleteStoredUrls } from '../lib/objectStorage.js';
+import { sendNotificationPush } from '../lib/push.js';
 
 const router = Router();
 
@@ -248,14 +249,18 @@ router.post('/posts/:id/like', requireAuth, async (req: Request, res: Response) 
 
     await prisma.postLike.create({ data: { postId, userId } });
     if (post.userId !== userId) {
-      await prisma.notification.create({
+      const notification = await prisma.notification.create({
         data: {
           userId: post.userId,
           fromUserId: userId,
           type: 'like',
           refPostId: postId,
         },
+        include: {
+          sender: { select: { nickname: true } },
+        },
       });
+      sendNotificationPush(notification).catch(error => console.warn('推送点赞通知失败:', error));
     }
 
     res.json({ liked: true });
@@ -341,7 +346,7 @@ router.post('/posts/:id/comments', requireAuth, async (req: Request, res: Respon
     });
 
     if (post.userId !== userId) {
-      await prisma.notification.create({
+      const notification = await prisma.notification.create({
         data: {
           userId: post.userId,
           fromUserId: userId,
@@ -349,7 +354,11 @@ router.post('/posts/:id/comments', requireAuth, async (req: Request, res: Respon
           content: content.substring(0, 100),
           refPostId: postId,
         },
+        include: {
+          sender: { select: { nickname: true } },
+        },
       });
+      sendNotificationPush(notification).catch(error => console.warn('推送评论通知失败:', error));
     }
 
     res.status(201).json({

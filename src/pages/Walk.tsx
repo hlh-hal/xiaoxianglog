@@ -299,26 +299,121 @@ export default function Walk() {
             0% { transform: translateX(0); }
             100% { transform: translateX(-50%); }
           }
+
+          @keyframes boatFloat {
+            0%, 100% { transform: translateY(0) rotate(-1.5deg); }
+            50% { transform: translateY(-6px) rotate(1.5deg); }
+          }
+
+          @keyframes fishJumpLeft {
+            0%, 12% { opacity: 0; transform: translate(0, 18px) rotate(-18deg) scale(0.8); }
+            24% { opacity: 0.5; transform: translate(16px, -10px) rotate(6deg) scale(1); }
+            40% { opacity: 0.42; transform: translate(34px, 4px) rotate(24deg) scale(0.92); }
+            52%, 100% { opacity: 0; transform: translate(46px, 22px) rotate(34deg) scale(0.78); }
+          }
+
+          @keyframes fishJumpRight {
+            0%, 20% { opacity: 0; transform: translate(0, 18px) rotate(18deg) scale(0.8); }
+            34% { opacity: 0.46; transform: translate(-16px, -12px) rotate(-8deg) scale(1); }
+            50% { opacity: 0.4; transform: translate(-36px, 4px) rotate(-26deg) scale(0.92); }
+            62%, 100% { opacity: 0; transform: translate(-50px, 22px) rotate(-36deg) scale(0.78); }
+          }
+
+          @keyframes fishSplash {
+            0%, 18% { opacity: 0; transform: scaleX(0.5); }
+            26% { opacity: 0.26; transform: scaleX(1); }
+            42%, 100% { opacity: 0; transform: scaleX(1.25); }
+          }
         `}
       </style>
 
       {/* Animated Waves Bottom */}
-      <div className="absolute -bottom-4 md:bottom-0 left-0 w-full h-[180px] md:h-[120px] overflow-hidden z-0 pointer-events-none opacity-30">
+      <div className="absolute bottom-0 left-0 w-full h-[220px] md:h-[170px] overflow-hidden z-0 pointer-events-none">
+        <div className="absolute left-1/2 top-[132px] z-10 -translate-x-1/2 opacity-70">
+          <svg
+            className="block"
+            width="52"
+            height="32"
+            viewBox="0 0 68 42"
+            fill="none"
+            style={{ animation: 'boatFloat 4.8s ease-in-out infinite' }}
+            aria-hidden="true"
+          >
+            <path d="M14 28.5C20.5 34 47.5 34 54 28.5C50.5 35.5 44.5 39 34 39C23.5 39 17.5 35.5 14 28.5Z" fill="#8A9088" opacity="0.34" />
+            <path d="M19 26.5H50.5C48.5 31.5 43.5 35 34.5 35C25.5 35 21 31.5 19 26.5Z" fill="#446733" opacity="0.28" />
+            <path d="M34 7V26" stroke="#6F786B" strokeWidth="1.4" strokeLinecap="round" opacity="0.55" />
+            <path d="M35 9C41.5 13.5 45.5 18 48 25H35V9Z" fill="#E8EAE4" opacity="0.92" />
+            <path d="M32.5 11C27.5 15 24.5 20 22.5 25H32.5V11Z" fill="#F5F5F1" opacity="0.95" />
+            <path d="M22 25.5H49" stroke="#6F786B" strokeWidth="1.2" strokeLinecap="round" opacity="0.28" />
+          </svg>
+        </div>
+        <div className="absolute left-[16%] top-[132px] z-10 opacity-80">
+          <svg
+            width="46"
+            height="34"
+            viewBox="0 0 46 34"
+            fill="none"
+            aria-hidden="true"
+          >
+            <g style={{ animation: 'fishJumpLeft 5.8s ease-in-out infinite' }}>
+              <path d="M13.5 17.5C17.5 12.8 25.3 12.7 30 17.2C25.7 21.4 18.1 21.6 13.5 17.5Z" fill="#6F786B" opacity="0.45" />
+              <path d="M13.8 17.4L8.6 13.8C8.2 16.8 8.3 18.8 9.1 21.7L13.8 17.4Z" fill="#6F786B" opacity="0.34" />
+              <path d="M28.5 17.1C32.2 15.5 35 14.8 38.3 14.8C36.3 18.2 33.6 20 29.4 20.7" stroke="#6F786B" strokeWidth="1.2" strokeLinecap="round" opacity="0.34" />
+              <circle cx="24.2" cy="16.5" r="0.8" fill="#5C605A" opacity="0.42" />
+            </g>
+            <path d="M4 29.5C8.5 28.2 13 28.2 17.5 29.5" stroke="#AEB4AC" strokeWidth="1" strokeLinecap="round" style={{ animation: 'fishSplash 5.8s ease-out infinite' }} />
+            <path d="M14 29.5C18.5 28.3 23 28.3 27.5 29.5" stroke="#AEB4AC" strokeWidth="0.8" strokeLinecap="round" style={{ animation: 'fishSplash 5.8s ease-out infinite', animationDelay: '120ms' }} />
+          </svg>
+        </div>
+        <div className="absolute right-[14%] top-[150px] z-10 opacity-75">
+          <svg
+            width="48"
+            height="34"
+            viewBox="0 0 48 34"
+            fill="none"
+            aria-hidden="true"
+          >
+            <g style={{ animation: 'fishJumpRight 7.2s ease-in-out infinite', animationDelay: '1.6s' }}>
+              <path d="M34.5 17.5C30.3 12.9 22.9 12.9 18.2 17.1C22.5 21.4 30 21.6 34.5 17.5Z" fill="#6F786B" opacity="0.42" />
+              <path d="M34.2 17.4L39.5 13.8C39.9 16.8 39.8 18.8 39 21.7L34.2 17.4Z" fill="#6F786B" opacity="0.32" />
+              <path d="M19.6 17.1C16 15.6 13.2 14.8 10 14.8C12 18.2 14.6 20 18.8 20.7" stroke="#6F786B" strokeWidth="1.2" strokeLinecap="round" opacity="0.32" />
+              <circle cx="23.8" cy="16.5" r="0.8" fill="#5C605A" opacity="0.4" />
+            </g>
+            <path d="M23 29.5C27.5 28.2 32 28.2 36.5 29.5" stroke="#AEB4AC" strokeWidth="1" strokeLinecap="round" style={{ animation: 'fishSplash 7.2s ease-out infinite', animationDelay: '1.6s' }} />
+            <path d="M12 29.5C16.5 28.3 21 28.3 25.5 29.5" stroke="#AEB4AC" strokeWidth="0.8" strokeLinecap="round" style={{ animation: 'fishSplash 7.2s ease-out infinite', animationDelay: '1.72s' }} />
+          </svg>
+        </div>
         <svg 
           className="absolute bottom-0 w-[200%] h-full" 
-          style={{ animation: 'wave 15s linear infinite' }}
-          viewBox="0 0 1200 120" 
+          style={{ animation: 'wave 24s linear infinite' }}
+          viewBox="0 0 1200 180" 
           preserveAspectRatio="none"
+          aria-hidden="true"
         >
-          <path d="M0,0V46.29c47.79,22.2,103.59,32.17,158,28,70.36-5.37,136.33-33.31,206.8-37.5C438.64,32.43,512.34,53.67,583,72.05c69.27,18,138.3,24.88,209.4,13.08,36.15-6,69.85-17.84,104.45-29.34C989.49,25,1113-14.29,1200,52.47V0Z" opacity=".25" fill="#A1A1A6" transform="scale(1, -1) translate(0, -120)"></path>
-          <path d="M0,0V15.81C13,36.92,27.64,56.86,47.69,72.05,99.41,111.27,165,111,224.58,91.58c31.15-10.15,60.09-26.07,89.67-39.8,40.92-19,84.73-46,130.83-49.67,36.26-2.85,70.9,9.42,98.6,31.56,31.77,25.39,62.32,62,103.63,73,40.44,10.79,81.35-6.69,119.13-24.28s75.16-39,116.92-43.05c59.73-5.85,113.28,22.88,168.9,38.84,30.2,8.66,59,6.17,87.09-7.5,22.43-10.89,48-26.93,60.65-23.64V0Z" opacity=".5" fill="#A1A1A6" transform="scale(1, -1) translate(0, -120)"></path>
-          <path d="M0,0V5.63C149.93,59,314.09,71.32,475.83,42.57c43-7.64,84.23-20.12,127.61-26.46,59-8.63,112.48,12.24,165.56,35.4C827.93,77.22,886,95.24,951.2,90c86.53-7,172.46-45.71,248.8-84.81V0Z" fill="#A1A1A6" transform="scale(1, -1) translate(0, -120)"></path>
-          
-          {/* Second set for seamless loop */}
+          <defs>
+            <linearGradient id="walk-water-fade" x1="0" y1="56" x2="0" y2="180" gradientUnits="userSpaceOnUse">
+              <stop stopColor="#E6E7E1" stopOpacity="0" />
+              <stop offset="0.48" stopColor="#E0E2DC" stopOpacity="0.42" />
+              <stop offset="1" stopColor="#D4D7D0" stopOpacity="0.74" />
+            </linearGradient>
+          </defs>
+          <path d="M0 92C120 83 205 100 320 93C455 85 560 72 690 84C805 94 900 113 1040 101C1110 95 1160 85 1200 82V180H0V92Z" fill="url(#walk-water-fade)" />
+          <path d="M0 124C92 116 190 128 280 124C408 118 500 101 628 109C748 116 846 136 970 128C1060 122 1134 111 1200 114V180H0V124Z" fill="#D9DBD5" opacity="0.42" />
+          <path d="M0 154C110 145 210 151 320 153C454 156 540 141 662 143C814 146 904 165 1040 158C1100 155 1158 149 1200 150V180H0V154Z" fill="#CBCDCA" opacity="0.34" />
+          <path d="M0 72C92 65 182 77 274 73C384 68 482 58 598 64C714 70 814 85 932 80C1030 76 1110 67 1200 70" stroke="#AEB4AC" strokeWidth="1.2" opacity="0.24" fill="none" />
+          <path d="M0 90C110 82 202 94 310 90C438 85 532 73 664 81C784 88 878 101 1002 96C1078 93 1142 86 1200 88" stroke="#BAC0B7" strokeWidth="0.9" opacity="0.26" fill="none" />
+          <path d="M0 110C96 103 178 115 284 111C418 106 518 94 648 101C780 108 874 123 1014 116C1090 112 1146 106 1200 108" stroke="#A9B0A7" strokeWidth="0.8" opacity="0.2" fill="none" />
+          <path d="M0 132C118 124 216 136 336 131C448 127 552 117 676 123C804 130 910 144 1030 139C1100 136 1158 130 1200 131" stroke="#AEB4AC" strokeWidth="0.8" opacity="0.18" fill="none" />
+          <path d="M0 150C110 144 214 155 326 151C454 147 542 137 666 143C786 149 890 160 1010 156C1090 153 1150 148 1200 149" stroke="#AEB4AC" strokeWidth="0.7" opacity="0.16" fill="none" />
           <g transform="translate(1200, 0)">
-            <path d="M0,0V46.29c47.79,22.2,103.59,32.17,158,28,70.36-5.37,136.33-33.31,206.8-37.5C438.64,32.43,512.34,53.67,583,72.05c69.27,18,138.3,24.88,209.4,13.08,36.15-6,69.85-17.84,104.45-29.34C989.49,25,1113-14.29,1200,52.47V0Z" opacity=".25" fill="#A1A1A6" transform="scale(1, -1) translate(0, -120)"></path>
-            <path d="M0,0V15.81C13,36.92,27.64,56.86,47.69,72.05,99.41,111.27,165,111,224.58,91.58c31.15-10.15,60.09-26.07,89.67-39.8,40.92-19,84.73-46,130.83-49.67,36.26-2.85,70.9,9.42,98.6,31.56,31.77,25.39,62.32,62,103.63,73,40.44,10.79,81.35-6.69,119.13-24.28s75.16-39,116.92-43.05c59.73-5.85,113.28,22.88,168.9,38.84,30.2,8.66,59,6.17,87.09-7.5,22.43-10.89,48-26.93,60.65-23.64V0Z" opacity=".5" fill="#A1A1A6" transform="scale(1, -1) translate(0, -120)"></path>
-            <path d="M0,0V5.63C149.93,59,314.09,71.32,475.83,42.57c43-7.64,84.23-20.12,127.61-26.46,59-8.63,112.48,12.24,165.56,35.4C827.93,77.22,886,95.24,951.2,90c86.53-7,172.46-45.71,248.8-84.81V0Z" fill="#A1A1A6" transform="scale(1, -1) translate(0, -120)"></path>
+            <path d="M0 92C120 83 205 100 320 93C455 85 560 72 690 84C805 94 900 113 1040 101C1110 95 1160 85 1200 82V180H0V92Z" fill="url(#walk-water-fade)" />
+            <path d="M0 124C92 116 190 128 280 124C408 118 500 101 628 109C748 116 846 136 970 128C1060 122 1134 111 1200 114V180H0V124Z" fill="#D9DBD5" opacity="0.42" />
+            <path d="M0 154C110 145 210 151 320 153C454 156 540 141 662 143C814 146 904 165 1040 158C1100 155 1158 149 1200 150V180H0V154Z" fill="#CBCDCA" opacity="0.34" />
+            <path d="M0 72C92 65 182 77 274 73C384 68 482 58 598 64C714 70 814 85 932 80C1030 76 1110 67 1200 70" stroke="#AEB4AC" strokeWidth="1.2" opacity="0.24" fill="none" />
+            <path d="M0 90C110 82 202 94 310 90C438 85 532 73 664 81C784 88 878 101 1002 96C1078 93 1142 86 1200 88" stroke="#BAC0B7" strokeWidth="0.9" opacity="0.26" fill="none" />
+            <path d="M0 110C96 103 178 115 284 111C418 106 518 94 648 101C780 108 874 123 1014 116C1090 112 1146 106 1200 108" stroke="#A9B0A7" strokeWidth="0.8" opacity="0.2" fill="none" />
+            <path d="M0 132C118 124 216 136 336 131C448 127 552 117 676 123C804 130 910 144 1030 139C1100 136 1158 130 1200 131" stroke="#AEB4AC" strokeWidth="0.8" opacity="0.18" fill="none" />
+            <path d="M0 150C110 144 214 155 326 151C454 147 542 137 666 143C786 149 890 160 1010 156C1090 153 1150 148 1200 149" stroke="#AEB4AC" strokeWidth="0.7" opacity="0.16" fill="none" />
           </g>
         </svg>
       </div>
@@ -343,7 +438,7 @@ export default function Walk() {
       <main className="flex-1 relative w-full flex flex-col justify-start pt-2 pb-8 z-10">
         <div 
           ref={containerRef}
-          className="relative w-full h-[65vh] max-h-[700px] flex items-center justify-center touch-none"
+          className="relative w-full h-[65vh] max-h-[700px] mt-8 flex items-center justify-center touch-none"
           style={{ perspective: '1000px' }}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}

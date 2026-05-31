@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { sendNotificationPush } from '../lib/push.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -165,14 +166,18 @@ router.post('/request', async (req: Request, res: Response) => {
       });
     }
 
-    await prisma.notification.create({
+    const notification = await prisma.notification.create({
       data: {
         userId: recipientId,
         fromUserId: userId,
         type: 'friend_request',
         content: note,
       },
+      include: {
+        sender: { select: { nickname: true } },
+      },
     });
+    sendNotificationPush(notification).catch(error => console.warn('推送好友申请通知失败:', error));
 
     res.json({ message: 'friend request sent', status: 'pending' });
   } catch (err) {

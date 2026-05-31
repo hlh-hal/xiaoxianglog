@@ -112,8 +112,9 @@ html {
 
 @media (min-width: 768px) {
   .app-reading-container {
-    max-width: min(var(--app-reading-max-width), calc(100vw - var(--app-sidebar-width) - 4rem));
-    padding-inline: 1.5rem;
+    max-width: min(1664px, calc(100vw - var(--app-sidebar-width) - 6rem));
+    margin-inline: auto;
+    padding-inline: 1.25rem;
   }
 
   .app-content-container {
@@ -124,7 +125,7 @@ html {
   .app-main-topbar {
     margin-left: var(--app-sidebar-width);
     width: calc(100% - var(--app-sidebar-width));
-    padding-inline: max(24px, calc((100vw - var(--app-sidebar-width) - var(--app-reading-max-width)) / 2));
+    padding-inline: clamp(1.5rem, 3vw, 3rem);
   }
 
   .app-main-fixed-header {
@@ -133,19 +134,19 @@ html {
   }
 
   .app-desktop-fab {
-    right: max(1.5rem, calc((100vw - var(--app-sidebar-width) - var(--app-reading-max-width)) / 2 + 1.5rem));
-    bottom: 2rem !important;
+    right: clamp(1.5rem, 3vw, 3rem);
+    bottom: calc(5.25rem + var(--app-safe-bottom)) !important;
   }
 }
 
 .app-toast {
-  bottom: calc(max(var(--app-safe-bottom), 0px) + 28px);
+  top: calc(var(--app-total-header-height) + 72px);
   animation: appToastIn 180ms ease-out;
 }
 
 @media (min-width: 768px) {
   .app-toast {
-    bottom: calc(max(var(--app-safe-bottom), 0px) + 36px);
+    top: calc(var(--app-total-header-height) + 80px);
   }
 }
 
@@ -215,6 +216,27 @@ html {
   min-height: 1.2em;
 }
 
+.diary-inline-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: none;
+  object-fit: contain;
+  border-radius: 12px;
+  margin: 12px 0;
+  transition: width 180ms ease, outline-color 160ms ease;
+}
+
+.diary-inline-image[data-display-size="small"] {
+  width: min(50%, 260px);
+  margin-right: auto;
+}
+
+.inline-image-toolbar-active .ProseMirror .diary-inline-image.ProseMirror-selectednode {
+  outline: 2px solid #f5c542;
+  outline-offset: 3px;
+}
+
 .ProseMirror h1, .ProseMirror h2, .ProseMirror h3, .ProseMirror h4 {
   font-weight: 600 !important;
   margin-top: 1.2rem !important;
@@ -253,6 +275,49 @@ html {
 .ProseMirror li > p {
   margin-top: 0 !important;
   margin-bottom: 0 !important;
+}
+
+.ProseMirror[data-export-content="true"] ul,
+.ProseMirror[data-export-content="true"] ol {
+  list-style: none !important;
+  padding-left: 0 !important;
+}
+
+.ProseMirror[data-export-content="true"] ol {
+  counter-reset: diary-export-list;
+}
+
+.ProseMirror[data-export-content="true"] li {
+  position: relative;
+  padding-left: 1.45em !important;
+}
+
+.ProseMirror[data-export-content="true"] ol > li {
+  counter-increment: diary-export-list;
+}
+
+.ProseMirror[data-export-content="true"] li::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1.1em;
+  line-height: inherit;
+  font: inherit;
+  color: inherit;
+}
+
+.ProseMirror[data-export-content="true"] ul > li::before {
+  content: "\2022";
+  text-align: center;
+}
+
+.ProseMirror[data-export-content="true"] ol > li::before {
+  content: counter(diary-export-list) ".";
+  text-align: right;
+}
+
+.ProseMirror[data-export-content="true"] li > p:first-child {
+  min-height: 0;
 }
 
 /* Blockquote sizing fixes */

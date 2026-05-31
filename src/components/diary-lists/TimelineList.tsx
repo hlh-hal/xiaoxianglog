@@ -22,7 +22,7 @@ interface ListProps {
 
 export function TimelineList({ journals, isMultiSelectMode, selectedJournals, handlePointerDown, handlePointerMove, handlePointerUp }: ListProps) {
   return (
-    <div className="relative">
+    <div className="relative -ml-3 md:ml-0">
       {/* Vertical Line */}
       <div className="absolute left-[19px] top-4 bottom-4 w-[2px] bg-primary/10 z-0"></div>
 

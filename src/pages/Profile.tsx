@@ -37,6 +37,18 @@ const emptyStats: ProfileStats = {
 let cachedEntries: DiaryEntry[] = [];
 let cachedStats: ProfileStats = emptyStats;
 
+const getDiaryDayKey = (diaryDate: string) => {
+  const date = new Date(diaryDate);
+  if (!Number.isNaN(date.getTime())) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  const datePart = String(diaryDate || '').split('T')[0]?.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : null;
+};
+
 export default function Profile() {
   const navigate = useNavigate();
   const { user, loading } = useAuth();
@@ -100,7 +112,7 @@ export default function Profile() {
 
       let totalWords = 0;
       let totalPhotos = 0;
-      let monthEntries = 0;
+      const monthEntryDays = new Set<string>();
 
       activeEntries.forEach((entry) => {
         const text = stripMarkdown(entry.content || '');
@@ -109,9 +121,11 @@ export default function Profile() {
 
         const entryDate = new Date(entry.diaryDate);
         if (entryDate.getFullYear() === currentYear && entryDate.getMonth() === currentMonth) {
-          monthEntries += 1;
+          const dayKey = getDiaryDayKey(entry.diaryDate);
+          if (dayKey) monthEntryDays.add(dayKey);
         }
       });
+      const monthEntries = monthEntryDays.size;
 
       let totalLikes = 0;
       let leaderboardRank: number | null = null;

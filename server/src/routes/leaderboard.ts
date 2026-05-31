@@ -4,10 +4,34 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { sendNotificationPush } from '../lib/push.js';
 import { paramString } from '../utils/request.js';
 
 const router = Router();
 router.use(requireAuth);
+
+function diaryDayKey(diaryDate: string) {
+  const rawDate = String(diaryDate || '').trim();
+  if (!rawDate) return null;
+  const datePart = rawDate.includes('T') ? rawDate.split('T')[0] : rawDate.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : null;
+}
+
+async function createLeaderboardLikeNotification(userId: string, fromUserId: string) {
+  if (userId === fromUserId) return;
+
+  const notification = await prisma.notification.create({
+    data: {
+      userId,
+      fromUserId,
+      type: 'like',
+    },
+    include: {
+      sender: { select: { nickname: true } },
+    },
+  });
+  sendNotificationPush(notification).catch(error => console.warn('推送排行榜点赞通知失败:', error));
+}
 
 // 获取当前用户的获赞汇总：社区帖子赞 + 评论赞 + 排行榜赞
 router.get('/me/received-likes', async (req: Request, res: Response) => {
@@ -86,24 +110,29 @@ router.get('/', async (req: Request, res: Response) => {
       select: { id: true, nickname: true, avatarUrl: true },
     });
 
-    const counts = await Promise.all(
-      allUserIds.map(async (uid) => {
-        const monthCount = await prisma.diaryEntry.count({
-          where: {
-            userId: uid,
-            status: 'active',
-            isHidden: false,
-            diaryDate: { startsWith: currentYearMonth },
-          },
-        });
-        return {
-          userId: uid,
-          monthCount,
-        };
-      })
-    );
+    const monthEntries = await prisma.diaryEntry.findMany({
+      where: {
+        userId: { in: allUserIds },
+        status: 'active',
+        isHidden: false,
+        diaryDate: { startsWith: currentYearMonth },
+      },
+      select: { userId: true, diaryDate: true },
+    });
+    const countMap = new Map<string, number>();
+    const daysByUser = new Map<string, Set<string>>();
 
-    const countMap = new Map(counts.map(c => [c.userId, c.monthCount]));
+    monthEntries.forEach(entry => {
+      const dayKey = diaryDayKey(entry.diaryDate);
+      if (!dayKey) return;
+      const days = daysByUser.get(entry.userId) || new Set<string>();
+      days.add(dayKey);
+      daysByUser.set(entry.userId, days);
+    });
+
+    allUserIds.forEach(uid => {
+      countMap.set(uid, daysByUser.get(uid)?.size || 0);
+    });
 
     // 统计每个用户获得的点赞数
     const likeCounts = await Promise.all(
@@ -151,6 +180,18 @@ router.post('/:id/like', async (req: Request, res: Response) => {
   try {
     const targetUserId = paramString(req, 'id');
     const fromUserId = req.user!.userId;
+    const action = typeof req.body?.action === 'string' ? req.body.action : 'toggle';
+
+    if (!targetUserId) {
+      res.status(400).json({ error: '缺少目标用户' });
+      return;
+    }
+
+    if (!['like', 'unlike', 'toggle'].includes(action)) {
+      res.status(400).json({ error: '无效的点赞操作' });
+      return;
+    }
+
     const target = await prisma.user.findUnique({
       where: { id: targetUserId },
       select: { id: true },
@@ -164,6 +205,27 @@ router.post('/:id/like', async (req: Request, res: Response) => {
       where: { userId_fromUserId: { userId: targetUserId, fromUserId } }
     });
 
+    if (action === 'like') {
+      if (!existing) {
+        await prisma.leaderboardLike.create({
+          data: { userId: targetUserId, fromUserId }
+        });
+        await createLeaderboardLikeNotification(targetUserId, fromUserId);
+      }
+      res.json({ liked: true });
+      return;
+    }
+
+    if (action === 'unlike') {
+      if (existing) {
+        await prisma.leaderboardLike.delete({
+          where: { id: existing.id }
+        });
+      }
+      res.json({ liked: false });
+      return;
+    }
+
     if (existing) {
       await prisma.leaderboardLike.delete({
         where: { id: existing.id }
@@ -173,6 +235,7 @@ router.post('/:id/like', async (req: Request, res: Response) => {
       await prisma.leaderboardLike.create({
         data: { userId: targetUserId, fromUserId }
       });
+      await createLeaderboardLikeNotification(targetUserId, fromUserId);
       res.json({ liked: true });
     }
   } catch (err: any) {

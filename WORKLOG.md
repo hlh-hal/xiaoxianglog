@@ -1,14 +1,14 @@
 # 小象日志工作日志
 
-这份文档用于解决不同窗口、不同 Agent 接不上上下文的问题。新窗口先读这里，再读 `AGENT.md` 和相关 `.kiro/specs/...`。
+这份文档是旧交接日志和近期索引。新窗口先读 `AGENTS.md`、`vault/TODO.md`、`vault/agent/memory-workflow.md` 和相关 `vault/projects/*.md`，再读这里和相关 `.kiro/specs/...`。
 
-维护原则：只记录重大变更、关键坑、反复纠结过的问题和可复用模式；普通小改不写，避免变成流水账。
+维护原则：有长期价值的交接内容优先写入 `vault/`；这里只记录重大变更、关键坑、反复纠结过的问题和可复用模式索引。普通小改不写，避免变成流水账。
 
 ## 当前项目状态
 
 - 项目定位：小象日志是偏移动端体验的图文日记应用，包含日记编辑、图片、主题背景、导出分享、历史版本、AI 聊天、社区、好友、通知、排行、账号和数据同步。
 - 技术栈：Vite 6、React 19、TypeScript、Tailwind CSS 4、Tiptap、IndexedDB、本地优先同步；后端在 `server/`，使用 Express、TypeScript、Prisma、SQLite。
-- 交接入口：稳定规则看 `AGENT.md`；单个复杂问题的完整分析看 `.kiro/specs/...`；最近发生过什么和哪些坑别重复踩看本文件。
+- 交接入口：稳定规则和持久记忆规则看 `AGENTS.md`；跨会话状态和待办看 `vault/`；单个复杂问题的完整分析看 `.kiro/specs/...`；最近发生过什么和哪些坑别重复踩可看本文件。
 
 ## 最近重大变更
 
@@ -16,7 +16,7 @@
 
 - 新增本文件作为跨窗口交接总账，重点记录功能变更、踩坑记录、反复纠结的问题和模式总结。
 - 维护频率采用“重大变更才更新”：核心功能、接口、数据库、部署、同步、认证、导出、线上配置或高影响 bug 变化时必须补充。
-- `AGENT.md` 继续放稳定开发规范，本文件记录近期上下文和经验沉淀，二者不要互相复制大段内容。
+- `AGENTS.md` 放稳定开发规范和持久记忆规则，本文件记录近期上下文和经验沉淀，二者不要互相复制大段内容。
 
 ### 2026-05-23 日志导出长文失败定位与修复记录
 
@@ -24,6 +24,27 @@
 - 详细规格：`.kiro/specs/diary-export-long-text-fails/`。
 - 关键结论：长日志失败的主因不是“内容太长”，而是长日志更容易包含标题、引用、列表、代码块、链接等元素，触发 Tailwind v4 / typography 的 `oklch(...)` 颜色；`html2canvas@1.4.1` 不支持解析 `oklch`，因此抛错。
 - 已沉淀策略：导出前需要把现代 CSS 颜色函数预处理为 `rgb(...)` / `rgba(...)`，并保留长图 scale 降级作为次级防线。
+
+### 2026-05-24 本地日志文件夹同步修复
+
+- 影响范围：设置页“本地日志保存位置”、网页/Android 本地 Markdown 文件夹同步、回收站文件。
+- 用户现象：Android 文件夹选择器停在手机根目录时提示“无法使用此文件夹”；已授权文件夹里出现 0B `.md` 空壳，且文件夹内容和网页里的日记内容不同步。
+- 修复策略：网页文件系统写入后读回校验，失败时删除空壳；全量同步前清理“用户日志/回收站”中的 0B Markdown；移入/恢复回收站时按当前日记内容重新渲染 Markdown，不再搬运可能过期或为空的旧文件；Android 选择器默认引导到 Documents，减少停在不可选根目录的概率。
+- 验证命令：`npx tsx tests/local-vault-sync.test.ts`、`npm run lint`、`npm run build`、`npx cap sync android`、临时设置 `JAVA_HOME=D:\java\.jdks\openjdk-23.0.2` 后运行 `android/gradlew.bat assembleDebug`。
+
+### 2026-05-25 选择文件夹后历史日志同步卡住修复
+
+- 影响范围：设置页选择“本地日志保存位置”后的历史日志全量同步。
+- 用户现象：从系统文件夹选择器返回后，页面长期停在“处理中...”，用户无法判断同步是否还在进行。
+- 修复策略：选择成功后显示明确进度 `正在同步历史日志 x/y`；`syncAllEntriesToVault` 支持进度回调和每篇重试 2 次；同步前不再递归清理 0B 文件，改为同步完成后非阻塞清理；已有 `vaultPath` / `vaultTrashPath` 时直接覆盖写入，减少目录扫描。
+- 验证命令：`npx tsx tests/local-vault-sync.test.ts`、`npm run lint`、`npm run build`、`npx cap sync android`、临时设置 `JAVA_HOME=D:\java\.jdks\openjdk-23.0.2` 后运行 `android/gradlew.bat assembleDebug`；Puppeteer 模拟 3 篇历史日志和可写文件夹，截图 `codex-vault-history-sync-success.png`。
+
+### 2026-05-26 历史日志批量同步提速与落盘校验
+
+- 影响范围：设置页选择“本地日志保存位置”后的历史日志全量同步、网页/Android 本地 Markdown 文件夹写入。
+- 用户现象：同步计数会走，但速度很慢；结束后用户查看授权文件夹为空，失败感知不明确。
+- 修复策略：新增 `localVaultService.syncEntries()` 批量入口，一次读取/写入 manifest，并按年份缓存已有 Markdown 路径，避免每篇日志反复扫描目录和写 manifest；`diaryService.syncAllEntriesToVault()` 改走批量入口并回写每篇 `vaultPath` / `vaultTrashPath`；设置页把历史同步进度改为顶部常驻条，不再居中遮罩。
+- 验证命令：`npx tsx tests/local-vault-sync.test.ts`、`npm run lint`、`npm run build`；Puppeteer 模拟 36 篇历史日志和可写年份文件夹，确认 36 个非空 Markdown 落盘，截图 `codex-vault-bulk-sync-success.png`。
 
 ## 踩坑记录
 
@@ -44,7 +65,7 @@
 
 - LongCat 线上不直连官方地址，线上小象后端只调本机 CPAMC：`http://127.0.0.1:8317/v1`。
 - 如果 AI 调用失败，先确认 CPAMC 面板进程和 8317 端口，再跑 `npm run doctor:cpamc`。
-- 具体命令和线上路径以 `AGENT.md` 的“线上 CPAMC / CPA 面板”为准。
+- 具体命令和线上路径以 `AGENTS.md` 的“线上 CPAMC / CPA 面板”为准。
 
 ## 反复纠结的问题
 
@@ -60,18 +81,18 @@
 - `WORKLOG.md`：记录跨任务的结论和索引，让新窗口快速知道最近发生了什么。
 - 复杂问题完成后，只把结论、坑、验证方式和 spec 路径摘到本文件，不复制完整设计。
 
-### 什么时候更新 `AGENT.md`
+### 什么时候更新 `AGENTS.md`
 
-- `AGENT.md` 放稳定规则和长期项目约定。
+- `AGENTS.md` 放稳定规则、长期项目约定和持久记忆规则。
 - `WORKLOG.md` 放近期上下文、坑和经验。
-- 如果只是某次任务的经验，不要塞进 `AGENT.md`；只有它变成长期通用规则时才同步过去。
+- 如果只是某次任务的经验，不要塞进 `AGENTS.md`；只有它变成长期通用规则时才同步过去。
 
 ## 模式总结
 
 ### 跨窗口交接模式
 
-1. 新窗口先读 `WORKLOG.md`，了解近期变化、踩坑和当前风险。
-2. 再读 `AGENT.md`，确认稳定开发规范、命令、线上配置。
+1. 新窗口先读 `AGENTS.md`，确认稳定开发规范、命令、线上配置和持久记忆规则。
+2. 再读 `WORKLOG.md`，了解近期变化、踩坑和当前风险。
 3. 如果任务对应已有 spec，再读 `.kiro/specs/<topic>/`。
 4. 开始改代码前，仍要检查相关页面、service、route、schema，不能只凭文档记忆动手。
 

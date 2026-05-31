@@ -8,6 +8,7 @@ import { TimelineList } from '../components/diary-lists/TimelineList';
 import { CardFlowList } from '../components/diary-lists/CardFlowList';
 import { BriefingList } from '../components/diary-lists/BriefingList';
 import { MagazineList } from '../components/diary-lists/MagazineList';
+import { AppToast } from '../components/AppToast';
 
 export type HomeOutletContext = {
   selectedDate: Date | null;
@@ -36,6 +37,8 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
   // Multi-select State
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
   const [selectedJournals, setSelectedJournals] = useState<Set<string>>(new Set());
+  const [isDeletingSelected, setIsDeletingSelected] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const loadData = async () => {
     const data = await diaryService.getActiveEntries();
@@ -284,12 +287,28 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
   };
 
   const handleDeleteSelected = async () => {
-    for (const id of selectedJournals) {
-      await diaryService.moveToTrash(id, 'deleted');
-    }
+    if (selectedJournals.size === 0 || isDeletingSelected) return;
+
+    const selectedIds = Array.from(selectedJournals);
+    const selectedIdSet = new Set(selectedIds);
+
+    setIsDeletingSelected(true);
     setIsMultiSelectMode(false);
     setSelectedJournals(new Set());
-    loadData();
+    setJournals(prev => prev.filter(journal => !selectedIdSet.has(journal.id)));
+
+    try {
+      const count = await diaryService.moveEntriesToTrash(selectedIds, 'deleted');
+      setToastMessage(count > 0 ? `已移入回收站 ${count} 篇` : '没有可删除的日志');
+      await loadData();
+    } catch (error) {
+      console.error('Delete selected journals failed:', error);
+      setToastMessage('删除失败，请重试');
+      await loadData();
+    } finally {
+      setIsDeletingSelected(false);
+      window.setTimeout(() => setToastMessage(null), 2000);
+    }
   };
 
   return (
@@ -317,11 +336,11 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
             </button>
             <button 
               onClick={handleDeleteSelected} 
-              disabled={selectedJournals.size === 0}
+              disabled={selectedJournals.size === 0 || isDeletingSelected}
               className="text-error p-2 flex items-center gap-1 disabled:opacity-50 whitespace-nowrap"
             >
               <Trash2 size={20} />
-              删除
+              {isDeletingSelected ? '删除中' : '删除'}
             </button>
           </div>
         </div>
@@ -393,6 +412,8 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
           </div>
         </div>
       )}
+
+      <AppToast message={toastMessage} />
     </div>
   );
 }

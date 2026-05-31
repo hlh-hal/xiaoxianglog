@@ -72,3 +72,21 @@ Verification:
 - Upload target used the existing FTP deploy flow and completed successfully for 17 files.
 - Live verification: `https://www.xiaoxianglog.cn/` and `/gallery` returned 200 and referenced `assets/index-DdS74eTx.js` plus `assets/index-CzNGCbpK.css`.
 - Remote JS/CSS SHA256 matched local `dist` hashes, confirming the deployed assets are the newly built frontend.
+
+## 2026-05-31 inline image click/focus repair
+
+- Root cause: inline image selection was competing across ProseMirror DOM handlers, `handleClickOn`, and the outer editor `<main>` pointer/click handlers. The old `pointerdown/mousedown/touchstart` path selected the image immediately, while closing the toolbar did not clear the ProseMirror `NodeSelection`, so mobile PWA could show stale yellow outlines, swallow the next text tap, or re-open the keyboard while previewing.
+- Changed image event flow in `src/pages/Editor.tsx`: image `pointerdown/mousedown` now only prevents editor focus/IME; image `pointerup/click` performs the single image selection path and shows the toolbar. The outer `<main>` no longer re-selects images on pointer-up.
+- Added `closeInlineImageToolbar({ clearSelection, blur, focusAt })` so scroll, blur, preview, and text/blank taps can clear image `NodeSelection` back to `TextSelection`. Non-image editor taps now use `focusEditorAtPointWithoutScroll(clientX, clientY)` to put the caret where the user tapped.
+- Changed the yellow selected-image outline in `src/index.css` to require `.inline-image-toolbar-active`, so a stale `ProseMirror-selectednode` class cannot show a yellow border when the toolbar is closed.
+- Kept data behavior unchanged: no change to inline image storage refs/blob URLs, no change to `images` attachments, gallery, community publishing, toolbar button order, or ImageViewer data source.
+
+Verification:
+
+- `npm run build` passed.
+- `npm run lint` could not run because the local environment currently lacks the `tsc` executable (`'tsc' is not recognized...`); no dependency install was performed.
+- Puppeteer mobile smoke on a temporary editor entry: clicked the same inline image 5 times; every click showed the toolbar, editor focus stayed off `.ProseMirror`, and outline was visible only while the toolbar was active.
+- Puppeteer smoke tapped the text below the inline image; toolbar closed, outline became `none`, and `.ProseMirror` regained focus.
+- Puppeteer smoke opened inline image preview; `location.hash` became `#preview`, ImageViewer rendered, editor focus stayed off, and after closing preview the top text, image node, and bottom text remained in place.
+- Success screenshots: `inline-image-click-toolbar-success.png` and `inline-image-click-focus-success.png`.
+- Frontend cloud deploy completed with `deploy-upload.ps1 -Target front`; live `https://xiaoxianglog.cn/` now references `assets/index-Deb1Ma6L.js` and `assets/index-igYhQRrJ.css`, and those remote assets contain the new inline image toolbar/focus repair markers.

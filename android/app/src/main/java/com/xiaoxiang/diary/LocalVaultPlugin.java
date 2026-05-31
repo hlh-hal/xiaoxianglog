@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
+import android.os.Build;
 import android.provider.DocumentsContract;
 import android.util.Base64;
 
@@ -44,6 +45,18 @@ public class LocalVaultPlugin extends Plugin {
         intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         intent.addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+        intent.putExtra("android.content.extra.SHOW_ADVANCED", true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                Uri documentsUri = DocumentsContract.buildTreeDocumentUri(
+                    "com.android.externalstorage.documents",
+                    "primary:Documents"
+                );
+                intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, documentsUri);
+            } catch (Exception ignored) {
+                // Some file pickers ignore or reject initial URI hints.
+            }
+        }
         startActivityForResult(call, intent, "handleChooseVaultDirectory");
     }
 

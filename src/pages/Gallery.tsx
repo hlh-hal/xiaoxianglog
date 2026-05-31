@@ -30,6 +30,16 @@ interface MonthGroup {
 // Cache variables to prevent slow loading flashes
 let cachedGalleryImages: GalleryImage[] | null = null;
 let cachedEntriesRef: any = null;
+let cachedEntriesSignature = '';
+
+function getEntriesSignature(entries: any[]): string {
+  return entries.map(entry => [
+    entry.id,
+    entry.updatedAt,
+    entry.images?.length || 0,
+    entry.content?.length || 0,
+  ].join(':')).join('|');
+}
 
 export default function Gallery() {
   const navigate = useNavigate();
@@ -52,7 +62,8 @@ export default function Gallery() {
         entries = await diaryService.getActiveEntries();
       }
       
-      if (entries === cachedEntriesRef && cachedGalleryImages) {
+      const entriesSignature = getEntriesSignature(entries);
+      if (entries === cachedEntriesRef && cachedGalleryImages && entriesSignature === cachedEntriesSignature) {
         setImages(cachedGalleryImages);
         setLoading(false);
         return;
@@ -68,7 +79,7 @@ export default function Gallery() {
           fullContent = entry.content || '';
         }
         
-        const urls = extractImages(fullContent);
+        const urls = extractImages(fullContent).filter(url => !url.startsWith('diary-image-ref:'));
         
         // Also add images from the entry.images array
         if (entry.images && entry.images.length > 0) {
@@ -97,6 +108,7 @@ export default function Gallery() {
       
       cachedGalleryImages = allImages;
       cachedEntriesRef = entries;
+      cachedEntriesSignature = entriesSignature;
       setImages(allImages);
       setLoading(false);
     };

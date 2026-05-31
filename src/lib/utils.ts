@@ -9,6 +9,12 @@ export function stripAllMarkdown(text: string): string {
   if (!text) return '';
   
   let htmlText = text;
+
+  htmlText = htmlText
+    .replace(/<img\b[^>]*>/gi, '')
+    .replace(/&lt;img\b[\s\S]*?(?:&gt;|$)/gi, '')
+    .replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+/g, '')
+    .replace(/diary-image-ref:[A-Za-z0-9_%.-]+/g, '');
   
   // Convert <ol> structure to include numbers before stripping tags
   htmlText = htmlText.replace(/<ol[^>]*>([\s\S]*?)<\/ol>/gi, (match, inner) => {

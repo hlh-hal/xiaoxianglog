@@ -15,6 +15,7 @@ export const THEME_CONFIG: { solid: ThemeConfig[], landscape: ThemeConfig[] } = 
     { id: 'solid-4', type: 'color', value: '#F5EBEB', name: '樱灰', textColor: '#1C1C1E' },
     { id: 'solid-5', type: 'color', value: '#2C363F', name: '深渊', textColor: '#FFFFFF', isPremium: true },
     { id: 'solid-6', type: 'color', value: '#8A7E72', name: '大地', textColor: '#FFFFFF', isPremium: true },
+    { id: 'solid-midnight-indigo', type: 'color', value: '#26306E', name: '靛蓝', textColor: '#FFFFFF' },
   ],
   landscape: [
     { id: 'sys-ink-plum', type: 'image', value: '/themes/bg-ink-plum.jpg', name: '红梅', textColor: '#1C1C1E' },

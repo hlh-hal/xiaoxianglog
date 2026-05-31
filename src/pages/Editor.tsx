@@ -214,6 +214,12 @@ type InlineImageToolbarState = {
   width: number;
 };
 
+type CloseInlineImageToolbarOptions = {
+  clearSelection?: boolean;
+  blur?: boolean;
+  focusAt?: { x: number; y: number };
+};
+
 type InlineImagePreviewSnapshot = {
   content: string;
   images: string[];
@@ -438,6 +444,7 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
           color: theme.textColor,
         }}>
           <div 
+            data-export-content="true"
             className={`ProseMirror prose prose-headings:font-headline prose-headings:font-bold prose-h1:text-2xl prose-h2:text-xl prose-strong:font-medium prose-a:text-primary max-w-none text-[var(--diary-font-size)] leading-[var(--diary-line-height)] ${theme.textColor.toLowerCase() === '#ffffff' ? 'prose-invert prose-headings:text-white prose-strong:text-white text-white' : 'prose-headings:text-on-surface prose-strong:text-on-surface text-on-surface'}`}
             style={{ 
                fontFamily: 'var(--diary-font-family)',
@@ -1223,9 +1230,48 @@ export default function Editor() {
     });
   }, [getInlineImageToolbarPosition]);
 
-  const closeInlineImageToolbar = useCallback(() => {
+  const closeInlineImageToolbar = useCallback((options: CloseInlineImageToolbarOptions = {}) => {
     inlineImageToolbarRef.current = null;
     setInlineImageToolbar(null);
+
+    if (!options.clearSelection) return;
+
+    const activeEditor = editorInstanceRef.current;
+    const view = activeEditor?.view;
+    if (!activeEditor || !view) return;
+
+    const { state } = activeEditor;
+    const { selection, doc } = state;
+    if (!(selection instanceof NodeSelection) || selection.node.type.name !== 'diaryInlineImage') {
+      if (options.blur) {
+        activeEditor.commands.blur();
+      }
+      return;
+    }
+
+    let nextSelection: ReturnType<typeof TextSelection.near> | null = null;
+    const position = options.focusAt
+      ? view.posAtCoords({ left: options.focusAt.x, top: options.focusAt.y })
+      : null;
+
+    try {
+      if (position) {
+        const safePos = Math.max(0, Math.min(position.pos, doc.content.size));
+        nextSelection = TextSelection.near(doc.resolve(safePos));
+      } else {
+        const safePos = Math.max(0, Math.min(selection.to, doc.content.size));
+        nextSelection = TextSelection.near(doc.resolve(safePos), 1);
+      }
+    } catch (error) {
+      console.warn('Failed to clear inline image selection:', error);
+    }
+
+    if (nextSelection) {
+      view.dispatch(state.tr.setSelection(nextSelection));
+    }
+    if (options.blur) {
+      activeEditor.commands.blur();
+    }
   }, []);
 
   const blurEditorForInlineImageToolbar = useCallback(() => {
@@ -1243,6 +1289,13 @@ export default function Editor() {
       activeElement.blur();
     }
     editorDom?.blur();
+  }, []);
+
+  const brieflySuppressEditorClick = useCallback(() => {
+    suppressNextEditorClickRef.current = true;
+    window.setTimeout(() => {
+      suppressNextEditorClickRef.current = false;
+    }, 120);
   }, []);
 
   const findInlineImageNodePos = useCallback((img: HTMLImageElement) => {
@@ -1591,7 +1644,7 @@ export default function Editor() {
   const isDarkBg = selectedTheme 
     ? ['#E8EDF2', '#E8EEF8', '#FFFFFF'].includes(selectedTheme.textColor)
     : contrastColor === '#FFFFFF';
-  const handleInlineImagePress = useCallback((event: Event, shouldPreventDefault = true) => {
+  const preventInlineImageFocus = useCallback((event: Event, shouldPreventDefault = true) => {
     const target = event.target as HTMLElement | null;
     const img = target?.closest('img[data-diary-inline-image]') as HTMLImageElement | null;
     if (!img) return false;
@@ -1600,14 +1653,29 @@ export default function Editor() {
       event.preventDefault();
     }
     event.stopPropagation();
+    return true;
+  }, []);
+
+  const selectInlineImageFromEvent = useCallback((event: Event, shouldPreventDefault = true) => {
+    const target = event.target as HTMLElement | null;
+    const img = target?.closest('img[data-diary-inline-image]') as HTMLImageElement | null;
+    if (!img) return false;
+
+    if (shouldPreventDefault && event.cancelable) {
+      event.preventDefault();
+    }
+    event.stopPropagation();
+    brieflySuppressEditorClick();
     selectInlineImageFromElement(img);
     return true;
-  }, [selectInlineImageFromElement]);
+  }, [brieflySuppressEditorClick, selectInlineImageFromElement]);
 
   const lockEditorScrollDomEvents = {
-    pointerdown: (_view: unknown, event: PointerEvent) => handleInlineImagePress(event),
-    mousedown: (_view: unknown, event: MouseEvent) => handleInlineImagePress(event),
-    touchstart: (_view: unknown, event: TouchEvent) => handleInlineImagePress(event, false),
+    pointerdown: (_view: unknown, event: PointerEvent) => preventInlineImageFocus(event),
+    mousedown: (_view: unknown, event: MouseEvent) => preventInlineImageFocus(event),
+    touchstart: (_view: unknown, event: TouchEvent) => preventInlineImageFocus(event, false),
+    pointerup: (_view: unknown, event: PointerEvent) => selectInlineImageFromEvent(event),
+    click: (_view: unknown, event: MouseEvent) => selectInlineImageFromEvent(event),
     beforeinput: () => {
       lockScrollForEditorInput();
       return false;
@@ -1696,7 +1764,7 @@ export default function Editor() {
         keepInlineImageToolbarOnBlurRef.current = false;
         return;
       }
-      closeInlineImageToolbar();
+      closeInlineImageToolbar({ clearSelection: true, blur: true });
     },
     editorProps: {
       attributes: {
@@ -1713,15 +1781,14 @@ export default function Editor() {
 
         event.preventDefault();
         event.stopPropagation();
-        view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, nodePos)));
-        showInlineImageToolbar(nodePos, node.attrs, imageElement);
-        blurEditorForInlineImageToolbar();
+        brieflySuppressEditorClick();
+        selectInlineImageFromElement(imageElement);
         return true;
       },
       handleClick: (_view, _pos, event) => {
         const target = event.target as HTMLElement | null;
         if (!target?.closest('img[data-diary-inline-image]') && !target?.closest('[data-inline-image-toolbar]')) {
-          closeInlineImageToolbar();
+          closeInlineImageToolbar({ clearSelection: true, focusAt: { x: event.clientX, y: event.clientY } });
         }
         return false;
       },
@@ -1788,15 +1855,14 @@ export default function Editor() {
 
             event.preventDefault();
             event.stopPropagation();
-            view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, nodePos)));
-            showInlineImageToolbar(nodePos, node.attrs, imageElement);
-            blurEditorForInlineImageToolbar();
+            brieflySuppressEditorClick();
+            selectInlineImageFromElement(imageElement);
             return true;
           },
           handleClick: (_view, _pos, event) => {
             const target = event.target as HTMLElement | null;
             if (!target?.closest('img[data-diary-inline-image]') && !target?.closest('[data-inline-image-toolbar]')) {
-              closeInlineImageToolbar();
+              closeInlineImageToolbar({ clearSelection: true, focusAt: { x: event.clientX, y: event.clientY } });
             }
             return false;
           },
@@ -1804,7 +1870,7 @@ export default function Editor() {
         }
       });
     }
-  }, [isDarkBg, editor, showInlineImageToolbar, closeInlineImageToolbar, blurEditorForInlineImageToolbar, handleInlineImagePress]);
+  }, [isDarkBg, editor, closeInlineImageToolbar, brieflySuppressEditorClick, selectInlineImageFromElement, preventInlineImageFocus, selectInlineImageFromEvent]);
 
   // Ensure toolbar syncs with current selection
   // Removed custom useEffect handlers because onSelectionUpdate and onTransaction are initialized via useEditor
@@ -2431,7 +2497,7 @@ export default function Editor() {
     if (!inlineImageToolbar || !editor) return;
     const node = editor.state.doc.nodeAt(inlineImageToolbar.pos);
     if (!node || node.type.name !== 'diaryInlineImage') {
-      closeInlineImageToolbar();
+      closeInlineImageToolbar({ clearSelection: true, blur: true });
       return;
     }
 
@@ -2489,7 +2555,7 @@ export default function Editor() {
     setContent(currentContent);
     activeEditor.setEditable(false);
     activeEditor.commands.blur();
-    closeInlineImageToolbar();
+    closeInlineImageToolbar({ clearSelection: true, blur: true });
     blurEditorForInlineImageToolbar();
     setIsFocused(false);
 
@@ -2507,7 +2573,7 @@ export default function Editor() {
     if (!inlineImageToolbar || !editor) return;
     const node = editor.state.doc.nodeAt(inlineImageToolbar.pos);
     if (!node || node.type.name !== 'diaryInlineImage') {
-      closeInlineImageToolbar();
+      closeInlineImageToolbar({ clearSelection: true, blur: true });
       return;
     }
 
@@ -2751,15 +2817,15 @@ export default function Editor() {
 
       <main
         ref={editorScrollRef}
-        className="fixed inset-x-0 top-0 bottom-0 z-10 overflow-y-auto overscroll-contain"
+        className={`fixed inset-x-0 top-0 bottom-0 z-10 overflow-y-auto overscroll-contain ${inlineImageToolbar ? 'inline-image-toolbar-active' : ''}`}
         style={editorScrollStyle}
         onTouchMove={() => {
           stopInputScrollLock();
-          closeInlineImageToolbar();
+          closeInlineImageToolbar({ clearSelection: true, blur: true });
         }}
         onWheel={() => {
           stopInputScrollLock();
-          closeInlineImageToolbar();
+          closeInlineImageToolbar({ clearSelection: true, blur: true });
         }}
         onPointerMove={updateTapScrollLockMove}
         onPointerDown={(e) => {
@@ -2770,8 +2836,7 @@ export default function Editor() {
           if (img) {
             e.preventDefault();
             e.stopPropagation();
-            suppressNextEditorClickRef.current = true;
-            selectInlineImageFromElement(img);
+            brieflySuppressEditorClick();
             stopTapScrollLock();
             return;
           }
@@ -2786,27 +2851,35 @@ export default function Editor() {
           if (isBackgroundSelectorOpen) {
             setIsBackgroundSelectorOpen(false);
           }
-          if (!clickedInlineImage) {
-            closeInlineImageToolbar();
-          }
-          if (suppressNextEditorClickRef.current) {
-            suppressNextEditorClickRef.current = false;
-            return;
-          }
           if (clickedInlineImage) {
+            e.preventDefault();
+            e.stopPropagation();
+            suppressNextEditorClickRef.current = false;
             blurEditorForInlineImageToolbar();
             return;
           }
+          closeInlineImageToolbar({ clearSelection: true, focusAt: { x: e.clientX, y: e.clientY } });
+          if (suppressNextEditorClickRef.current) {
+            suppressNextEditorClickRef.current = false;
+          }
           if (!isEditing) {
             setIsEditing(true);
-            editor?.commands.focus();
-            setTimeout(() => editor?.commands.focus(), 10);
+            setTimeout(() => {
+              if (!focusEditorAtPointWithoutScroll(e.clientX, e.clientY)) {
+                editor?.commands.focus(undefined, { scrollIntoView: false });
+              }
+            }, 10);
           } else {
             // 鍙湁褰撶偣鍑诲彂鐢熷湪缂栬緫鍣ㄥ唴瀹瑰尯鍩熷唴鏃舵墠 re-focus锛?
             // 閬垮厤鐐瑰嚮搴曢儴绌虹櫧鍖哄煙鏃惰Е鍙?scrollIntoView 鎶婇〉闈㈣烦鍥炲厜鏍囦綅缃€?
             const editorEl = (e.currentTarget as HTMLElement).querySelector('.ProseMirror');
-            if (editorEl && editorEl.contains(e.target as Node)) {
-              editor?.commands.focus(undefined, { scrollIntoView: false });
+            const target = e.target as HTMLElement;
+            const isEditorTap = Boolean(editorEl && editorEl.contains(e.target as Node));
+            const isBlankSurfaceTap = target === e.currentTarget || target.dataset.editorBlankSurface === 'true';
+            if (isEditorTap || isBlankSurfaceTap) {
+              if (!focusEditorAtPointWithoutScroll(e.clientX, e.clientY)) {
+                editor?.commands.focus(undefined, { scrollIntoView: false });
+              }
             }
           }
         }}

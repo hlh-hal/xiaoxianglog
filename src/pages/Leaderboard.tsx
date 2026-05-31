@@ -39,6 +39,18 @@ const setFriendStatus = (userId: string, status: string) => {
   localStorage.setItem('xiang_friend_relations', JSON.stringify(relations));
 };
 
+const getDiaryDayKey = (diaryDate: string) => {
+  const date = new Date(diaryDate);
+  if (!Number.isNaN(date.getTime())) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  const datePart = String(diaryDate || '').split('T')[0]?.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : null;
+};
+
 const highlightKeyword = (text: string, keyword: string): React.ReactNode => {
   if (!keyword) return text;
   const idx = text.toLowerCase().indexOf(keyword.toLowerCase());
@@ -187,10 +199,15 @@ export default function Leaderboard() {
         const currentYear = now.getFullYear();
         const currentMonth = now.getMonth();
         const localEntries = await diaryService.getActiveEntries();
-        localMonthCount = localEntries.filter(entry => {
+        const localMonthDays = new Set<string>();
+        localEntries.forEach(entry => {
           const entryDate = new Date(entry.diaryDate);
-          return entryDate.getFullYear() === currentYear && entryDate.getMonth() === currentMonth;
-        }).length;
+          if (entryDate.getFullYear() === currentYear && entryDate.getMonth() === currentMonth) {
+            const dayKey = getDiaryDayKey(entry.diaryDate);
+            if (dayKey) localMonthDays.add(dayKey);
+          }
+        });
+        localMonthCount = localMonthDays.size;
 
         const normalizedUsers = (allUsers.length > 0
           ? allUsers.map(item => item.isCurrentUser
@@ -274,7 +291,24 @@ export default function Leaderboard() {
     );
 
     try {
-      await api.post(`/leaderboard/${userId}/like`);
+      const result = await api.post<{ liked?: boolean }>(`/leaderboard/${userId}/like`, {
+        action: newIsLiked ? 'like' : 'unlike',
+      });
+      const likedByServer = result.liked ?? newIsLiked;
+      if (likedByServer !== newIsLiked) {
+        setLikesState(prev => ({ ...prev, [userId]: likedByServer }));
+        setUsers(currentUsers =>
+          currentUsers.map(u => {
+            if (u.id !== userId) return u;
+            const nextLikes = Math.max(0, u.likes + (likedByServer ? 1 : -1));
+            return {
+              ...u,
+              likes: nextLikes,
+              likedByMe: likedByServer,
+            };
+          })
+        );
+      }
     } catch (e) {
       // Revert optimism if failed
       setLikesState(prev => ({ ...prev, [userId]: isCurrentlyLiked }));

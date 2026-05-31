@@ -88,6 +88,11 @@ export default function ImageViewer({ images, initialIndex, onClose, onChange }:
   const initializedRef = useRef(false);
 
   useLayoutEffect(() => {
+    const activeElement = document.activeElement as HTMLElement | null;
+    activeElement?.blur?.();
+  }, []);
+
+  useLayoutEffect(() => {
     if (containerRef.current && !initializedRef.current) {
       const container = containerRef.current;
       // Scroll to initial index instantly on mount
@@ -114,11 +119,17 @@ export default function ImageViewer({ images, initialIndex, onClose, onChange }:
 
   return (
     <motion.div 
+      data-testid="image-viewer"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.2 }}
       className="fixed inset-0 z-[200] bg-black/95 overflow-hidden flex flex-col"
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        const activeElement = document.activeElement as HTMLElement | null;
+        activeElement?.blur?.();
+      }}
     >
       <div className="absolute top-4 right-4 z-[210]">
         <button 

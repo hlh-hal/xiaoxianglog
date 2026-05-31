@@ -14,14 +14,19 @@ import {
   resolveUncertainDates,
   saveParsedEntries,
 } from '../utils/importExport';
+import { downloadBlob } from '../utils/exportFile';
 import {
   cancelDailyReminder,
   checkBrowserNotificationPermission,
+  ensurePwaPushSubscriptionWithReason,
+  getServerNotificationPreferences,
   getBrowserNotificationPermission,
   getNotificationUnavailableReason,
+  getRandomDailyReminderBody,
   openNotificationPermissionSettings,
   requestBrowserNotificationPermission,
   scheduleDailyReminder,
+  updateServerNotificationPreferences,
 } from '../utils/notify';
 
 type PendingNotificationToggle =
@@ -30,7 +35,21 @@ type PendingNotificationToggle =
   | { type: 'friendRequest' };
 
 const REMINDER_NOTIFICATION_TITLE = '小象日志';
-const REMINDER_NOTIFICATION_BODY = '该写今天的日记啦，记录生活的美好 🐘';
+
+function getTodayReminderStorageKey(reminderTime: string): string {
+  const now = new Date();
+  const today = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
+  return `xiang_last_remind_${today}_${reminderTime}`;
+}
+
+function clearTodayLocalReminderState(reminderTime: string): void {
+  localStorage.removeItem('last_remind_date');
+  localStorage.removeItem(getTodayReminderStorageKey(reminderTime));
+}
 
 export default function Settings() {
   const navigate = useNavigate();
@@ -42,11 +61,14 @@ export default function Settings() {
   const [feedbackType, setFeedbackType] = useState<'problem' | 'suggestion' | null>(null);
   const [feedbackText, setFeedbackText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('处理中...');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [importData, setImportData] = useState<ParsedEntry[] | null>(null);
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
+  const [vaultSyncProgress, setVaultSyncProgress] = useState<{ done: number; total: number; title: string } | null>(null);
   const [permissionFeatureName, setPermissionFeatureName] = useState('通知功能');
   const [pendingNotificationToggle, setPendingNotificationToggle] = useState<PendingNotificationToggle | null>(null);
+  const [notificationBusyType, setNotificationBusyType] = useState<PendingNotificationToggle['type'] | null>(null);
   const [notifyEnabled, setNotifyEnabled] = useState(
     () => localStorage.getItem('setting_notify_enabled') !== 'false' && getBrowserNotificationPermission() === 'granted',
   );
@@ -79,6 +101,14 @@ export default function Settings() {
     localStorage.setItem(key, String(enabled));
   };
 
+  const syncPushSubscription = async () => {
+    const result = await ensurePwaPushSubscriptionWithReason();
+    if (result.ok === false) {
+      showToast(result.reason);
+    }
+    return result.ok;
+  };
+
   const handleFontSettingsChange = (newSettings: FontSettings) => {
     setFontSettings(newSettings);
     settingsService.saveFontSettings(newSettings);
@@ -104,20 +134,49 @@ export default function Settings() {
     }).catch(error => console.warn('Failed to check notification permission:', error));
   }, []);
 
+  useEffect(() => {
+    const loadServerNotificationState = async () => {
+      const [preference, permission] = await Promise.all([
+        getServerNotificationPreferences(),
+        checkBrowserNotificationPermission(),
+      ]);
+      if (!preference) return;
+      const notificationAllowed = permission === 'granted';
+
+      setSettings(settingsService.saveSettings({
+        reminderEnabled: preference.dailyReminderEnabled && notificationAllowed,
+        reminderTime: preference.dailyReminderTime,
+      }));
+      updateLocalNotificationSetting('setting_notify_enabled', setNotifyEnabled, preference.socialNotifyEnabled && notificationAllowed);
+      updateLocalNotificationSetting('setting_friend_request_enabled', setFriendRequestEnabled, preference.friendRequestNotifyEnabled && notificationAllowed);
+    };
+
+    loadServerNotificationState().catch(error => console.warn('Failed to load server notification preferences:', error));
+  }, []);
+
   const applyPendingNotificationToggle = (pending: PendingNotificationToggle | null) => {
     if (!pending) return;
 
     if (pending.type === 'reminder') {
+      clearTodayLocalReminderState(settings.reminderTime);
       updateSetting('reminderEnabled', true);
+      updateServerNotificationPreferences({
+        dailyReminderEnabled: true,
+        dailyReminderTime: settings.reminderTime,
+      }).catch(error => console.warn('Failed to sync reminder preference:', error));
       return;
     }
 
     if (pending.type === 'notify') {
       updateLocalNotificationSetting('setting_notify_enabled', setNotifyEnabled, true);
+      updateServerNotificationPreferences({ socialNotifyEnabled: true })
+        .catch(error => console.warn('Failed to sync notification preference:', error));
       return;
     }
 
     updateLocalNotificationSetting('setting_friend_request_enabled', setFriendRequestEnabled, true);
+    updateServerNotificationPreferences({ friendRequestNotifyEnabled: true })
+      .catch(error => console.warn('Failed to sync friend request preference:', error));
   };
 
   const ensureNotificationPermission = async (featureName: string, pendingToggle: PendingNotificationToggle) => {
@@ -142,23 +201,79 @@ export default function Settings() {
 
   const handleOpenNotificationSettings = async () => {
     const opened = await openNotificationPermissionSettings();
-    if (!opened) {
+    if (opened) {
+      showToast('已尝试打开通知权限设置，请把通知改为允许');
+    } else {
       showToast('请在系统或浏览器设置中手动开启通知权限');
     }
   };
 
+  const handleRetryNotificationPermission = async () => {
+    const permission = await requestBrowserNotificationPermission();
+    if (permission === 'granted') {
+      const pushReady = await syncPushSubscription().catch((error) => {
+        console.warn('Failed to subscribe push:', error);
+        showToast(error?.message || '开启后台推送失败，请稍后再试');
+        return false;
+      });
+      if (pushReady) {
+        applyPendingNotificationToggle(pendingNotificationToggle);
+        if (pendingNotificationToggle?.type === 'reminder') {
+          await scheduleDailyReminder(settings.reminderTime, REMINDER_NOTIFICATION_TITLE, getRandomDailyReminderBody())
+            .catch(error => console.warn('Schedule reminder failed:', error));
+        }
+        setPendingNotificationToggle(null);
+        setActiveSheet(null);
+        showToast('通知权限已开启');
+      }
+      return;
+    }
+
+    if (permission === 'denied') {
+      const opened = await openNotificationPermissionSettings();
+      showToast(opened ? '通知已被拒绝，已尝试打开权限设置' : '通知已被拒绝，请在浏览器站点设置中改为允许');
+      return;
+    }
+
+    if (permission === 'insecure') {
+      showToast(getNotificationUnavailableReason() || '当前地址无法开启通知权限');
+      return;
+    }
+
+    showToast(getNotificationUnavailableReason() || '请在弹出的授权框中选择允许');
+  };
+
   const handleReminderToggle = async (enabled: boolean) => {
+    if (notificationBusyType) return;
+    setNotificationBusyType('reminder');
+    try {
     if (!enabled) {
       updateSetting('reminderEnabled', false);
       await cancelDailyReminder().catch(error => console.warn('Cancel reminder failed:', error));
+      await updateServerNotificationPreferences({ dailyReminderEnabled: false })
+        .catch(error => console.warn('Failed to sync reminder preference:', error));
       return;
     }
 
     const allowed = await ensureNotificationPermission('每日写日记提醒', { type: 'reminder' });
-    updateSetting('reminderEnabled', allowed);
-    if (allowed) {
-      await scheduleDailyReminder(settings.reminderTime, REMINDER_NOTIFICATION_TITLE, REMINDER_NOTIFICATION_BODY)
+    const pushReady = allowed ? await syncPushSubscription() : false;
+    updateSetting('reminderEnabled', allowed && pushReady);
+    if (allowed && pushReady) {
+      clearTodayLocalReminderState(settings.reminderTime);
+      await scheduleDailyReminder(settings.reminderTime, REMINDER_NOTIFICATION_TITLE, getRandomDailyReminderBody())
         .catch(error => console.warn('Schedule reminder failed:', error));
+      await updateServerNotificationPreferences({
+        dailyReminderEnabled: true,
+        dailyReminderTime: settings.reminderTime,
+      }).catch(error => console.warn('Failed to sync reminder preference:', error));
+      showToast('写日记提醒已开启');
+    }
+    } catch (error: any) {
+      console.warn('Failed to toggle reminder notification:', error);
+      updateSetting('reminderEnabled', false);
+      showToast(error?.message || '开启写日记提醒失败，请稍后再试');
+    } finally {
+      setNotificationBusyType(null);
     }
   };
 
@@ -166,8 +281,13 @@ export default function Settings() {
     const updated = settingsService.saveSettings({ reminderTime: value });
     setSettings(updated);
     if (updated.reminderEnabled) {
-      await scheduleDailyReminder(value, REMINDER_NOTIFICATION_TITLE, REMINDER_NOTIFICATION_BODY)
+      clearTodayLocalReminderState(value);
+      await scheduleDailyReminder(value, REMINDER_NOTIFICATION_TITLE, getRandomDailyReminderBody())
         .catch(error => console.warn('Schedule reminder failed:', error));
+      await updateServerNotificationPreferences({
+        dailyReminderEnabled: true,
+        dailyReminderTime: value,
+      }).catch(error => console.warn('Failed to sync reminder time:', error));
     }
   };
 
@@ -177,8 +297,17 @@ export default function Settings() {
     storageKey: string,
     setter: React.Dispatch<React.SetStateAction<boolean>>,
   ) => {
+    const busyType = storageKey === 'setting_notify_enabled' ? 'notify' : 'friendRequest';
+    if (notificationBusyType) return;
+    setNotificationBusyType(busyType);
+    try {
     if (!enabled) {
       updateLocalNotificationSetting(storageKey, setter, false);
+      await updateServerNotificationPreferences(
+        storageKey === 'setting_notify_enabled'
+          ? { socialNotifyEnabled: false }
+          : { friendRequestNotifyEnabled: false },
+      ).catch(error => console.warn('Failed to sync notification preference:', error));
       return;
     }
 
@@ -186,7 +315,23 @@ export default function Settings() {
       featureName,
       storageKey === 'setting_notify_enabled' ? { type: 'notify' } : { type: 'friendRequest' },
     );
-    updateLocalNotificationSetting(storageKey, setter, allowed);
+    const pushReady = allowed ? await syncPushSubscription() : false;
+    updateLocalNotificationSetting(storageKey, setter, allowed && pushReady);
+    if (allowed && pushReady) {
+      await updateServerNotificationPreferences(
+        storageKey === 'setting_notify_enabled'
+          ? { socialNotifyEnabled: true }
+          : { friendRequestNotifyEnabled: true },
+      ).catch(error => console.warn('Failed to sync notification preference:', error));
+      showToast(`${featureName}已开启`);
+    }
+    } catch (error: any) {
+      console.warn('Failed to toggle notification preference:', error);
+      updateLocalNotificationSetting(storageKey, setter, false);
+      showToast(error?.message || `${featureName}开启失败，请稍后再试`);
+    } finally {
+      setNotificationBusyType(null);
+    }
   };
 
   const handleExport = async (formatName: string) => {
@@ -208,20 +353,76 @@ export default function Settings() {
     }
   };
 
-  const handleChooseVaultDirectory = async () => {
-    if (!localVaultService.isSupported()) {
-      const status = await refreshVaultStatus();
-      showToast(status.unavailableReason || '当前环境不支持选择本地日志文件夹');
+  const handleDownloadVaultPackage = async () => {
+    if (vaultSyncProgress) {
+      showToast('本地日志包还在生成，请稍等完成');
       return;
     }
 
-    setIsLoading(true);
+    const title = '正在生成本地日志包';
+    setVaultSyncProgress({ done: 0, total: 0, title });
+
+    try {
+      const entries = await diaryService.getAllEntries();
+      if (entries.length === 0) {
+        showToast('暂无可保存的日志');
+        return;
+      }
+
+      const result = await localVaultService.createVaultPackage(entries, {
+        onProgress: (done, total) => setVaultSyncProgress({ done, total, title }),
+      });
+      setVaultSyncProgress({ done: result.entryCount, total: result.entryCount, title });
+      downloadBlob(result.fileName, result.blob);
+      await new Promise(resolve => window.setTimeout(resolve, 500));
+      showToast(`已生成本地日志包，共 ${result.entryCount} 篇`);
+    } catch (error: any) {
+      console.error(error);
+      showToast(error?.message || '生成本地日志包失败');
+    } finally {
+      setVaultSyncProgress(null);
+    }
+  };
+
+  const handleChooseVaultDirectory = async () => {
+    if (vaultSyncProgress) {
+      showToast('历史日志还在同步，请稍等完成');
+      return;
+    }
+
+    const capability = localVaultService.getVaultCapability();
+    if (capability.mode === 'archive-download') {
+      await handleDownloadVaultPackage();
+      return;
+    }
+    if (capability.mode === 'unsupported') {
+      showToast(capability.reason || '当前浏览器不支持网页申请文件夹写入权限');
+      return;
+    }
+
     try {
       const status = await localVaultService.chooseVaultDirectory();
       setVaultStatus(status);
       if (status.available) {
-        const result = await diaryService.syncAllEntriesToVault();
-        showToast(result.count > 0 ? `本地日志文件夹已开启，已同步 ${result.count} 篇` : '本地日志文件夹已开启');
+        setLoadingMessage('正在同步历史日志 0/0');
+        setVaultSyncProgress({ done: 0, total: 0, title: '正在同步历史日志' });
+        const result = await diaryService.syncAllEntriesToVault({
+          onProgress: (done, total) => {
+            setVaultSyncProgress({ done, total, title: '正在同步历史日志' });
+            setLoadingMessage(`正在同步历史日志 ${done}/${total}`);
+          },
+        });
+        setLoadingMessage(`正在同步历史日志 ${result.total}/${result.total}`);
+        setVaultSyncProgress({ done: result.total, total: result.total, title: '正在同步历史日志' });
+        await new Promise(resolve => window.setTimeout(resolve, 250));
+
+        if (result.failCount > 0) {
+          showToast(`历史日志同步完成 ${result.count}/${result.total} 篇，失败 ${result.failCount} 篇，请重试`);
+        } else if (result.total > 0) {
+          showToast(`历史日志已同步完成，共 ${result.count} 篇`);
+        } else {
+          showToast('本地日志文件夹已开启，暂无历史日志需要同步');
+        }
       } else {
         showToast(status.unavailableReason || '文件夹授权未完成');
       }
@@ -229,6 +430,7 @@ export default function Settings() {
       console.error(error);
       showToast(error?.message || '选择本地日志文件夹失败');
     } finally {
+      setVaultSyncProgress(null);
       setIsLoading(false);
     }
   };
@@ -273,6 +475,7 @@ export default function Settings() {
       showToast(error?.message || '账号同步失败，请稍后重试');
     } finally {
       setIsLoading(false);
+      setLoadingMessage('处理中...');
     }
   };
 
@@ -377,22 +580,44 @@ export default function Settings() {
   };
 
   const getVaultDescription = () => {
+    const capability = localVaultService.getVaultCapability();
+    if (capability.mode === 'archive-download') {
+      return capability.reason || '手机 PWA 将保存为本地日志包，下载后可解压成文件夹结构';
+    }
     if (!vaultStatus) return '正在检查本地日志保存能力';
     if (vaultStatus.available) return vaultStatus.displayPath || '已授权本地文件夹';
     if (vaultStatus.supported) return vaultStatus.unavailableReason || '尚未开启本地保存';
     return vaultStatus.unavailableReason || '当前浏览器不支持文件夹写入，可使用导入/导出';
   };
 
-  const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) => (
+  const Toggle = ({
+    checked,
+    onChange,
+    disabled = false,
+    loading = false,
+  }: {
+    checked: boolean;
+    onChange: (checked: boolean) => void;
+    disabled?: boolean;
+    loading?: boolean;
+  }) => (
     <button
       type="button"
       aria-pressed={checked}
+      aria-busy={loading}
+      disabled={disabled || loading}
       onClick={() => onChange(!checked)}
-      className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 ${checked ? 'bg-primary' : 'bg-surface-container-highest'}`}
+      className={`w-11 h-6 shrink-0 rounded-full p-1 transition-colors duration-300 disabled:opacity-70 disabled:active:scale-100 ${checked ? 'bg-primary' : 'bg-surface-container-highest'}`}
     >
-      <span
-        className={`block w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-300 ${checked ? 'translate-x-5' : 'translate-x-0'}`}
-      />
+      {loading ? (
+        <span className={`flex w-4 h-4 items-center justify-center transition-transform duration-300 ${checked ? 'translate-x-5' : 'translate-x-0'}`}>
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+        </span>
+      ) : (
+        <span
+          className={`block w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-300 ${checked ? 'translate-x-5' : 'translate-x-0'}`}
+        />
+      )}
     </button>
   );
 
@@ -428,15 +653,48 @@ export default function Settings() {
     );
   };
 
+  const vaultCapability = localVaultService.getVaultCapability();
+  const isVaultArchiveMode = vaultCapability.mode === 'archive-download';
+
   return (
     <div className="min-h-screen bg-surface text-on-surface font-body pb-10 relative animate-in fade-in slide-in-from-right-8 duration-300 ease-out">
       <AppToast message={toastMessage} />
+
+      {vaultSyncProgress && (
+        <div
+          data-testid="vault-sync-progress"
+          className="fixed left-0 right-0 z-[95] px-4 pointer-events-none"
+          style={{ top: 'max(0.75rem, var(--app-safe-top))' }}
+        >
+          <div className="mx-auto w-full max-w-md rounded-2xl bg-surface/95 shadow-[0_10px_30px_rgba(47,52,46,0.16)] border border-primary/15 px-4 py-3 backdrop-blur-md">
+            <div className="flex items-center justify-between gap-3 text-sm font-medium text-on-surface">
+              <span className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 text-primary animate-spin" />
+                {vaultSyncProgress.title}
+              </span>
+              <span className="text-primary tabular-nums">
+                {vaultSyncProgress.done}/{vaultSyncProgress.total}
+              </span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-container-high">
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-300"
+                style={{
+                  width: `${vaultSyncProgress.total > 0
+                    ? Math.min(100, Math.round((vaultSyncProgress.done / vaultSyncProgress.total) * 100))
+                    : 8}%`,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {isLoading && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/20 backdrop-blur-sm">
           <div className="bg-surface p-4 rounded-2xl shadow-xl flex flex-col items-center gap-3">
             <Loader2 className="w-8 h-8 text-primary animate-spin" />
-            <span className="text-sm font-medium text-on-surface">处理中...</span>
+            <span className="text-sm font-medium text-on-surface">{loadingMessage}</span>
           </div>
         </div>
       )}
@@ -466,7 +724,12 @@ export default function Settings() {
           <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(47,52,46,0.02)] overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-surface-container/50">
               <span className="text-[15px] font-medium">每日写日记提醒</span>
-              <Toggle checked={settings.reminderEnabled} onChange={handleReminderToggle} />
+              <Toggle
+                checked={settings.reminderEnabled}
+                onChange={handleReminderToggle}
+                loading={notificationBusyType === 'reminder'}
+                disabled={notificationBusyType !== null && notificationBusyType !== 'reminder'}
+              />
             </div>
             <button
               className="w-full flex items-center justify-between px-5 py-4 active:bg-surface-container-low transition-colors duration-200 disabled:opacity-50"
@@ -495,9 +758,11 @@ export default function Settings() {
               <Toggle
                 checked={notifyEnabled}
                 onChange={(value) => handleNotificationToggle(value, '通知提示', 'setting_notify_enabled', setNotifyEnabled)}
+                loading={notificationBusyType === 'notify'}
+                disabled={notificationBusyType !== null && notificationBusyType !== 'notify'}
               />
             </div>
-            <div className="flex items-center justify-between px-5 py-4">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-surface-container/50">
               <div className="flex flex-col items-start gap-1">
                 <span className="text-[15px] font-medium">好友申请提示</span>
                 <span className="text-xs text-on-surface-variant">
@@ -507,6 +772,8 @@ export default function Settings() {
               <Toggle
                 checked={friendRequestEnabled}
                 onChange={(value) => handleNotificationToggle(value, '好友申请提示', 'setting_friend_request_enabled', setFriendRequestEnabled)}
+                loading={notificationBusyType === 'friendRequest'}
+                disabled={notificationBusyType !== null && notificationBusyType !== 'friendRequest'}
               />
             </div>
           </div>
@@ -529,12 +796,19 @@ export default function Settings() {
               <span className="text-[15px] font-medium">退出即保存</span>
               <Toggle checked={settings.saveOnExit} onChange={(value) => updateSetting('saveOnExit', value)} />
             </div>
-            <div className="flex items-center justify-between px-5 py-4">
-              <div className="flex flex-col items-start">
+            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-surface-container/50">
+              <div className="flex min-w-0 flex-1 flex-col items-start">
                 <span className="text-[15px] font-medium">自动调整时间</span>
                 <span className="text-[11px] text-on-surface-variant/70">中午12点之前记录则自动转为前一天日记</span>
               </div>
               <Toggle checked={settings.autoAdjustTime} onChange={(value) => updateSetting('autoAdjustTime', value)} />
+            </div>
+            <div className="flex items-center justify-between gap-4 px-5 py-4">
+              <div className="flex min-w-0 flex-1 flex-col items-start">
+                <span className="text-[15px] font-medium">图片插入正文</span>
+                <span className="text-[11px] text-on-surface-variant/70">开启后，插入的图片会出现在正文中，而不是出现在末尾</span>
+              </div>
+              <Toggle checked={settings.inlineImagesInEditor} onChange={(value) => updateSetting('inlineImagesInEditor', value)} />
             </div>
           </div>
         </section>
@@ -569,17 +843,26 @@ export default function Settings() {
                 </span>
               </div>
               <button
+                data-testid="choose-vault-directory"
                 onClick={handleChooseVaultDirectory}
-                className="shrink-0 min-w-[56px] px-3 py-1.5 rounded-full bg-primary text-white text-sm font-medium active:scale-95 transition-transform"
+                disabled={Boolean(vaultSyncProgress)}
+                className="shrink-0 min-w-[56px] px-3 py-1.5 rounded-full bg-primary text-white text-sm font-medium active:scale-95 transition-transform disabled:opacity-70"
               >
-                {vaultStatus?.available ? '重新选择' : '选择'}
+                {vaultSyncProgress
+                  ? (isVaultArchiveMode ? '生成中' : '同步中')
+                  : isVaultArchiveMode
+                    ? '下载日志包'
+                    : vaultStatus?.available
+                      ? '重新选择'
+                      : '选择'}
               </button>
             </div>
             <button
               onClick={handleRestoreFromVault}
-              className="w-full flex items-center justify-between px-5 py-4 active:bg-surface-container-low transition-colors"
+              disabled={isVaultArchiveMode}
+              className="w-full flex items-center justify-between px-5 py-4 active:bg-surface-container-low transition-colors disabled:opacity-50"
             >
-              <span className="text-[15px] font-medium">手动从本地文件夹同步</span>
+              <span className="text-[15px] font-medium">{isVaultArchiveMode ? '手机 PWA 不支持读取文件夹' : '手动从本地文件夹同步'}</span>
               <ChevronRight className="w-5 h-5 text-outline-variant" />
             </button>
           </div>
@@ -681,25 +964,7 @@ export default function Settings() {
             打开权限设置
           </button>
           <button
-            onClick={async () => {
-              const permission = await requestBrowserNotificationPermission();
-              if (permission === 'granted') {
-                applyPendingNotificationToggle(pendingNotificationToggle);
-                if (pendingNotificationToggle?.type === 'reminder') {
-                  await scheduleDailyReminder(settings.reminderTime, REMINDER_NOTIFICATION_TITLE, REMINDER_NOTIFICATION_BODY)
-                    .catch(error => console.warn('Schedule reminder failed:', error));
-                }
-                setPendingNotificationToggle(null);
-                setActiveSheet(null);
-                showToast('通知权限已开启');
-              } else if (permission === 'denied') {
-                showToast('仍未允许通知权限');
-              } else if (permission === 'insecure') {
-                showToast(getNotificationUnavailableReason() || '当前地址无法开启通知权限');
-              } else {
-                showToast(getNotificationUnavailableReason() || '请在弹出的授权框中选择允许');
-              }
-            }}
+            onClick={handleRetryNotificationPermission}
             className="w-full py-3 bg-surface-container-low text-on-surface rounded-xl font-medium active:scale-95 transition-transform"
           >
             重新申请权限

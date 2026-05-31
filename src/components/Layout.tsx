@@ -16,6 +16,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { UserAvatar } from './UserAvatar';
 import { usePwaInstall } from '../hooks/usePwaInstall';
+import { AppToast } from './AppToast';
 
 export type ListStyle = 'timeline' | 'card_flow' | 'briefing' | 'magazine';
 
@@ -46,6 +47,7 @@ export default function Layout() {
   const [isStyleSheetOpen, setIsStyleSheetOpen] = useState(false);
   const [isInstallSheetOpen, setIsInstallSheetOpen] = useState(false);
   const [installMessage, setInstallMessage] = useState('');
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [listStyle, setListStyle] = useState<ListStyle>(() => {
     return (localStorage.getItem('diary_list_style') as ListStyle) || 'timeline';
   });
@@ -210,8 +212,27 @@ export default function Layout() {
     setIsInstallSheetOpen(true);
   };
 
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    window.setTimeout(() => setToastMessage(null), 2000);
+  };
+
+  const handleCloudManageClick = () => {
+    showToast('云盘管理功能正在开发中，敬请期待～');
+  };
+
   const handlePromptInstall = async () => {
     setInstallMessage('');
+    if (!pwaInstall.canPromptInstall) {
+      if (pwaInstall.installMode === 'browser-menu') {
+        setInstallMessage(`请打开 ${pwaInstall.browserDisplayName} 菜单，选择“${pwaInstall.manualActionLabel}”，按提示完成添加。`);
+        return;
+      }
+
+      setInstallMessage('当前浏览器暂未提供可靠的安装入口。可以先收藏本页，或复制链接到 Chrome / Edge 后再添加到手机。');
+      return;
+    }
+
     const outcome = await pwaInstall.promptInstall();
     if (outcome === 'accepted') {
       setInstallMessage('安装已开始，请按浏览器提示完成。');
@@ -221,13 +242,33 @@ export default function Layout() {
       setInstallMessage('你刚才取消了安装。可以点“重新检测”后再试一次，或按下方步骤手动添加。');
       return;
     }
-    setInstallMessage('当前浏览器没有开放自动安装弹窗，请按下方步骤从浏览器菜单添加到桌面。');
+    setInstallMessage('当前浏览器没有开放一键安装弹窗，请按下方步骤从浏览器菜单添加到手机。');
   };
 
   const handleRefreshInstall = async () => {
     await pwaInstall.refreshInstallState();
-    setInstallMessage('已重新检测。若仍无法弹出，请刷新页面，或按下方步骤手动添加。');
+    setInstallMessage('已重新检测。若仍无法弹出一键安装，请刷新页面，或按下方步骤从浏览器菜单添加。');
   };
+
+  const installIntroText = (() => {
+    if (pwaInstall.installMode === 'prompt') {
+      return '当前浏览器支持一键安装。删除旧图标后，可以在这里重新触发安装。';
+    }
+
+    if (pwaInstall.installMode === 'browser-menu') {
+      return `${pwaInstall.browserDisplayName} 支持从浏览器菜单添加到手机。当前没有开放一键安装弹窗，请按下面步骤操作。`;
+    }
+
+    if (pwaInstall.installMode === 'unsupported') {
+      return '当前环境暂不满足 PWA 添加条件。可以先收藏网页，或用 Chrome / Edge 打开后再添加到手机。';
+    }
+
+    return '当前浏览器的安装能力无法完全判断。可以先按下面步骤尝试添加，或复制链接到 Chrome / Edge 再试。';
+  })();
+
+  const installPrimaryLabel = pwaInstall.installMode === 'prompt'
+    ? '立即安装'
+    : `查看${pwaInstall.manualActionLabel}步骤`;
 
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(monthStart);
@@ -652,7 +693,7 @@ export default function Layout() {
             <span className="text-[15px]">{isDark ? '日间模式' : '夜间模式'}</span>
             {isDark && <span className="ml-auto text-[13px] text-outline-variant pr-4">开启中</span>}
           </button>
-          <button className="flex items-center gap-4 text-on-surface px-10 py-3 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
+          <button onClick={handleCloudManageClick} className="flex items-center gap-4 text-on-surface px-10 py-3 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
             <Cloud className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
             <span className="text-[15px]">云盘管理</span>
           </button>
@@ -680,7 +721,7 @@ export default function Layout() {
       {/* Main Content */}
       <main className={cn(
         "md:ml-[var(--app-sidebar-width)] transition-all duration-500 min-h-screen flex flex-col relative",
-        ['/', '/community', '/profile'].includes(location.pathname) ? "pb-[calc(72px+var(--app-safe-bottom))] md:pb-0" : "pb-0"
+        ['/', '/community', '/profile'].includes(location.pathname) ? "pb-[calc(72px+var(--app-safe-bottom))]" : "pb-0"
       )}>
         <div className="flex-1 w-full flex flex-col">
           <AnimatePresence mode="wait">
@@ -781,9 +822,7 @@ export default function Layout() {
               </div>
               <div className="px-6 py-5 space-y-4">
                 <div className="rounded-2xl bg-surface-container-low px-4 py-3 text-sm leading-6 text-on-surface-variant">
-                  {pwaInstall.canPromptInstall
-                    ? '当前浏览器支持一键安装。删除旧图标后，可以在这里重新触发安装。'
-                    : '当前浏览器没有开放一键安装弹窗，请按下面步骤从浏览器菜单添加。'}
+                  {installIntroText}
                 </div>
 
                 {installMessage && (
@@ -807,7 +846,7 @@ export default function Layout() {
                     className="flex items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-medium text-white active:scale-[0.98] transition-transform"
                   >
                     <Download className="w-4 h-4" />
-                    {pwaInstall.canPromptInstall ? '立即安装' : '查看手动步骤'}
+                    {installPrimaryLabel}
                   </button>
                   <button
                     onClick={handleRefreshInstall}
@@ -840,7 +879,7 @@ export default function Layout() {
       {/* Bottom Navigation Bar */}
       {['/', '/community', '/profile'].includes(location.pathname) && (
         <nav 
-          className="fixed bottom-0 left-0 w-full md:hidden flex justify-around items-center px-4 bg-surface/90 backdrop-blur-xl z-50 rounded-t-[24px] shadow-[0_-10px_40px_rgba(0,0,0,0.03)] border-t border-outline-variant/10"
+          className="fixed bottom-0 left-0 w-full md:left-[var(--app-sidebar-width)] md:w-[calc(100%-var(--app-sidebar-width))] flex justify-around items-center px-4 bg-surface/90 backdrop-blur-xl z-50 rounded-t-[24px] shadow-[0_-10px_40px_rgba(0,0,0,0.03)] border-t border-outline-variant/10"
           style={{ paddingTop: '6px', paddingBottom: 'var(--app-safe-bottom)' }}
         >
           {navItems.map((item) => {
@@ -872,6 +911,8 @@ export default function Layout() {
           })}
         </nav>
       )}
+
+      <AppToast message={toastMessage} />
     </div>
   );
 }

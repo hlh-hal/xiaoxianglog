@@ -25,6 +25,7 @@ import {
   sanitizeModernColors,
   measureExportCard,
   pickExportScale,
+  waitForExportRenderReady,
 } from '../../src/utils/exportImage';
 
 // 引入全局样式，保证 Tailwind v4 + @tailwindcss/typography 的 prose / preflight
@@ -33,7 +34,7 @@ import '../../src/index.css';
 
 // ========== Exploration (Task 1) ==========
 
-type ExplorationCaseId = 'H1' | 'H2' | 'H3' | 'H4';
+type ExplorationCaseId = 'H1' | 'H2' | 'H3' | 'H4' | 'H5';
 
 interface ExplorationResult {
   caseId: ExplorationCaseId;
@@ -69,11 +70,20 @@ const H2_HTML = `<pre><code>let x = 1;</code></pre>`;
 const H3_HTML = `<blockquote><p>Quote</p></blockquote>`;
 const H4_HTML = `<p>这是一段普通正文，只有纯 p 标签。</p>`;
 
+const H5_HTML = `
+<p>2026.5.27</p>
+<p>开心：又加了一个象友，持续畅聊中。</p>
+<p>充实：完成了英语的小测，写完一份实验报告。发现加了一门新的实验课，跟一个同学一起做实验，聊得还可以，配合算是默契，再观察几天，看看能不能加入组队名单里。</p>
+<p>总结了杰给的ai skill创建流程，可以找个时间更新一下自己的skill了。</p>
+<p>感谢：老己又活了一天，真好。</p>
+`.trim();
+
 const EXPLORATION_CASE_MAP: Record<ExplorationCaseId, string> = {
   H1: H1_HTML,
   H2: H2_HTML,
   H3: H3_HTML,
   H4: H4_HTML,
+  H5: H5_HTML,
 };
 
 // ========== Preservation (Task 2) ==========
@@ -280,7 +290,7 @@ async function runExplorationCase(caseId: ExplorationCaseId): Promise<Exploratio
     }
 
     await waitForDataReady(el, 20, 50);
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForExportRenderReady(el);
 
     // Task 3.5: 镜像 saveToLocal 在 Editor.tsx 里的最新导出链路：
     //   1) measureExportCard → pickExportScale（次级防线，默认 2）
@@ -411,7 +421,7 @@ async function runPreservationCaseImpl(caseId: PreservationCaseId): Promise<Pres
     }
 
     // 再稳一点布局
-    await new Promise((r) => setTimeout(r, 150));
+    await waitForExportRenderReady(el);
 
     // **前置断言**：在调用 html2canvas 之前验证 ¬isBugCondition。
     const hit = findModernColorHit(el);
@@ -500,24 +510,54 @@ async function runPreservationCase(caseId: PreservationCaseId): Promise<Preserva
   }
 }
 
+async function renderExportPreview(caseId: ExplorationCaseId): Promise<void> {
+  const rootEl = document.getElementById('harness-root');
+  if (!rootEl) throw new Error('#harness-root missing');
+
+  rootEl.innerHTML = '';
+  rootEl.style.cssText = 'padding: 24px; background: #e9e7df; min-height: 100vh;';
+
+  const preview = document.createElement('div');
+  preview.style.cssText = 'width:375px;margin:0 auto;background:#faf9f5;';
+  rootEl.appendChild(preview);
+
+  const root = createRoot(preview);
+  root.render(
+    <DiaryExportCard
+      entry={{ diaryDate: Date.UTC(2026, 4, 28) }}
+      theme={pickWarmWhiteTheme()}
+      htmlContent={EXPLORATION_CASE_MAP[caseId]}
+      images={[]}
+    />
+  );
+
+  await new Promise((r) => setTimeout(r, 100));
+  const el = preview.querySelector('#diary-export-card') as HTMLElement | null;
+  if (!el) throw new Error('#diary-export-card missing');
+  await waitForDataReady(el, 20, 50);
+  await waitForExportRenderReady(el);
+}
+
 // ========== Global registration ==========
 
 declare global {
   interface Window {
     __runExportHarness?: (caseId: ExplorationCaseId) => Promise<ExplorationResult>;
     __runPreservationCase?: (caseId: PreservationCaseId) => Promise<PreservationResult>;
+    __renderExportPreview?: (caseId: ExplorationCaseId) => Promise<void>;
     __harnessReady?: boolean;
   }
 }
 
 window.__runExportHarness = runExportHarness;
 window.__runPreservationCase = runPreservationCase;
+window.__renderExportPreview = renderExportPreview;
 window.__harnessReady = true;
 
 // 页面里一个最小可见提示，便于手动打开 harness.html 时看状态。
 const rootEl = document.getElementById('harness-root');
 if (rootEl) {
   rootEl.textContent =
-    'export harness ready (use window.__runExportHarness("H1"|"H2"|"H3"|"H4") or window.__runPreservationCase("P1"..."P5"))';
+    'export harness ready (use window.__runExportHarness("H1"|"H2"|"H3"|"H4"|"H5") or window.__runPreservationCase("P1"..."P5"))';
   rootEl.style.cssText = 'font-family: monospace; padding: 16px;';
 }

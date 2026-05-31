@@ -33,7 +33,7 @@ import java.util.Calendar;
     }
 )
 public class XiangNotificationsPlugin extends Plugin {
-    static final String CHANNEL_ID = "xiaoxiang_reminders";
+    static final String CHANNEL_ID = "xiaoxiang_reminders_v2";
     static final String CHANNEL_NAME = "小象日志提醒";
     static final String PREFS_NAME = "xiaoxiang_notifications";
     static final String KEY_REMINDER_ENABLED = "reminder_enabled";
@@ -147,7 +147,9 @@ public class XiangNotificationsPlugin extends Plugin {
             .setContentText(body)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
             .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT);
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setPriority(NotificationCompat.PRIORITY_HIGH);
 
         Intent launchIntent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
         if (launchIntent != null) {
@@ -185,12 +187,12 @@ public class XiangNotificationsPlugin extends Plugin {
 
         AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (alarmManager != null) {
-            alarmManager.setInexactRepeating(
-                AlarmManager.RTC_WAKEUP,
-                triggerAt.getTimeInMillis(),
-                AlarmManager.INTERVAL_DAY,
-                pendingIntent
-            );
+            alarmManager.cancel(pendingIntent);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt.getTimeInMillis(), pendingIntent);
+            } else {
+                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt.getTimeInMillis(), pendingIntent);
+            }
         }
     }
 
@@ -217,8 +219,9 @@ public class XiangNotificationsPlugin extends Plugin {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         if (manager == null || manager.getNotificationChannel(CHANNEL_ID) != null) return;
 
-        NotificationChannel channel = new NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_DEFAULT);
+        NotificationChannel channel = new NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH);
         channel.setDescription("每日写日记提醒和互动通知");
+        channel.setLockscreenVisibility(NotificationCompat.VISIBILITY_PUBLIC);
         manager.createNotificationChannel(channel);
     }
 }
