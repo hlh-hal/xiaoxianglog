@@ -27,6 +27,14 @@
   - 多次 autosave/pagehide 不重复创建日志。
   - 只有图片、没有文字的新日志也会保存。
 
+## 云端发布
+
+- 2026-05-31 已从干净临时 worktree `fb14346` 构建并通过 FTP 上传前端 `dist` 到云端服务器。
+- 线上首页和 `/editor` 均返回 200，并引用新产物 `assets/index-1belqYpX.js` / `assets/index-LLVGRuV-.css`。
+- 远端 JS SHA256 与本地构建一致：`351CA0F96347E693AA9F92207B2FA69239FD08E9A545570F92784F7CDAEA3740`。
+- 远端 CSS SHA256 与本地构建一致：`5384923455145B5B364BEF46A9B8B3D279B3313722634186F0AD6D93DABFC8A8`。
+- `/api/health` 返回 `build:"cpamc-only-20260520"`，后端本次未改动、不需要重启。
+
 ## 后续提示
 
 - 如果后续调整编辑器、Tiptap 图片、PWA 生命周期或 `diaryService` 保存逻辑，必须重跑 `npm run test:editor-exit-save`。
