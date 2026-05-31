@@ -31,3 +31,14 @@
 
 - 用户确认不需要正文左侧绿色竖线。
 - `src/pages/Community.tsx` 移除正文容器上的 `border-l-2 border-l-[#c5efad] pl-4`，保留移动端两侧留白和卡片内边距调整。
+- `npm run lint` 通过。
+- `npm run build` 通过；仅保留既有动态导入/chunk 体积警告。
+- 干净 worktree `npm run lint` 和 `npm run build` 通过。
+- 首轮 FTP 上传遇到 4 个文件超时失败；立即重跑后 18 个前端文件全部上传成功。
+- 线上校验：
+  - `https://www.xiaoxianglog.cn/` 返回 200。
+  - `https://www.xiaoxianglog.cn/community` 返回 200。
+  - 线上首页引用 `assets/index-CmSA6B0S.js` 和 `assets/index-DxFUidx9.css`。
+  - 线上 JS SHA256 与本地一致：`66FFFD35AA009B8224045A8A74D315031A643D636C0614D5347C6EB5FC681871`。
+  - 线上 CSS SHA256 与本地一致：`15BA61B9089DAD6903C0302317EEC8A26B9055075CD39BBA23B79FEA381C2A9B`。
+  - 线上 JS 已确认不包含 `border-l-[#c5efad]`。
