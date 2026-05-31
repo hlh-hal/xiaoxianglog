@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { stripAllMarkdown } from '../lib/utils';
-import { Check, Share, Copy, MoreVertical, Image as ImageIcon, Undo, Redo, Highlighter, Bold, Quote, List, ListOrdered, X, ArrowLeft, Trash2, History, FileText, XCircle, ChevronRight, Plus, Star, Download, Palette } from 'lucide-react';
+import { Check, Share, Copy, MoreVertical, Image as ImageIcon, Undo, Redo, Highlighter, Bold, Quote, List, ListOrdered, X, ArrowLeft, Trash2, History, FileText, XCircle, ChevronRight, Plus, Star, Download, Palette, Minimize2, Maximize2 } from 'lucide-react';
 import { diaryService, DiaryEntry, DiaryTemplate, EditHistory } from '../services/diaryService';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { useEditor, EditorContent } from '@tiptap/react';
+import { Node as TiptapNode, mergeAttributes } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Markdown } from 'tiptap-markdown';
-import { TextSelection } from '@tiptap/pm/state';
+import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import BackgroundSelector from '../components/BackgroundSelector';
 import { getThemeById, calculateContrastColor } from '../config/themes';
 import { ShareCard } from '../components/ShareCard';
@@ -19,20 +20,213 @@ import html2canvas from 'html2canvas';
 import { useTheme } from '../contexts/ThemeContext';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
 import { useAuth } from '../contexts/AuthContext';
-import { sanitizeModernColors, measureExportCard, pickExportScale, decodeErrorReason } from '../utils/exportImage';
+import { sanitizeModernColors, measureExportCard, pickExportScale, decodeErrorReason, waitForExportRenderReady } from '../utils/exportImage';
 import { DiaryTheme, allThemes } from '../types/theme';
 import { api, getAccessToken } from '../services/apiClient';
 import { createRoot } from 'react-dom/client';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import ImageViewer from '../components/ImageViewer';
 import { AppToast } from '../components/AppToast';
 import { SafeImage } from '../components/SafeImage';
+import { settingsService } from '../services/settingsService';
+import { createClientId } from '../utils/id';
+
+const DiaryInlineImage = TiptapNode.create({
+  name: 'diaryInlineImage',
+  group: 'block',
+  atom: true,
+  draggable: false,
+
+  addAttributes() {
+    return {
+      src: {
+        default: null,
+      },
+      alt: {
+        default: '日记图片',
+      },
+      imageKey: {
+        default: null,
+        parseHTML: element => element.getAttribute('data-image-key'),
+        renderHTML: attributes => (
+          attributes.imageKey ? { 'data-image-key': attributes.imageKey } : {}
+        ),
+      },
+      displaySize: {
+        default: 'full',
+        parseHTML: element => element.getAttribute('data-display-size') === 'small' ? 'small' : 'full',
+        renderHTML: attributes => ({
+          'data-display-size': attributes.displaySize === 'small' ? 'small' : 'full',
+        }),
+      },
+    };
+  },
+
+  parseHTML() {
+    return [
+      {
+        tag: 'img[data-diary-inline-image]',
+      },
+    ];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return [
+      'img',
+      mergeAttributes(HTMLAttributes, {
+        'data-diary-inline-image': 'true',
+        class: 'diary-inline-image',
+      }),
+    ];
+  },
+});
+
+function getInlineImageSources(html: string): Set<string> {
+  const sources = new Set<string>();
+  if (!html || typeof DOMParser === 'undefined') return sources;
+
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll<HTMLImageElement>('img[data-diary-inline-image]').forEach((img) => {
+      if (img.src) sources.add(img.getAttribute('src') || img.src);
+    });
+  } catch (error) {
+    console.warn('Failed to parse inline diary images:', error);
+  }
+
+  return sources;
+}
+
+const INLINE_IMAGE_REF_PREFIX = 'diary-image-ref:';
+
+function createInlineImageRef(key: string): string {
+  return `${INLINE_IMAGE_REF_PREFIX}${encodeURIComponent(key)}`;
+}
+
+function parseInlineImageRef(src?: string | null): string {
+  if (!src || !src.startsWith(INLINE_IMAGE_REF_PREFIX)) return '';
+  try {
+    return decodeURIComponent(src.slice(INLINE_IMAGE_REF_PREFIX.length));
+  } catch {
+    return src.slice(INLINE_IMAGE_REF_PREFIX.length);
+  }
+}
+
+function createInlineImageKey(src: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < src.length; i += 1) {
+    hash ^= src.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `img_${(hash >>> 0).toString(36)}_${src.length.toString(36)}`;
+}
+
+function getInlineImageKeys(html: string): Set<string> {
+  const keys = new Set<string>();
+  if (!html || typeof DOMParser === 'undefined') return keys;
+
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll<HTMLImageElement>('img[data-diary-inline-image]').forEach((img) => {
+      const src = img.getAttribute('src') || '';
+      const key = img.getAttribute('data-image-key') || parseInlineImageRef(src) || (
+        src.startsWith('data:image/') ? createInlineImageKey(src) : ''
+      );
+      if (key) keys.add(key);
+    });
+  } catch (error) {
+    console.warn('Failed to parse inline diary image keys:', error);
+  }
+
+  return keys;
+}
+
+function normalizeInlineImagesForStorage(
+  html: string,
+  getKeyForSrc: (src: string, existingKey: string) => string,
+): string {
+  if (!html || typeof DOMParser === 'undefined') return html;
+
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll<HTMLImageElement>('img[data-diary-inline-image]').forEach((img) => {
+      const src = img.getAttribute('src') || '';
+      const existingKey = img.getAttribute('data-image-key') || parseInlineImageRef(src);
+      const key = getKeyForSrc(src, existingKey);
+      if (!key) return;
+
+      img.setAttribute('data-image-key', key);
+      img.setAttribute('src', createInlineImageRef(key));
+    });
+    return doc.body.innerHTML;
+  } catch (error) {
+    console.warn('Failed to normalize inline diary images:', error);
+    return html;
+  }
+}
+
+function hydrateInlineImagesForEditor(
+  html: string,
+  resolveSrc: (src: string, key: string) => string,
+): string {
+  if (!html || typeof DOMParser === 'undefined') return html;
+
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll<HTMLImageElement>('img[data-diary-inline-image]').forEach((img) => {
+      const src = img.getAttribute('src') || '';
+      const key = img.getAttribute('data-image-key') || parseInlineImageRef(src) || (
+        src.startsWith('data:image/') ? createInlineImageKey(src) : ''
+      );
+      const resolved = resolveSrc(src, key);
+      if (key) img.setAttribute('data-image-key', key);
+      if (resolved) img.setAttribute('src', resolved);
+    });
+    return doc.body.innerHTML;
+  } catch (error) {
+    console.warn('Failed to hydrate inline diary images:', error);
+    return html;
+  }
+}
+
+function dataUrlToBlob(dataUrl: string): Blob | null {
+  const [meta, data] = dataUrl.split(',');
+  if (!meta || !data) return null;
+  const mime = meta.match(/data:(.*?);base64/)?.[1] || 'image/jpeg';
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: mime });
+}
+
+type InlineImageDisplaySize = 'full' | 'small';
+
+type InlineImageToolbarState = {
+  pos: number;
+  src: string;
+  imageKey?: string;
+  displaySize: InlineImageDisplaySize;
+  top: number;
+  left: number;
+  width: number;
+};
+
+type InlineImagePreviewSnapshot = {
+  content: string;
+  images: string[];
+  src: string;
+  hadUnsavedChanges: boolean;
+  scrollTop: number;
+};
 
 export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: DiaryEntry | { diaryDate: number }, theme: DiaryTheme, htmlContent: string, images: string[] }) => {
   const date = new Date(entry.diaryDate);
   const day = date.getDate();
   const yearMonth = `${date.getFullYear()}.${String(date.getMonth()+1).padStart(2,'0')}`;
-  const weekDay = ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'][date.getDay()];
+  const weekDay = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][date.getDay()];
 
   const [topBgUrl, setTopBgUrl] = useState<string | null>(null);
   const [middleBgUrl, setMiddleBgUrl] = useState<string | null>(null);
@@ -43,7 +237,7 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
     const img = new Image();
     img.crossOrigin = 'anonymous'; // Important for html2canvas to not taint
     img.onload = () => {
-      // 提升渲染精度，满足导出时 scale: 3 的高清要求
+      // 鎻愬崌娓叉煋绮惧害锛屾弧瓒冲鍑烘椂 scale: 3 鐨勯珮娓呰姹?
       const renderScale = 3;
       const targetW = 375 * renderScale;
       const targetH = 812 * renderScale;
@@ -103,9 +297,9 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
       const sliceCtx = sliceCanvas.getContext('2d');
       if (sliceCtx) {
         sliceCtx.imageSmoothingQuality = 'high';
-        // 正向绘制
+        // 姝ｅ悜缁樺埗
         sliceCtx.drawImage(coverCanvas, 0, startSrcY, targetW, srcHeight, 0, 0, targetW, srcHeight + 1);
-        // 垂直镜像绘制，实现无缝
+        // 鍨傜洿闀滃儚缁樺埗锛屽疄鐜版棤缂?
         sliceCtx.save();
         sliceCtx.translate(0, srcHeight * 2);
         sliceCtx.scale(1, -1);
@@ -133,13 +327,13 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
         flexDirection: 'column',
       }}
     >
-      {/* 分离式的和谐背景层构建，确保不会因拉伸产生割裂感 */}
+      {/* 鍒嗙寮忕殑鍜岃皭鑳屾櫙灞傛瀯寤猴紝纭繚涓嶄細鍥犳媺浼镐骇鐢熷壊瑁傛劅 */}
       {theme.backgroundImage && (
         <div style={{
           position: 'absolute', inset: 0, zIndex: 0,
           display: 'flex', flexDirection: 'column'
         }}>
-          {/* 顶部原始图景 */}
+          {/* 椤堕儴鍘熷鍥炬櫙 */}
           <div style={{
             height: '350px',
             flexShrink: 0,
@@ -155,7 +349,7 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
               backgroundRepeat: 'no-repeat',
             }}/>
           </div>
-          {/* 中间重复平铺镜像切片，实现真正的平铺和谐连续，无论多长都不会有割裂或拉伸变形 */}
+          {/* 涓棿閲嶅骞抽摵闀滃儚鍒囩墖锛屽疄鐜扮湡姝ｇ殑骞抽摵鍜岃皭杩炵画锛屾棤璁哄闀块兘涓嶄細鏈夊壊瑁傛垨鎷変几鍙樺舰 */}
           <div style={{
             flex: 1,
             marginTop: '-1px',
@@ -167,7 +361,7 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
             position: 'relative',
             zIndex: 0,
           }} />
-          {/* 底部原始图景 */}
+          {/* 搴曢儴鍘熷鍥炬櫙 */}
           <div style={{
             height: '350px',
             flexShrink: 0,
@@ -186,7 +380,7 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
         </div>
       )}
 
-      {/* 背景叠加层 */}
+      {/* 鑳屾櫙鍙犲姞灞?*/}
       {theme.backgroundImage && (
         <div style={{
           position: 'absolute', inset: 0, zIndex: 1,
@@ -197,7 +391,7 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
       <div style={{ position: 'relative', zIndex: 1, flex: 1,
         display: 'flex', flexDirection: 'column' }}>
 
-        {/* 日期区域 */}
+        {/* 鏃ユ湡鍖哄煙 */}
         <div style={{ textAlign: 'center', paddingTop: '12px', paddingBottom: '20px' }}>
           <div style={{
             display: 'block',
@@ -227,17 +421,17 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
             {weekDay}
           </div>
 
-          {/* 短分割线 */}
+          {/* 鐭垎鍓茬嚎 */}
           <div style={{
             width: 44,
             height: 1,
-            backgroundColor: theme.backgroundImage ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.15)',
+            backgroundColor: theme.textColor.toLowerCase() === '#ffffff' ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.15)',
             margin: '20px auto 0 auto',
             borderRadius: 1,
           }} />
         </div>
 
-        {/* 正文内容 */}
+        {/* 姝ｆ枃鍐呭 */}
         <div style={{
           flex: 1,
           padding: '0 32px',
@@ -248,12 +442,15 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
             style={{ 
                fontFamily: 'var(--diary-font-family)',
                color: 'inherit',
+               lineHeight: 'var(--diary-line-height)',
+               wordBreak: 'break-word',
+               overflowWrap: 'break-word',
             }}
             dangerouslySetInnerHTML={{ __html: htmlContent }} 
           />
         </div>
 
-        {/* 图片区域（有图时显示） */}
+        {/* 鍥剧墖鍖哄煙锛堟湁鍥炬椂鏄剧ず锛?*/}
         {images.length > 0 && (
           <div style={{
             padding: '32px 32px 0',
@@ -273,7 +470,7 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
           </div>
         )}
 
-        {/* 底部品牌栏 */}
+        {/* 搴曢儴鍝佺墝鏍?*/}
         <div style={{
           padding: '24px 32px 32px',
           marginTop: '40px',
@@ -308,6 +505,25 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
 
 const SYSTEM_TEMPLATE = "## 开心的事：\n\n## 充实的事：\n\n## 感谢的人：\n\n## 改进的事：\n\n## 今日思考：\n\n";
 
+type PersistReason = 'autosave' | 'manual' | 'back' | 'visibility' | 'pagehide' | 'freeze' | 'unmount' | 'abandon';
+
+type PersistCurrentEntryOptions = {
+  reason: PersistReason;
+  saveHistory?: boolean;
+  updateState?: boolean;
+  navigateToSaved?: boolean;
+  markClean?: boolean;
+};
+
+function makeEntrySignature(content: string, images: string[], backgroundId?: string, themeId?: string | null): string {
+  return JSON.stringify({
+    content,
+    images,
+    backgroundId: backgroundId || null,
+    themeId: themeId || null,
+  });
+}
+
 export default function Editor() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -316,17 +532,34 @@ export default function Editor() {
   const [searchParams, setSearchParams] = useSearchParams();
   const id = searchParams.get('id');
   const [existingJournal, setExistingJournal] = useState<DiaryEntry | null>(null);
+  const existingJournalRef = useRef<DiaryEntry | null>(null);
+  const activeEntryIdRef = useRef<string>(id || createClientId());
+  const routeEntryIdRef = useRef<string | null>(id);
+  const draftDiaryDateRef = useRef<string | null>(null);
+  const lastPersistedSignatureRef = useRef<string>('');
+  const autosaveHistoryBaselineSavedRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const isSavingRef = useRef(false);
   
   const [content, setContent] = useState('');
+  const contentRef = useRef('');
   const [updateTick, setUpdateTick] = useState(0);
   const hasUnsavedChanges = useRef(false);
   const [images, setImages] = useState<string[]>([]);
+  const imagesRef = useRef<string[]>([]);
+  const inlineImageObjectUrlsRef = useRef<Map<string, string>>(new Map());
+  const inlineImageObjectUrlKeysRef = useRef<Map<string, string>>(new Map());
   const [isFocused, setIsFocused] = useState(false);
   const [isEditing, setIsEditing] = useState(!id);
   const editorScrollRef = useRef<HTMLElement | null>(null);
   const editorInstanceRef = useRef<ReturnType<typeof useEditor>>(null);
   const isEditingRef = useRef(!id);
+  const backgroundIdRef = useRef<string | undefined>(undefined);
+  const selectedThemeRef = useRef<DiaryTheme | null>(null);
+  const templatesRef = useRef<DiaryTemplate[]>([]);
   const suppressNextEditorClickRef = useRef(false);
+  const keepInlineImageToolbarOnBlurRef = useRef(false);
+  const inlineImageToolbarRef = useRef<InlineImageToolbarState | null>(null);
   const tapScrollLockRef = useRef<{
     scrollTop: number;
     scrollLeft: number;
@@ -370,16 +603,155 @@ export default function Editor() {
     typeof window !== 'undefined' ? window.innerHeight : 0
   ));
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [inlineImageToolbar, setInlineImageToolbar] = useState<InlineImageToolbarState | null>(null);
+  const [previewImagesOverride, setPreviewImagesOverride] = useState<string[] | null>(null);
 
   const previewHashActive = location.hash === '#preview';
   const [displayIndex, setDisplayIndex] = useState<number | null>(null);
   const [nextIndex, setNextIndex] = useState<number | null>(null);
   const [isCrossfading, setIsCrossfading] = useState(false);
   const isNavigatingToPreview = useRef(false);
+  const inlinePreviewSnapshotRef = useRef<InlineImagePreviewSnapshot | null>(null);
+
+  const setImagesWithRef = useCallback((nextImages: string[] | ((prev: string[]) => string[])) => {
+    const next = typeof nextImages === 'function'
+      ? nextImages(imagesRef.current)
+      : nextImages;
+    imagesRef.current = next;
+    setImages(next);
+    return next;
+  }, []);
+
+  const findImageByInlineKey = useCallback((key: string, sourceImages = imagesRef.current) => {
+    if (!key) return '';
+    return sourceImages.find(src => createInlineImageKey(src) === key) || '';
+  }, []);
+
+  const registerInlineImageObjectUrl = useCallback((key: string, url: string) => {
+    if (!key || !url.startsWith('blob:')) return;
+    const previous = inlineImageObjectUrlsRef.current.get(key);
+    if (previous && previous !== url) {
+      URL.revokeObjectURL(previous);
+      inlineImageObjectUrlKeysRef.current.delete(previous);
+    }
+    inlineImageObjectUrlsRef.current.set(key, url);
+    inlineImageObjectUrlKeysRef.current.set(url, key);
+  }, []);
+
+  const resolveInlineImageForEditor = useCallback((
+    src: string,
+    key = '',
+    sourceImages = imagesRef.current,
+  ) => {
+    const imageKey = key || parseInlineImageRef(src);
+    const attachmentSrc = imageKey ? findImageByInlineKey(imageKey, sourceImages) : '';
+    const resolvedSrc = attachmentSrc || (src.startsWith(INLINE_IMAGE_REF_PREFIX) ? '' : src);
+    if (!resolvedSrc) return '';
+
+    if (resolvedSrc.startsWith('data:image/')) {
+      const stableKey = imageKey || createInlineImageKey(resolvedSrc);
+      const existing = inlineImageObjectUrlsRef.current.get(stableKey);
+      if (existing) return existing;
+
+      const blob = dataUrlToBlob(resolvedSrc);
+      if (!blob) return resolvedSrc;
+      const objectUrl = URL.createObjectURL(blob);
+      registerInlineImageObjectUrl(stableKey, objectUrl);
+      return objectUrl;
+    }
+
+    if (resolvedSrc.startsWith('blob:') && imageKey) {
+      inlineImageObjectUrlKeysRef.current.set(resolvedSrc, imageKey);
+    }
+    return resolvedSrc;
+  }, [findImageByInlineKey, registerInlineImageObjectUrl]);
+
+  const hydrateContentForEditor = useCallback((html: string, sourceImages = imagesRef.current) => (
+    hydrateInlineImagesForEditor(html, (src, key) => (
+      resolveInlineImageForEditor(src, key, sourceImages)
+    ))
+  ), [resolveInlineImageForEditor]);
+
+  const normalizeContentForStorage = useCallback((html: string) => (
+    normalizeInlineImagesForStorage(html, (src, existingKey) => {
+      if (
+        src
+        && !src.startsWith('blob:')
+        && !src.startsWith('data:image/')
+        && !src.startsWith(INLINE_IMAGE_REF_PREFIX)
+      ) {
+        return '';
+      }
+      if (existingKey) return existingKey;
+      const objectKey = inlineImageObjectUrlKeysRef.current.get(src);
+      if (objectKey) return objectKey;
+      if (src.startsWith('data:image/')) return createInlineImageKey(src);
+      const attachment = imagesRef.current.find(imageSrc => imageSrc === src);
+      return attachment ? createInlineImageKey(attachment) : '';
+    })
+  ), []);
+
+  useEffect(() => () => {
+    inlineImageObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+    inlineImageObjectUrlsRef.current.clear();
+    inlineImageObjectUrlKeysRef.current.clear();
+  }, []);
 
   useEffect(() => {
-    isEditingRef.current = isEditing;
-  }, [isEditing]);
+    contentRef.current = content;
+  }, [content]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    routeEntryIdRef.current = id;
+    if (id) {
+      activeEntryIdRef.current = id;
+    }
+  }, [id]);
+
+  useEffect(() => {
+    existingJournalRef.current = existingJournal;
+    if (existingJournal) {
+      activeEntryIdRef.current = existingJournal.id;
+      draftDiaryDateRef.current = existingJournal.diaryDate;
+    }
+  }, [existingJournal]);
+
+  useEffect(() => {
+    backgroundIdRef.current = backgroundId;
+  }, [backgroundId]);
+
+  useEffect(() => {
+    selectedThemeRef.current = selectedTheme;
+  }, [selectedTheme]);
+
+  useEffect(() => {
+    isEditingRef.current = isEditing && !previewHashActive;
+  }, [isEditing, previewHashActive]);
+
+  const getDraftDiaryDate = useCallback(() => {
+    if (existingJournalRef.current?.diaryDate) {
+      return existingJournalRef.current.diaryDate;
+    }
+    if (!draftDiaryDateRef.current) {
+      const diaryDate = new Date();
+      try {
+        if (settingsService.getSettings().autoAdjustTime && diaryDate.getHours() < 12) {
+          diaryDate.setDate(diaryDate.getDate() - 1);
+        }
+      } catch (error) {
+        console.warn('Failed to read diary time settings:', error);
+      }
+      draftDiaryDateRef.current = diaryDate.toISOString();
+    }
+    return draftDiaryDateRef.current;
+  }, []);
 
   const restoreTapScrollLock = useCallback(() => {
     const lock = tapScrollLockRef.current;
@@ -580,6 +952,12 @@ export default function Editor() {
     if (!lock || lock.pointerId !== e.pointerId || lock.moved) return false;
 
     const target = e.target as HTMLElement;
+    const inlineImageTarget = target.closest('img[data-diary-inline-image]');
+    if (inlineImageTarget) {
+      stopTapScrollLock();
+      return false;
+    }
+
     const editorEl = e.currentTarget.querySelector('.ProseMirror');
     const isEditorTap = Boolean(editorEl?.contains(target));
     const isBlankSurfaceTap = target === e.currentTarget || target.dataset.editorBlankSurface === 'true';
@@ -604,20 +982,46 @@ export default function Editor() {
 
     releaseTapScrollLock(600);
     return true;
-  }, [focusEditorAtPointWithoutScroll, releaseTapScrollLock, restoreTapScrollLock]);
+  }, [focusEditorAtPointWithoutScroll, releaseTapScrollLock, restoreTapScrollLock, stopTapScrollLock]);
 
   useEffect(() => () => {
     stopInputScrollLock();
     stopTapScrollLock();
   }, [stopInputScrollLock, stopTapScrollLock]);
 
+  const restoreInlinePreviewSnapshot = useCallback(() => {
+    const snapshot = inlinePreviewSnapshotRef.current;
+    if (!snapshot) return;
+
+    inlinePreviewSnapshotRef.current = null;
+    const activeEditor = editorInstanceRef.current;
+    if (activeEditor && activeEditor.getHTML() !== snapshot.content) {
+      activeEditor.commands.setContent(snapshot.content, { emitUpdate: false });
+    }
+    setContent(snapshot.content);
+    setImagesWithRef(snapshot.images);
+    hasUnsavedChanges.current = snapshot.hadUnsavedChanges;
+
+    window.requestAnimationFrame(() => {
+      if (editorScrollRef.current) {
+        editorScrollRef.current.scrollTop = snapshot.scrollTop;
+      }
+    });
+  }, [setImagesWithRef]);
+
   useEffect(() => {
-    if (!previewHashActive) {
+    if (previewHashActive) {
+      isNavigatingToPreview.current = false;
+      return;
+    }
+
+    if (!isNavigatingToPreview.current) {
+      restoreInlinePreviewSnapshot();
       if (displayIndex !== null) setDisplayIndex(null);
       if (previewImage !== null) setPreviewImage(null);
-      isNavigatingToPreview.current = false;
+      if (previewImagesOverride !== null) setPreviewImagesOverride(null);
     }
-  }, [previewHashActive]);
+  }, [previewHashActive, displayIndex, previewImage, previewImagesOverride, restoreInlinePreviewSnapshot]);
 
   const openPreview = (index: number) => {
     if (displayIndex === index) return;
@@ -632,11 +1036,13 @@ export default function Editor() {
   };
 
   const closePreview = () => {
+    restoreInlinePreviewSnapshot();
     if (location.hash === '#preview') {
       navigate(-1);
     } else {
       setDisplayIndex(null);
       setPreviewImage(null);
+      setPreviewImagesOverride(null);
     }
   };
 
@@ -650,7 +1056,7 @@ export default function Editor() {
       setFixedViewportHeight(window.innerHeight);
 
       const handleResize = () => {
-        // 如果宽度改变（比如横竖屏切换），才更新高度；单纯高度缩小（比如弹窗输入法）不更新
+        // 濡傛灉瀹藉害鏀瑰彉锛堟瘮濡傛í绔栧睆鍒囨崲锛夛紝鎵嶆洿鏂伴珮搴︼紱鍗曠函楂樺害缂╁皬锛堟瘮濡傚脊绐楄緭鍏ユ硶锛変笉鏇存柊
         if (window.innerWidth !== lastWidth) {
           lastWidth = window.innerWidth;
           setFixedViewportHeight(window.innerHeight);
@@ -693,7 +1099,11 @@ export default function Editor() {
   const [templates, setTemplates] = useState<DiaryTemplate[]>([]);
   const [activeTab, setActiveTab] = useState<'system' | 'custom'>('system');
   const [preferredTemplateId, setPreferredTemplateId] = useState<string | null>(localStorage.getItem('preferredTemplateId'));
-  
+
+  useEffect(() => {
+    templatesRef.current = templates;
+  }, [templates]);
+
   // Template Editor State
   const [isTemplateEditorOpen, setIsTemplateEditorOpen] = useState(false);
   const [templateForm, setTemplateForm] = useState({ title: '', content: '' });
@@ -707,7 +1117,7 @@ export default function Editor() {
     isLongPress.current = false;
     longPressTimer.current = setTimeout(() => {
       isLongPress.current = true;
-      if (window.confirm('确认删除此模板？')) {
+      if (window.confirm('纭鍒犻櫎姝ゆā鏉匡紵')) {
         diaryService.deleteTemplate(id).then(() => {
           setTemplates(prev => prev.filter(t => t.id !== id));
           if (preferredTemplateId === id) {
@@ -740,10 +1150,191 @@ export default function Editor() {
   const [isSaving, setIsSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  useEffect(() => {
+    isSavingRef.current = isSaving;
+  }, [isSaving]);
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 2000);
   };
+
+  const getInlineImageToolbarPosition = useCallback((img: HTMLImageElement) => {
+    const rect = img.getBoundingClientRect();
+    const width = Math.min(336, window.innerWidth - 32);
+    const left = Math.max(16, Math.min(window.innerWidth - width - 16, rect.left + rect.width / 2 - width / 2));
+    const top = Math.max(
+      88,
+      Math.min(window.innerHeight - 74, rect.top + rect.height * 0.58),
+    );
+    return { top, left, width };
+  }, []);
+
+  const showInlineImageToolbar = useCallback((
+    pos: number,
+    attrs: { src?: string; imageKey?: string; displaySize?: string },
+    img: HTMLImageElement,
+  ) => {
+    const position = getInlineImageToolbarPosition(img);
+    const nextToolbar: InlineImageToolbarState = {
+      pos,
+      src: attrs.src || img.getAttribute('src') || '',
+      imageKey: attrs.imageKey,
+      displaySize: attrs.displaySize === 'small' ? 'small' : 'full',
+      ...position,
+    };
+    inlineImageToolbarRef.current = nextToolbar;
+    setInlineImageToolbar(nextToolbar);
+  }, [getInlineImageToolbarPosition]);
+
+  const refreshInlineImageToolbar = useCallback(() => {
+    setInlineImageToolbar(current => {
+      if (!current) {
+        inlineImageToolbarRef.current = null;
+        return null;
+      }
+      const activeEditor = editorInstanceRef.current;
+      const node = activeEditor?.state.doc.nodeAt(current.pos);
+      if (!node || node.type.name !== 'diaryInlineImage') {
+        inlineImageToolbarRef.current = null;
+        return null;
+      }
+
+      const selectedImg = activeEditor?.view.dom.querySelector<HTMLImageElement>(
+        '.diary-inline-image.ProseMirror-selectednode',
+      );
+      const img = selectedImg || Array.from(
+        activeEditor?.view.dom.querySelectorAll<HTMLImageElement>('.diary-inline-image') || [],
+      ).find(candidate => candidate.getAttribute('src') === node.attrs.src);
+      if (!img) {
+        inlineImageToolbarRef.current = null;
+        return null;
+      }
+
+      const nextToolbar: InlineImageToolbarState = {
+        ...current,
+        src: node.attrs.src || current.src,
+        imageKey: node.attrs.imageKey || current.imageKey,
+        displaySize: node.attrs.displaySize === 'small' ? 'small' : 'full',
+        ...getInlineImageToolbarPosition(img),
+      };
+      inlineImageToolbarRef.current = nextToolbar;
+      return nextToolbar;
+    });
+  }, [getInlineImageToolbarPosition]);
+
+  const closeInlineImageToolbar = useCallback(() => {
+    inlineImageToolbarRef.current = null;
+    setInlineImageToolbar(null);
+  }, []);
+
+  const blurEditorForInlineImageToolbar = useCallback(() => {
+    keepInlineImageToolbarOnBlurRef.current = true;
+    setIsFocused(false);
+
+    const activeEditor = editorInstanceRef.current;
+    const activeElement = document.activeElement as HTMLElement | null;
+    const editorDom = activeEditor?.view.dom as HTMLElement | undefined;
+    activeEditor?.commands.blur();
+    if (activeElement && editorDom?.contains(activeElement)) {
+      activeElement.blur();
+    }
+    if (activeElement && typeof activeElement.blur === 'function') {
+      activeElement.blur();
+    }
+    editorDom?.blur();
+  }, []);
+
+  const findInlineImageNodePos = useCallback((img: HTMLImageElement) => {
+    const activeEditor = editorInstanceRef.current;
+    if (!activeEditor) return null;
+
+    const doc = activeEditor.state.doc;
+    const src = img.getAttribute('src') || img.src;
+    const candidates: number[] = [];
+
+    try {
+      const domPos = activeEditor.view.posAtDOM(img, 0);
+      candidates.push(domPos, domPos - 1, domPos + 1);
+    } catch (error) {
+      console.warn('Failed to resolve inline image DOM position:', error);
+    }
+
+    for (const pos of candidates) {
+      if (pos < 0 || pos > doc.content.size) continue;
+      const node = doc.nodeAt(pos);
+      if (node?.type.name === 'diaryInlineImage' && (!src || node.attrs.src === src)) {
+        return pos;
+      }
+    }
+
+    let foundPos: number | null = null;
+    doc.descendants((node, pos) => {
+      if (node.type.name === 'diaryInlineImage' && (!src || node.attrs.src === src)) {
+        foundPos = pos;
+        return false;
+      }
+      return true;
+    });
+
+    return foundPos;
+  }, []);
+
+  const selectInlineImageFromElement = useCallback((img: HTMLImageElement) => {
+    const activeEditor = editorInstanceRef.current;
+    if (!activeEditor) return false;
+
+    const pos = findInlineImageNodePos(img);
+    if (pos === null) return false;
+
+    const node = activeEditor.state.doc.nodeAt(pos);
+    if (!node || node.type.name !== 'diaryInlineImage') return false;
+
+    activeEditor.view.dispatch(
+      activeEditor.state.tr.setSelection(NodeSelection.create(activeEditor.state.doc, pos)),
+    );
+    showInlineImageToolbar(pos, node.attrs, img);
+    blurEditorForInlineImageToolbar();
+    return true;
+  }, [blurEditorForInlineImageToolbar, findInlineImageNodePos, showInlineImageToolbar]);
+
+  const getActiveInlineImageForPreview = useCallback(() => {
+    const activeEditor = editorInstanceRef.current;
+    if (!activeEditor) return null;
+
+    const getPreviewSrc = (attrs: any, fallbackSrc = '') => {
+      const src = (attrs?.src as string | undefined) || fallbackSrc;
+      const key = (attrs?.imageKey as string | undefined) || parseInlineImageRef(src);
+      return resolveInlineImageForEditor(src || '', key || '');
+    };
+
+    const selection = activeEditor.state.selection;
+    if (selection instanceof NodeSelection && selection.node.type.name === 'diaryInlineImage') {
+      const src = getPreviewSrc(selection.node.attrs);
+      if (src) return { pos: selection.from, src };
+    }
+
+    const selectedImg = activeEditor.view.dom.querySelector<HTMLImageElement>(
+      'img[data-diary-inline-image].ProseMirror-selectednode',
+    );
+    if (selectedImg) {
+      const pos = findInlineImageNodePos(selectedImg);
+      const node = pos === null ? null : activeEditor.state.doc.nodeAt(pos);
+      const src = getPreviewSrc(node?.attrs, selectedImg.getAttribute('src') || selectedImg.src);
+      if (pos !== null && src) return { pos, src };
+    }
+
+    const toolbar = inlineImageToolbarRef.current;
+    if (toolbar) {
+      const node = activeEditor.state.doc.nodeAt(toolbar.pos);
+      if (node?.type.name === 'diaryInlineImage' && node.attrs.src) {
+        const src = getPreviewSrc(node.attrs, toolbar.src);
+        if (src) return { pos: toolbar.pos, src };
+      }
+    }
+
+    return null;
+  }, [findInlineImageNodePos, resolveInlineImageForEditor]);
 
   const saveToLocal = async () => {
     setShowShare(false);
@@ -758,12 +1349,12 @@ export default function Editor() {
       htmlContent = content;
     }
 
-    // 临时挂载到 body
+    // 涓存椂鎸傝浇鍒?body
     const wrapper = document.createElement('div');
     wrapper.style.cssText = 'position:fixed;top:0;left:-9999px;z-index:-1;pointer-events:none;';
     document.body.appendChild(wrapper);
 
-    // 用 ReactDOM 渲染导出卡片
+    // 鐢?ReactDOM 娓叉煋瀵煎嚭鍗＄墖
     const root = createRoot(wrapper);
     root.render(
       <DiaryExportCard 
@@ -774,21 +1365,21 @@ export default function Editor() {
       />
     );
 
-    // 等待 React 渲染
+    // 绛夊緟 React 娓叉煋
     await new Promise(r => setTimeout(r, 100));
 
     try {
       const el = wrapper.querySelector('#diary-export-card') as HTMLElement;
       if (!el) throw new Error('Export card not found');
 
-      // 等待动态背景生成完毕
+      // 绛夊緟鍔ㄦ€佽儗鏅敓鎴愬畬姣?
       let attempts = 0;
       while (el.getAttribute('data-ready') !== 'true' && attempts < 50) {
         await new Promise(r => setTimeout(r, 50));
         attempts++;
       }
 
-      // 等待图片加载完成
+      // 绛夊緟鍥剧墖鍔犺浇瀹屾垚
       const imgElements = Array.from(el.querySelectorAll('img'));
       await Promise.all(imgElements.map(img => {
         if (img.complete) return Promise.resolve();
@@ -798,13 +1389,13 @@ export default function Editor() {
         });
       }));
 
-      // 额外等待一下以确保布局稳定
-      await new Promise(r => setTimeout(r, 200));
+      // 棰濆绛夊緟涓€涓嬩互纭繚甯冨眬绋冲畾
+      await waitForExportRenderReady(el);
 
       // bugfix: diary-export-long-text-fails (Requirement 2.1)
-      // 1) 主修：先把 oklch/oklab/lab/lch 归一化成 rgb，避免 html2canvas 解析失败；
-      // 2) 次级防线：按卡片高度挑 scale（默认 2，过高时降级），防止物理 canvas 超限；
-      // 3) 无论 html2canvas 成功失败，finally 里都要 restoreColors() 回滚 inline style。
+      // 1) 涓讳慨锛氬厛鎶?oklch/oklab/lab/lch 褰掍竴鍖栨垚 rgb锛岄伩鍏?html2canvas 瑙ｆ瀽澶辫触锛?
+      // 2) 娆＄骇闃茬嚎锛氭寜鍗＄墖楂樺害鎸?scale锛堥粯璁?2锛岃繃楂樻椂闄嶇骇锛夛紝闃叉鐗╃悊 canvas 瓒呴檺锛?
+      // 3) 鏃犺 html2canvas 鎴愬姛澶辫触锛宖inally 閲岄兘瑕?restoreColors() 鍥炴粴 inline style銆?
       const { cardH } = measureExportCard(el);
       const scale = pickExportScale(cardH);
       const restoreColors = sanitizeModernColors(el);
@@ -824,10 +1415,10 @@ export default function Editor() {
         restoreColors();
       }
 
-      // bugfix: diary-export-long-text-fails (Task 3.4，Requirement 2.3 预留)
-      // 次级防线兜底：若 html2canvas 返回的 canvas 是空的 / toDataURL 返回 "data:,"，
-      // 说明物理 canvas 尺寸 / 面积触及浏览器上限（iOS Safari 4096px、Android WebView 更低），
-      // 抛出含 "canvas size" 的错误走 decodeErrorReason → 'oversize' → 对应的 toast。
+      // bugfix: diary-export-long-text-fails (Task 3.4锛孯equirement 2.3 棰勭暀)
+      // 娆＄骇闃茬嚎鍏滃簳锛氳嫢 html2canvas 杩斿洖鐨?canvas 鏄┖鐨?/ toDataURL 杩斿洖 "data:,"锛?
+      // 璇存槑鐗╃悊 canvas 灏哄 / 闈㈢Н瑙﹀強娴忚鍣ㄤ笂闄愶紙iOS Safari 4096px銆丄ndroid WebView 鏇翠綆锛夛紝
+      // 鎶涘嚭鍚?"canvas size" 鐨勯敊璇蛋 decodeErrorReason 鈫?'oversize' 鈫?瀵瑰簲鐨?toast銆?
       const dataUrl = canvas.toDataURL('image/png');
       if (canvas.width === 0 || canvas.height === 0 || dataUrl === 'data:,') {
         throw new Error(
@@ -838,7 +1429,7 @@ export default function Editor() {
       root.unmount();
       document.body.removeChild(wrapper);
 
-      // 兼容 Capacitor 原生 App 环境
+      // 鍏煎 Capacitor 鍘熺敓 App 鐜
       const cap = (window as any).Capacitor;
       if (cap?.isNativePlatform?.()) {
         try {
@@ -851,28 +1442,28 @@ export default function Editor() {
             data: base64Data,
             directory: Directory.Documents,
           });
-          showToast('已保存到文件夹 ✨');
+          showToast('已保存到文件夹');
         } catch (capErr) {
-          console.error('Capacitor 保存失败:', capErr);
+          console.error('Capacitor 淇濆瓨澶辫触:', capErr);
           showToast('保存失败，请重试');
         }
       } else {
-        // Web 浏览器环境：直接下载
+        // Web 娴忚鍣ㄧ幆澧冿細鐩存帴涓嬭浇
         const link = document.createElement('a');
         link.download = `小象日志_${format(displayDate, 'yyyy-MM-dd')}.png`;
         link.href = dataUrl;
         link.click();
-        showToast('图片已保存 ✨');
+        showToast('图片已下载');
       }
     } catch (error) {
-      console.error('导出图片失败:', error);
+      console.error('瀵煎嚭鍥剧墖澶辫触:', error);
       const reason = decodeErrorReason(error);
       if (reason === 'unsupported_color') {
-        showToast('暂时无法导出该内容，请稍后重试');
+        showToast('导出失败：主题颜色不兼容');
       } else if (reason === 'oversize') {
-        showToast('日志内容较多，请精简或拆分后再导出');
+        showToast('导出失败：内容过长');
       } else if (reason === 'io') {
-        showToast('保存失败，请检查存储权限');
+        showToast('导出失败：存储权限不足');
       } else {
         showToast('导出图片失败，请重试');
       }
@@ -887,7 +1478,7 @@ export default function Editor() {
 
   const shareToWeChat = () => {
     setShowShare(false);
-    showToast('功能还在开发中，敬请期待～');
+    showToast('功能还在开发中，敬请期待');
   };
 
   const compressImage = (base64Str: string, maxWidth = 800): Promise<string> => {
@@ -952,8 +1543,8 @@ export default function Editor() {
     });
 
     if (!response.ok) {
-      const data = await response.json().catch(() => ({ error: '图片上传失败' }));
-      throw new Error(data.error || '图片上传失败');
+      const data = await response.json().catch(() => ({ error: '鍥剧墖涓婁紶澶辫触' }));
+      throw new Error(data.error || '鍥剧墖涓婁紶澶辫触');
     }
 
     const data = await response.json();
@@ -964,7 +1555,7 @@ export default function Editor() {
     setShowShare(false);
 
     if (!user || !getAccessToken()) {
-      alert('请先登录后再分享到日志圈');
+      alert('璇峰厛鐧诲綍鍚庡啀鍒嗕韩鍒版棩蹇楀湀');
       navigate('/login');
       return;
     }
@@ -980,7 +1571,7 @@ export default function Editor() {
       return;
     }
 
-    showToast('正在发布到日志圈...');
+    showToast('姝ｅ湪鍙戝竷鍒版棩蹇楀湀...');
     const compressedImages = await Promise.all(images.map(img => compressImage(img)));
 
     try {
@@ -1000,7 +1591,23 @@ export default function Editor() {
   const isDarkBg = selectedTheme 
     ? ['#E8EDF2', '#E8EEF8', '#FFFFFF'].includes(selectedTheme.textColor)
     : contrastColor === '#FFFFFF';
+  const handleInlineImagePress = useCallback((event: Event, shouldPreventDefault = true) => {
+    const target = event.target as HTMLElement | null;
+    const img = target?.closest('img[data-diary-inline-image]') as HTMLImageElement | null;
+    if (!img) return false;
+
+    if (shouldPreventDefault && event.cancelable) {
+      event.preventDefault();
+    }
+    event.stopPropagation();
+    selectInlineImageFromElement(img);
+    return true;
+  }, [selectInlineImageFromElement]);
+
   const lockEditorScrollDomEvents = {
+    pointerdown: (_view: unknown, event: PointerEvent) => handleInlineImagePress(event),
+    mousedown: (_view: unknown, event: MouseEvent) => handleInlineImagePress(event),
+    touchstart: (_view: unknown, event: TouchEvent) => handleInlineImagePress(event, false),
     beforeinput: () => {
       lockScrollForEditorInput();
       return false;
@@ -1038,7 +1645,9 @@ export default function Editor() {
   const editor = useEditor({
     editable: isEditing,
     extensions: [
-      StarterKit,
+      StarterKit.configure({
+        trailingNode: false,
+      }),
       Highlight.configure({
         HTMLAttributes: {
           class: 'bg-primary/20 text-primary rounded px-1',
@@ -1047,17 +1656,33 @@ export default function Editor() {
       Placeholder.configure({
         placeholder: '写点什么...',
       }),
+      DiaryInlineImage,
       Markdown,
     ],
     content: '',
     onUpdate: ({ editor }) => {
       setContent(editor.getHTML());
       hasUnsavedChanges.current = true;
+      closeInlineImageToolbar();
       lockScrollForEditorInput();
     },
-    onSelectionUpdate: () => {
+    onSelectionUpdate: ({ editor }) => {
       // Force re-render for toolbar formatting states when cursor moves
       setUpdateTick(t => t + 1);
+      const selection = editor.state.selection;
+      if (selection instanceof NodeSelection && selection.node.type.name === 'diaryInlineImage') {
+        window.requestAnimationFrame(() => {
+          const img = editor.view.dom.querySelector<HTMLImageElement>(
+            '.diary-inline-image.ProseMirror-selectednode',
+          );
+          if (img) {
+            showInlineImageToolbar(selection.from, selection.node.attrs, img);
+            blurEditorForInlineImageToolbar();
+          }
+        });
+      } else {
+        closeInlineImageToolbar();
+      }
     },
     onTransaction: () => {
       setUpdateTick(t => t + 1);
@@ -1067,12 +1692,39 @@ export default function Editor() {
     },
     onBlur: () => {
       setIsFocused(false);
+      if (keepInlineImageToolbarOnBlurRef.current) {
+        keepInlineImageToolbarOnBlurRef.current = false;
+        return;
+      }
+      closeInlineImageToolbar();
     },
     editorProps: {
       attributes: {
         class: `prose prose-headings:font-headline prose-headings:font-bold prose-h1:text-2xl prose-h2:text-xl prose-strong:font-medium prose-a:text-primary prose-blockquote:border-l-4 prose-blockquote:border-primary prose-blockquote:bg-primary/5 prose-blockquote:px-4 prose-blockquote:py-1 prose-blockquote:rounded-r-lg max-w-none min-h-[60vh] focus:outline-none caret-primary text-[var(--diary-font-size)] leading-[var(--diary-line-height)] ${isDarkBg ? 'prose-invert prose-headings:text-white prose-strong:text-white text-white' : 'prose-headings:text-on-surface prose-strong:text-on-surface text-on-surface'}`,
       },
       handleDOMEvents: lockEditorScrollDomEvents,
+      handleClickOn: (view, _pos, node, nodePos, event) => {
+        if (node.type.name !== 'diaryInlineImage') return false;
+        const target = event.target as HTMLElement | null;
+        const img = target?.closest('img[data-diary-inline-image]') as HTMLImageElement | null;
+        const nodeDom = view.nodeDOM(nodePos) as HTMLImageElement | null;
+        const imageElement = img || nodeDom;
+        if (!imageElement) return false;
+
+        event.preventDefault();
+        event.stopPropagation();
+        view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, nodePos)));
+        showInlineImageToolbar(nodePos, node.attrs, imageElement);
+        blurEditorForInlineImageToolbar();
+        return true;
+      },
+      handleClick: (_view, _pos, event) => {
+        const target = event.target as HTMLElement | null;
+        if (!target?.closest('img[data-diary-inline-image]') && !target?.closest('[data-inline-image-toolbar]')) {
+          closeInlineImageToolbar();
+        }
+        return false;
+      },
       handleScrollToSelection: () => true,
     },
   });
@@ -1111,9 +1763,12 @@ export default function Editor() {
 
   useEffect(() => {
     if (editor) {
-      editor.setEditable(isEditing);
+      editor.setEditable(isEditing && !previewHashActive);
+      if (previewHashActive) {
+        editor.commands.blur();
+      }
     }
-  }, [isEditing, editor]);
+  }, [isEditing, previewHashActive, editor]);
 
   useEffect(() => {
     if (editor) {
@@ -1123,11 +1778,33 @@ export default function Editor() {
             class: `prose prose-headings:font-headline prose-headings:font-bold prose-h1:text-2xl prose-h2:text-xl prose-strong:font-medium prose-a:text-primary prose-blockquote:border-l-4 prose-blockquote:border-primary prose-blockquote:bg-primary/5 prose-blockquote:px-4 prose-blockquote:py-1 prose-blockquote:rounded-r-lg max-w-none min-h-[60vh] focus:outline-none caret-primary text-[var(--diary-font-size)] leading-[var(--diary-line-height)] ${isDarkBg ? 'prose-invert prose-headings:text-white prose-strong:text-white text-white' : 'prose-headings:text-on-surface prose-strong:text-on-surface text-on-surface'}`,
           },
           handleDOMEvents: lockEditorScrollDomEvents,
+          handleClickOn: (view, _pos, node, nodePos, event) => {
+            if (node.type.name !== 'diaryInlineImage') return false;
+            const target = event.target as HTMLElement | null;
+            const img = target?.closest('img[data-diary-inline-image]') as HTMLImageElement | null;
+            const nodeDom = view.nodeDOM(nodePos) as HTMLImageElement | null;
+            const imageElement = img || nodeDom;
+            if (!imageElement) return false;
+
+            event.preventDefault();
+            event.stopPropagation();
+            view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, nodePos)));
+            showInlineImageToolbar(nodePos, node.attrs, imageElement);
+            blurEditorForInlineImageToolbar();
+            return true;
+          },
+          handleClick: (_view, _pos, event) => {
+            const target = event.target as HTMLElement | null;
+            if (!target?.closest('img[data-diary-inline-image]') && !target?.closest('[data-inline-image-toolbar]')) {
+              closeInlineImageToolbar();
+            }
+            return false;
+          },
           handleScrollToSelection: () => true,
         }
       });
     }
-  }, [isDarkBg, editor]);
+  }, [isDarkBg, editor, showInlineImageToolbar, closeInlineImageToolbar, blurEditorForInlineImageToolbar, handleInlineImagePress]);
 
   // Ensure toolbar syncs with current selection
   // Removed custom useEffect handlers because onSelectionUpdate and onTransaction are initialized via useEditor
@@ -1147,42 +1824,62 @@ export default function Editor() {
   useEffect(() => {
     if (id) {
       const loadJournal = async () => {
+        if (existingJournalRef.current?.id === id) return;
         const data = await diaryService.getEntryById(id);
         if (data) {
+          existingJournalRef.current = data;
+          activeEntryIdRef.current = data.id;
+          draftDiaryDateRef.current = data.diaryDate;
           setExistingJournal(data);
+          const loadedImages = data.images?.filter((img: string) => typeof img === 'string' && img.trim() !== '') || [];
+          setImagesWithRef(loadedImages);
           let loadedContent = data.content || '';
           if (data.blocks && data.blocks.length > 0) {
             loadedContent = data.blocks.map(b => `<p><strong>${b.title}</strong></p><p>${b.content.replace(/\n/g, '<br>')}</p>`).join('<p><br></p>');
           }
+          loadedContent = hydrateContentForEditor(loadedContent, loadedImages);
+          contentRef.current = loadedContent;
           setContent(loadedContent);
           if (editor) {
-            editor.commands.setContent(loadedContent);
+            editor.commands.setContent(loadedContent, { emitUpdate: false });
           }
-          
-          if (data.images) {
-            setImages(data.images.filter((img: string) => typeof img === 'string' && img.trim() !== ''));
-          }
-          if (data.backgroundId) {
-            setBackgroundId(data.backgroundId);
-          }
+          lastPersistedSignatureRef.current = makeEntrySignature(
+            normalizeContentForStorage(loadedContent),
+            loadedImages,
+            data.backgroundId,
+            data.themeId,
+          );
+          hasUnsavedChanges.current = false;
+          autosaveHistoryBaselineSavedRef.current = false;
+          backgroundIdRef.current = data.backgroundId;
+          setBackgroundId(data.backgroundId);
           if (data.themeId) {
             const theme = allThemes.find(t => t.id === data.themeId);
             if (theme) {
+              selectedThemeRef.current = theme;
               setSelectedTheme(theme);
             }
           } else {
             const defaultTheme = allThemes.find(t => t.id === 'warm-white');
-            if (defaultTheme) setSelectedTheme(defaultTheme);
+            if (defaultTheme) {
+              selectedThemeRef.current = defaultTheme;
+              setSelectedTheme(defaultTheme);
+            }
           }
         }
       };
       loadJournal();
     } else {
+      if (existingJournalRef.current) return;
       // New diary, load preferred template
       const initNewDiary = async () => {
+        draftDiaryDateRef.current = draftDiaryDateRef.current || getDraftDiaryDate();
         const lastThemeId = localStorage.getItem('lastUsedDiaryThemeId');
         const defaultTheme = allThemes.find(t => t.id === lastThemeId) || allThemes.find(t => t.id === 'warm-white');
-        if (defaultTheme) setSelectedTheme(defaultTheme);
+        if (defaultTheme) {
+          selectedThemeRef.current = defaultTheme;
+          setSelectedTheme(defaultTheme);
+        }
 
         let initialContent = '';
         const prefId = localStorage.getItem('preferredTemplateId');
@@ -1197,9 +1894,10 @@ export default function Editor() {
             }
           }
         }
+        contentRef.current = initialContent;
         setContent(initialContent);
         if (editor) {
-          editor.commands.setContent(initialContent);
+          editor.commands.setContent(initialContent, { emitUpdate: false });
           if (initialContent) {
             setTimeout(() => {
               editor.commands.focus('start');
@@ -1210,7 +1908,7 @@ export default function Editor() {
       };
       initNewDiary();
     }
-  }, [id, editor]);
+  }, [id, editor, getDraftDiaryDate, hydrateContentForEditor, normalizeContentForStorage, setImagesWithRef]);
 
   // ===== Auto-save history: periodic snapshots every 30s while editing =====
   useEffect(() => {
@@ -1228,19 +1926,19 @@ export default function Editor() {
     autoSaveTimerRef.current = setInterval(() => {
       if (!hasUnsavedChanges.current) return;
 
-      const currentContent = editor?.getHTML() || content;
+      const currentContent = normalizeContentForStorage(editor?.getHTML() || content);
       // Skip if content is identical to last saved history snapshot
       if (currentContent === lastHistoryContentRef.current) return;
       // Skip if content is empty or just whitespace
-      const plainText = currentContent.replace(/<[^>]*>/g, '').trim();
-      if (!plainText) return;
+      const plainText = stripAllMarkdown(currentContent).trim();
+      if (!plainText && imagesRef.current.length === 0) return;
 
       // Save snapshot
       lastHistoryContentRef.current = currentContent;
       diaryService.saveHistory({
         entryId: existingJournal.id,
         content: currentContent,
-        images: images,
+        images: imagesRef.current,
         savedAt: new Date().toISOString(),
       }).catch(err => console.warn('Auto-save history failed:', err));
     }, INTERVAL_MS);
@@ -1251,7 +1949,7 @@ export default function Editor() {
         autoSaveTimerRef.current = null;
       }
     };
-  }, [existingJournal?.id, isEditing, editor]);
+  }, [existingJournal?.id, isEditing, editor, content, normalizeContentForStorage]);
 
   // Save history on page hide / visibility change (user switches app or closes tab)
   useEffect(() => {
@@ -1259,17 +1957,17 @@ export default function Editor() {
 
     const saveOnHide = () => {
       if (!hasUnsavedChanges.current) return;
-      const currentContent = editor?.getHTML() || content;
+      const currentContent = normalizeContentForStorage(editor?.getHTML() || content);
       if (currentContent === lastHistoryContentRef.current) return;
-      const plainText = currentContent.replace(/<[^>]*>/g, '').trim();
-      if (!plainText) return;
+      const plainText = stripAllMarkdown(currentContent).trim();
+      if (!plainText && imagesRef.current.length === 0) return;
 
       lastHistoryContentRef.current = currentContent;
       // Use sendBeacon-style fire-and-forget
       diaryService.saveHistory({
         entryId: existingJournal.id,
         content: currentContent,
-        images: images,
+        images: imagesRef.current,
         savedAt: new Date().toISOString(),
       }).catch(() => {});
     };
@@ -1285,17 +1983,98 @@ export default function Editor() {
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('pagehide', saveOnHide);
     };
-  }, [existingJournal?.id, isEditing, editor]);
+  }, [existingJournal?.id, isEditing, editor, content, normalizeContentForStorage]);
+
+  const insertImageAfterCurrentBlock = useCallback((src: string, imageKey?: string) => {
+    const activeEditor = editorInstanceRef.current;
+    if (!activeEditor) return false;
+
+    const { state, view } = activeEditor;
+    const imageType = state.schema.nodes.diaryInlineImage;
+    const paragraphType = state.schema.nodes.paragraph;
+    if (!imageType || !paragraphType) return false;
+
+    const imageNode = imageType.create({ src, imageKey: imageKey || null, alt: '日记图片' });
+    const paragraphNode = paragraphType.create();
+    const topLevelDepth = state.selection.$from.depth > 0 ? 1 : 0;
+    const currentBlock = topLevelDepth > 0 ? state.selection.$from.node(topLevelDepth) : null;
+    const isEmptyCurrentLine = currentBlock?.type.name === 'paragraph' && currentBlock.content.size === 0;
+    const currentTextOffset = state.selection.$from.parentOffset;
+    const currentTextSize = state.selection.$from.parent.content.size;
+    let tr = state.tr;
+    let imagePos = state.selection.from;
+    let cursorPosAfterInsert: number | null = null;
+
+    if (isEmptyCurrentLine && topLevelDepth > 0) {
+      imagePos = state.selection.$from.before(topLevelDepth);
+      tr = tr.replaceWith(imagePos, state.selection.$from.after(topLevelDepth), imageNode);
+    } else if (topLevelDepth > 0 && currentBlock?.isTextblock) {
+      if (currentTextOffset === 0) {
+        imagePos = state.selection.$from.before(topLevelDepth);
+        tr = tr.insert(imagePos, imageNode);
+      } else if (currentTextOffset === currentTextSize) {
+        imagePos = state.selection.$from.after(topLevelDepth);
+        tr = tr.insert(imagePos, [imageNode, paragraphNode]);
+        cursorPosAfterInsert = imagePos + imageNode.nodeSize + 1;
+      } else {
+        imagePos = state.selection.from;
+        tr = tr.insert(imagePos, imageNode);
+      }
+    } else {
+      tr = tr.insert(imagePos, [imageNode, paragraphNode]);
+      cursorPosAfterInsert = imagePos + imageNode.nodeSize + 1;
+    }
+
+    try {
+      let selectedImagePos = imagePos;
+      if (cursorPosAfterInsert === null) {
+        const insertedImagePositions: number[] = [];
+        tr.doc.descendants((node, pos) => {
+          if (node.type === imageType && (node.attrs.src === src || (imageKey && node.attrs.imageKey === imageKey))) {
+            insertedImagePositions.push(pos);
+          }
+          return true;
+        });
+
+        if (insertedImagePositions.length > 0) {
+          const mappedImagePos = tr.mapping.map(imagePos, 1);
+          selectedImagePos = insertedImagePositions.reduce((closest, pos) => (
+            Math.abs(pos - mappedImagePos) < Math.abs(closest - mappedImagePos) ? pos : closest
+          ));
+        }
+      }
+
+      tr.setSelection(
+        cursorPosAfterInsert !== null
+          ? TextSelection.create(tr.doc, cursorPosAfterInsert)
+          : NodeSelection.create(tr.doc, selectedImagePos),
+      );
+    } catch (error) {
+      console.warn('Failed to place cursor after inline diary image:', error);
+    }
+
+    view.dispatch(tr);
+    view.focus();
+    return true;
+  }, []);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+    const shouldInsertInline = settingsService.getSettings().inlineImagesInEditor;
 
     Array.from(files).forEach(file => {
       const reader = new FileReader();
       reader.onload = (event) => {
         const base64 = event.target?.result as string;
-        setImages(prev => [...prev, base64]);
+        const imageKey = createInlineImageKey(base64);
+        const nextImages = [...imagesRef.current, base64];
+        setImagesWithRef(nextImages);
+        if (shouldInsertInline) {
+          const objectUrl = URL.createObjectURL(file);
+          registerInlineImageObjectUrl(imageKey, objectUrl);
+          insertImageAfterCurrentBlock(objectUrl, imageKey);
+        }
         hasUnsavedChanges.current = true;
       };
       reader.readAsDataURL(file);
@@ -1304,7 +2083,7 @@ export default function Editor() {
   };
 
   const removeImage = (indexToRemove: number) => {
-    setImages(prev => prev.filter((_, index) => index !== indexToRemove));
+    setImagesWithRef(prev => prev.filter((_, index) => index !== indexToRemove));
     hasUnsavedChanges.current = true;
   };
 
@@ -1340,81 +2119,156 @@ export default function Editor() {
     return false;
   };
 
+  const getPlainTextForPersist = useCallback((html: string) => {
+    const editorText = editorInstanceRef.current?.getText()?.trim();
+    return editorText || stripAllMarkdown(html).trim();
+  }, []);
+
+  const isNewEntryWithoutMeaningfulContent = useCallback((html: string, nextImages: string[]) => {
+    if (nextImages.length > 0) return false;
+
+    const plainText = getPlainTextForPersist(html);
+    if (!plainText) return true;
+
+    const systemText = SYSTEM_TEMPLATE.replace(/<[^>]*>?/gm, '').trim();
+    if (plainText === systemText) return true;
+
+    const prefId = localStorage.getItem('preferredTemplateId');
+    if (prefId && prefId !== 'system') {
+      const prefTpl = templatesRef.current.find(t => t.id === prefId);
+      const prefText = prefTpl?.content.replace(/<[^>]*>?/gm, '').trim();
+      if (prefText && plainText === prefText) return true;
+    }
+
+    return false;
+  }, [getPlainTextForPersist]);
+
+  const persistCurrentEntry = useCallback(async ({
+    reason,
+    saveHistory,
+    updateState = true,
+    navigateToSaved = true,
+    markClean = true,
+  }: PersistCurrentEntryOptions): Promise<DiaryEntry | undefined> => {
+    if (!isEditingRef.current && reason !== 'manual' && reason !== 'back' && reason !== 'abandon') {
+      return existingJournalRef.current || undefined;
+    }
+
+    const currentContent = normalizeContentForStorage(
+      editorInstanceRef.current?.getHTML() || contentRef.current,
+    );
+    const currentImages = imagesRef.current.filter((img: string) => typeof img === 'string' && img.trim() !== '');
+    const currentBackgroundId = backgroundIdRef.current;
+    const currentThemeId = selectedThemeRef.current?.id;
+    const existingEntry = existingJournalRef.current;
+    const signature = makeEntrySignature(currentContent, currentImages, currentBackgroundId, currentThemeId);
+
+    if (!hasUnsavedChanges.current && existingEntry && signature === lastPersistedSignatureRef.current) {
+      return existingEntry;
+    }
+
+    if (!existingEntry && isNewEntryWithoutMeaningfulContent(currentContent, currentImages)) {
+      return undefined;
+    }
+
+    const shouldSaveHistory = saveHistory ?? (
+      reason !== 'autosave' || Boolean(existingEntry && !autosaveHistoryBaselineSavedRef.current)
+    );
+    let savedEntry: DiaryEntry | undefined;
+
+    if (existingEntry) {
+      savedEntry = await diaryService.updateEntry(existingEntry.id, {
+        content: currentContent,
+        images: currentImages,
+        backgroundId: currentBackgroundId,
+        themeId: currentThemeId,
+      }, {
+        saveHistory: shouldSaveHistory,
+        immediateSync: reason !== 'autosave',
+      });
+    } else {
+      const entryId = activeEntryIdRef.current || createClientId();
+      activeEntryIdRef.current = entryId;
+      savedEntry = await diaryService.createEntry({
+        id: entryId,
+        content: currentContent,
+        images: currentImages,
+        diaryDate: getDraftDiaryDate(),
+        backgroundId: currentBackgroundId,
+        themeId: currentThemeId,
+      }, {
+        saveHistory: shouldSaveHistory,
+        immediateSync: reason !== 'autosave',
+      });
+    }
+
+    if (!savedEntry) return undefined;
+
+    if (reason === 'autosave' && shouldSaveHistory) {
+      autosaveHistoryBaselineSavedRef.current = true;
+    }
+
+    const latestContent = normalizeContentForStorage(
+      editorInstanceRef.current?.getHTML() || contentRef.current,
+    );
+    const latestSignature = makeEntrySignature(
+      latestContent,
+      imagesRef.current,
+      backgroundIdRef.current,
+      selectedThemeRef.current?.id,
+    );
+
+    existingJournalRef.current = savedEntry;
+    activeEntryIdRef.current = savedEntry.id;
+    draftDiaryDateRef.current = savedEntry.diaryDate;
+    lastPersistedSignatureRef.current = signature;
+
+    if (markClean && latestSignature === signature) {
+      hasUnsavedChanges.current = false;
+    } else if (latestSignature !== signature) {
+      hasUnsavedChanges.current = true;
+    }
+
+    if (updateState && isMountedRef.current) {
+      setExistingJournal(savedEntry);
+      if (
+        navigateToSaved
+        && routeEntryIdRef.current !== savedEntry.id
+        && document.visibilityState !== 'hidden'
+      ) {
+        routeEntryIdRef.current = savedEntry.id;
+        navigate(`/editor?id=${savedEntry.id}`, { replace: true });
+      }
+    }
+
+    return savedEntry;
+  }, [getDraftDiaryDate, isNewEntryWithoutMeaningfulContent, navigate, normalizeContentForStorage]);
+
   const handleSave = async (goBack = false) => {
-    if (isSaving) return;
+    if (isSavingRef.current) return;
+    isSavingRef.current = true;
     setIsSaving(true);
     try {
-      const currentContent = editor?.getHTML() || content;
-
-      if (!hasUnsavedChanges.current && existingJournal) {
-        if (goBack) {
-          goBackSafely();
-        } else {
-          setIsEditing(false);
-          editor?.commands.blur();
-        }
-        return;
-      }
-
-      if (isEmptyOrTemplate() && !existingJournal && images.length === 0) {
-        if (goBack) {
-          goBackSafely();
-        } else {
-          setIsEditing(false);
-          editor?.commands.blur();
-        }
-        return;
-      }
-
-      let savedEntry;
-      if (existingJournal) {
-        savedEntry = await diaryService.updateEntry(existingJournal.id, {
-          content: currentContent,
-          images: images,
-          backgroundId: backgroundId,
-          themeId: selectedTheme?.id,
-        });
-        if (savedEntry) setExistingJournal(savedEntry);
-        hasUnsavedChanges.current = false;
-      } else {
-        let diaryDate = new Date();
-        const appSettingsStr = localStorage.getItem('app_settings');
-        if (appSettingsStr) {
-          try {
-            const appSettings = JSON.parse(appSettingsStr);
-            if (appSettings.autoAdjustTime && diaryDate.getHours() < 12) {
-              diaryDate.setDate(diaryDate.getDate() - 1);
-            }
-          } catch (e) {}
-        }
-
-        savedEntry = await diaryService.createEntry({
-          content: currentContent,
-          images: images,
-          diaryDate: diaryDate.toISOString(),
-          backgroundId: backgroundId,
-          themeId: selectedTheme?.id,
-        });
-        setExistingJournal(savedEntry);
-        hasUnsavedChanges.current = false;
-      }
+      await persistCurrentEntry({
+        reason: goBack ? 'back' : 'manual',
+        saveHistory: true,
+        navigateToSaved: !goBack,
+      });
       
       if (goBack) {
         goBackSafely();
       } else {
         setIsEditing(false);
         editor?.commands.blur();
-        if (!existingJournal && savedEntry) {
-          navigate(`/editor?id=${savedEntry.id}`, { replace: true });
-        }
       }
     } catch (error) {
       console.error("Error saving diary:", error);
-      showToast(error instanceof Error ? error.message : '保存失败，请重试');
+      showToast(error instanceof Error ? error.message : '淇濆瓨澶辫触锛岃閲嶈瘯');
       if (goBack) {
         goBackSafely();
       }
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   };
@@ -1427,7 +2281,7 @@ export default function Editor() {
           return;
         }
 
-        if (isEmptyOrTemplate() && !existingJournal && images.length === 0) {
+        if (isEmptyOrTemplate() && !existingJournal && imagesRef.current.length === 0) {
           goBackSafely();
           return;
         }
@@ -1457,7 +2311,51 @@ export default function Editor() {
     }
   };
 
-  const displayDate = existingJournal ? new Date(existingJournal.diaryDate) : new Date();
+  useEffect(() => {
+    if (!isEditing || previewHashActive || !hasUnsavedChanges.current) return;
+
+    const timer = window.setTimeout(() => {
+      void persistCurrentEntry({
+        reason: 'autosave',
+        navigateToSaved: true,
+      }).catch(error => console.warn('Diary entry autosave failed:', error));
+    }, 1500);
+
+    return () => window.clearTimeout(timer);
+  }, [backgroundId, content, images, isEditing, persistCurrentEntry, previewHashActive, selectedTheme?.id]);
+
+  useEffect(() => {
+    const flush = (reason: PersistReason) => {
+      void persistCurrentEntry({
+        reason,
+        saveHistory: true,
+        updateState: false,
+        navigateToSaved: false,
+        markClean: false,
+      }).catch(error => console.warn(`Diary lifecycle save failed (${reason}):`, error));
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') flush('visibility');
+    };
+    const handlePageHide = () => flush('pagehide');
+    const handleFreeze = () => flush('freeze');
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', handlePageHide);
+    document.addEventListener('freeze', handleFreeze);
+
+    return () => {
+      flush('unmount');
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', handlePageHide);
+      document.removeEventListener('freeze', handleFreeze);
+    };
+  }, [persistCurrentEntry]);
+
+  const displayDate = existingJournal
+    ? new Date(existingJournal.diaryDate)
+    : new Date(draftDiaryDateRef.current || Date.now());
   
   const bgStyle = bgConfig.type === 'color' 
     ? { backgroundColor: bgConfig.value }
@@ -1471,10 +2369,10 @@ export default function Editor() {
   const fixedViewportHeightCss = fixedViewportHeight > 0 ? `${fixedViewportHeight}px` : '100vh';
   const editorChromeHeight = 'calc(64px + env(safe-area-inset-top))';
   const editorContentTopPadding = 'calc(76px + env(safe-area-inset-top))';
-  // bugfix: 软键盘弹出时，layout viewport 在部分安卓浏览器中不会缩小，
-  // 导致 <main> 没有溢出、完全无法滚动，短文案时光标会被输入法遮挡。
-  // 这里把 keyboardInset 加到底部 padding，确保有足够的可滚动空间把光标滚到可视区。
-  // 额外加 40vh 的空白，让用户在编辑时光标下方始终有舒适的留白空间。
+  // bugfix: 杞敭鐩樺脊鍑烘椂锛宭ayout viewport 鍦ㄩ儴鍒嗗畨鍗撴祻瑙堝櫒涓笉浼氱缉灏忥紝
+  // 瀵艰嚧 <main> 娌℃湁婧㈠嚭銆佸畬鍏ㄦ棤娉曟粴鍔紝鐭枃妗堟椂鍏夋爣浼氳杈撳叆娉曢伄鎸°€?
+  // 杩欓噷鎶?keyboardInset 鍔犲埌搴曢儴 padding锛岀‘淇濇湁瓒冲鐨勫彲婊氬姩绌洪棿鎶婂厜鏍囨粴鍒板彲瑙嗗尯銆?
+  // 棰濆鍔?40vh 鐨勭┖鐧斤紝璁╃敤鎴峰湪缂栬緫鏃跺厜鏍囦笅鏂瑰缁堟湁鑸掗€傜殑鐣欑櫧绌洪棿銆?
   // Reserve scrollable space; the visible room is locked from the user's scroll.
   const editorBottomBreathingRoom = fixedViewportHeight > 0
     ? `${Math.max(260, Math.round(fixedViewportHeight * 0.4))}px`
@@ -1493,7 +2391,12 @@ export default function Editor() {
   const navStyle: React.CSSProperties = {
     height: editorChromeHeight,
     paddingTop: 'env(safe-area-inset-top)',
-    ...(selectedTheme ? { backgroundColor: selectedTheme.toolbarColor, color: selectedTheme.textColor } : {}),
+    ...(selectedTheme
+      ? {
+          backgroundColor: selectedTheme.backgroundImage ? 'transparent' : selectedTheme.toolbarColor,
+          color: selectedTheme.textColor,
+        }
+      : {}),
   };
   const toolbarBottomOffset = keyboardInset > 0
     ? '8px'
@@ -1510,6 +2413,110 @@ export default function Editor() {
     maskImage: editorTopFadeMask,
     scrollPaddingBottom: `calc(120px + ${editorBottomBreathingRoom})`,
     overflowAnchor: 'none',
+  };
+  const inlineImageSources = getInlineImageSources(content);
+  const inlineImageKeys = getInlineImageKeys(content);
+  inlineImageSources.forEach(src => {
+    const key = inlineImageObjectUrlKeysRef.current.get(src) || parseInlineImageRef(src) || (
+      src.startsWith('data:image/') ? createInlineImageKey(src) : ''
+    );
+    if (key) inlineImageKeys.add(key);
+  });
+  const defaultDisplayImages = images.filter(src => (
+    !inlineImageSources.has(src) && !inlineImageKeys.has(createInlineImageKey(src))
+  ));
+  const activePreviewImages = previewImagesOverride ?? images;
+
+  const toggleInlineImageSize = () => {
+    if (!inlineImageToolbar || !editor) return;
+    const node = editor.state.doc.nodeAt(inlineImageToolbar.pos);
+    if (!node || node.type.name !== 'diaryInlineImage') {
+      closeInlineImageToolbar();
+      return;
+    }
+
+    const nextSize: InlineImageDisplaySize = node.attrs.displaySize === 'small' ? 'full' : 'small';
+    const tr = editor.state.tr.setNodeMarkup(inlineImageToolbar.pos, undefined, {
+      ...node.attrs,
+      displaySize: nextSize,
+    });
+    tr.setSelection(NodeSelection.create(tr.doc, inlineImageToolbar.pos));
+    editor.view.dispatch(tr);
+    blurEditorForInlineImageToolbar();
+    hasUnsavedChanges.current = true;
+    setContent(editor.getHTML());
+    setInlineImageToolbar(prev => prev ? { ...prev, displaySize: nextSize } : prev);
+    window.requestAnimationFrame(refreshInlineImageToolbar);
+  };
+
+  const copyInlineImageToClipboard = async () => {
+    if (!inlineImageToolbar?.src) return;
+    try {
+      if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+        throw new Error('clipboard image unsupported');
+      }
+      const copySrc = resolveInlineImageForEditor(
+        inlineImageToolbar.src,
+        inlineImageToolbar.imageKey || parseInlineImageRef(inlineImageToolbar.src),
+      );
+      const response = await fetch(copySrc);
+      const blob = await response.blob();
+      const type = blob.type || 'image/png';
+      await navigator.clipboard.write([
+        new ClipboardItem({ [type]: blob }),
+      ]);
+      showToast('图片已复制');
+    } catch (error) {
+      console.warn('Failed to copy inline image:', error);
+      showToast('当前浏览器不支持复制图片');
+    }
+  };
+
+  const openInlineImagePreview = () => {
+    const activeInlineImage = getActiveInlineImageForPreview();
+    const activeEditor = editorInstanceRef.current;
+    if (!activeInlineImage || !activeEditor) return;
+
+    const inlineSrc = activeInlineImage.src;
+    const currentContent = activeEditor.getHTML();
+    inlinePreviewSnapshotRef.current = {
+      content: currentContent,
+      images: [...imagesRef.current],
+      src: inlineSrc,
+      hadUnsavedChanges: hasUnsavedChanges.current,
+      scrollTop: editorScrollRef.current?.scrollTop || 0,
+    };
+    setContent(currentContent);
+    activeEditor.setEditable(false);
+    activeEditor.commands.blur();
+    closeInlineImageToolbar();
+    blurEditorForInlineImageToolbar();
+    setIsFocused(false);
+
+    setPreviewImagesOverride([inlineSrc]);
+    setDisplayIndex(0);
+    setNextIndex(null);
+    setIsCrossfading(false);
+    if (location.hash !== '#preview' && !isNavigatingToPreview.current) {
+      isNavigatingToPreview.current = true;
+      navigate('#preview');
+    }
+  };
+
+  const deleteInlineImage = () => {
+    if (!inlineImageToolbar || !editor) return;
+    const node = editor.state.doc.nodeAt(inlineImageToolbar.pos);
+    if (!node || node.type.name !== 'diaryInlineImage') {
+      closeInlineImageToolbar();
+      return;
+    }
+
+    const tr = editor.state.tr.delete(inlineImageToolbar.pos, inlineImageToolbar.pos + node.nodeSize);
+    editor.view.dispatch(tr);
+    blurEditorForInlineImageToolbar();
+    hasUnsavedChanges.current = true;
+    setContent(editor.getHTML());
+    closeInlineImageToolbar();
   };
 
   const handleToggleMark = (markType: 'bold' | 'highlight') => {
@@ -1538,7 +2545,7 @@ export default function Editor() {
     <div className="min-h-screen font-body pb-40 transition-colors duration-500 relative" style={rootStyle} data-tick={updateTick}>
       {selectedTheme && (
         <>
-          {/* 旧背景淡出 */}
+          {/* 鏃ц儗鏅贰鍑?*/}
           {prevTheme && transitioning && (
             <div style={{
               position: 'fixed', top: 0, left: 0, right: 0,
@@ -1557,7 +2564,7 @@ export default function Editor() {
             </div>
           )}
 
-          {/* 新背景淡入 */}
+          {/* 鏂拌儗鏅贰鍏?*/}
           <div style={{
             position: 'fixed', top: 0, left: 0, right: 0,
             height: fixedViewportHeightCss,
@@ -1570,7 +2577,7 @@ export default function Editor() {
             transition: 'background-color 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
             animation: transitioning ? 'fadeIn 0.5s ease forwards' : 'none',
           }}>
-            {/* 叠加层也有过渡 */}
+            {/* 鍙犲姞灞備篃鏈夎繃娓?*/}
             <div style={{
               position: 'absolute', inset: 0,
               backgroundColor: selectedTheme.paperOverlay || 'transparent',
@@ -1593,7 +2600,7 @@ export default function Editor() {
       {/* Top Navigation Bar */}
       <nav 
         className={`fixed top-0 w-full z-50 px-4 flex justify-between items-center ${
-          selectedTheme?.toolbarColor === 'transparent' ? '' : 'backdrop-blur-xl'
+          selectedTheme?.backgroundImage || selectedTheme?.toolbarColor === 'transparent' ? '' : 'backdrop-blur-xl'
         } ${!selectedTheme ? (isDarkBg ? 'bg-black/20 text-white' : 'bg-surface/80 text-on-surface') : ''}`}
         style={navStyle}
       >
@@ -1746,23 +2753,48 @@ export default function Editor() {
         ref={editorScrollRef}
         className="fixed inset-x-0 top-0 bottom-0 z-10 overflow-y-auto overscroll-contain"
         style={editorScrollStyle}
-        onTouchMove={stopInputScrollLock}
-        onWheel={stopInputScrollLock}
+        onTouchMove={() => {
+          stopInputScrollLock();
+          closeInlineImageToolbar();
+        }}
+        onWheel={() => {
+          stopInputScrollLock();
+          closeInlineImageToolbar();
+        }}
         onPointerMove={updateTapScrollLockMove}
         onPointerDown={(e) => {
           startTapScrollLock(e);
         }}
-        onPointerUp={finishTapScrollLock}
+        onPointerUp={(e) => {
+          const img = (e.target as HTMLElement).closest('img[data-diary-inline-image]') as HTMLImageElement | null;
+          if (img) {
+            e.preventDefault();
+            e.stopPropagation();
+            suppressNextEditorClickRef.current = true;
+            selectInlineImageFromElement(img);
+            stopTapScrollLock();
+            return;
+          }
+          finishTapScrollLock(e);
+        }}
         onPointerCancel={stopTapScrollLock}
         onClick={(e) => {
+          const clickedInlineImage = (e.target as HTMLElement).closest('img[data-diary-inline-image]');
           if (showThemeBar) {
             setShowThemeBar(false);
           }
           if (isBackgroundSelectorOpen) {
             setIsBackgroundSelectorOpen(false);
           }
+          if (!clickedInlineImage) {
+            closeInlineImageToolbar();
+          }
           if (suppressNextEditorClickRef.current) {
             suppressNextEditorClickRef.current = false;
+            return;
+          }
+          if (clickedInlineImage) {
+            blurEditorForInlineImageToolbar();
             return;
           }
           if (!isEditing) {
@@ -1770,8 +2802,8 @@ export default function Editor() {
             editor?.commands.focus();
             setTimeout(() => editor?.commands.focus(), 10);
           } else {
-            // 只有当点击发生在编辑器内容区域内时才 re-focus，
-            // 避免点击底部空白区域时触发 scrollIntoView 把页面跳回光标位置。
+            // 鍙湁褰撶偣鍑诲彂鐢熷湪缂栬緫鍣ㄥ唴瀹瑰尯鍩熷唴鏃舵墠 re-focus锛?
+            // 閬垮厤鐐瑰嚮搴曢儴绌虹櫧鍖哄煙鏃惰Е鍙?scrollIntoView 鎶婇〉闈㈣烦鍥炲厜鏍囦綅缃€?
             const editorEl = (e.currentTarget as HTMLElement).querySelector('.ProseMirror');
             if (editorEl && editorEl.contains(e.target as Node)) {
               editor?.commands.focus(undefined, { scrollIntoView: false });
@@ -1792,57 +2824,60 @@ export default function Editor() {
             >
               <EditorContent editor={editor} />
 
-              {images.length > 0 && (
+              {defaultDisplayImages.length > 0 && (
                 <div style={{ marginTop: '32px' }}>
-                  {images.length === 1 ? (
+                  {defaultDisplayImages.length === 1 ? (
                     <div 
                       style={{ margin: '8px 0', borderRadius: '12px', overflow: 'hidden', cursor: 'pointer', position: 'relative' }}
                       className="group"
                       onClick={(e) => {
                         e.stopPropagation();
-                        openPreview(0);
+                        openPreview(images.indexOf(defaultDisplayImages[0]));
                       }}
                     >
-                      <SafeImage src={images[0]} style={{
+                      <SafeImage src={defaultDisplayImages[0]} style={{
                         width: '100%', aspectRatio: '4/3',
                         objectFit: 'cover', display: 'block'
                       }} />
                       {isEditing && (
                         <button 
-                          onClick={(e) => { e.stopPropagation(); removeImage(0); }}
+                          onClick={(e) => { e.stopPropagation(); removeImage(images.indexOf(defaultDisplayImages[0])); }}
                           className="absolute top-2 right-2 w-8 h-8 flex items-center justify-center bg-black/50 text-white rounded-full opacity-100 transition-opacity backdrop-blur-md"
                         >
                           <X className="w-4 h-4" />
                         </button>
                       )}
                     </div>
-                  ) : images.length === 2 ? (
+                  ) : defaultDisplayImages.length === 2 ? (
                     <div style={{ 
                       display: 'grid', gridTemplateColumns: '1fr 1fr',
                       gap: '3px', margin: '8px 0',
                       borderRadius: '12px', overflow: 'hidden' 
                     }}>
-                      {images.map((src, idx) => (
+                      {defaultDisplayImages.map((src) => {
+                        const originalIndex = images.indexOf(src);
+                        return (
                         <div 
-                          key={idx} 
+                          key={src}
                           style={{ aspectRatio: '1/1', overflow: 'hidden', cursor: 'pointer', position: 'relative' }}
                           className="group"
                           onClick={(e) => {
                             e.stopPropagation();
-                            openPreview(idx);
+                            openPreview(originalIndex);
                           }}
                         >
                           <SafeImage src={src} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                           {isEditing && (
                             <button 
-                              onClick={(e) => { e.stopPropagation(); removeImage(idx); }}
+                              onClick={(e) => { e.stopPropagation(); removeImage(originalIndex); }}
                               className="absolute top-2 right-2 w-8 h-8 flex items-center justify-center bg-black/50 text-white rounded-full opacity-100 transition-opacity backdrop-blur-md"
                             >
                               <X className="w-4 h-4" />
                             </button>
                           )}
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : (
                     <div style={{ 
@@ -1850,27 +2885,30 @@ export default function Editor() {
                       gap: '3px', margin: '8px 0',
                       borderRadius: '12px', overflow: 'hidden' 
                     }}>
-                      {images.map((src, idx) => (
+                      {defaultDisplayImages.map((src) => {
+                        const originalIndex = images.indexOf(src);
+                        return (
                         <div 
-                          key={idx} 
+                          key={src}
                           style={{ aspectRatio: '1/1', overflow: 'hidden', cursor: 'pointer', position: 'relative' }}
                           className="group"
                           onClick={(e) => {
                             e.stopPropagation();
-                            openPreview(idx);
+                            openPreview(originalIndex);
                           }}
                         >
                           <SafeImage src={src} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                           {isEditing && (
                             <button 
-                              onClick={(e) => { e.stopPropagation(); removeImage(idx); }}
+                              onClick={(e) => { e.stopPropagation(); removeImage(originalIndex); }}
                               className="absolute top-2 right-2 w-8 h-8 flex items-center justify-center bg-black/50 text-white rounded-full opacity-100 transition-opacity backdrop-blur-md z-10"
                             >
                               <X className="w-4 h-4" />
                             </button>
                           )}
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1879,6 +2917,66 @@ export default function Editor() {
           </div>
         </div>
       </main>
+
+      {inlineImageToolbar && isEditing && (
+        <div
+          data-inline-image-toolbar="true"
+          data-testid="inline-image-toolbar"
+          className="fixed z-[70] flex items-center justify-between rounded-[22px] border border-outline-variant/30 bg-white/95 px-3 py-2 text-[#3A3A3A] shadow-[0_4px_18px_rgba(0,0,0,0.16)] backdrop-blur-md"
+          style={{
+            top: inlineImageToolbar.top,
+            left: inlineImageToolbar.left,
+            width: inlineImageToolbar.width,
+          }}
+          onMouseDown={(e) => e.preventDefault()}
+          onPointerDown={(e) => e.preventDefault()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            aria-label={inlineImageToolbar.displaySize === 'small' ? '还原图片' : '缩小图片'}
+            title={inlineImageToolbar.displaySize === 'small' ? '还原图片' : '缩小图片'}
+            data-testid="inline-image-resize"
+            className="flex h-11 w-11 items-center justify-center rounded-2xl active:bg-black/5"
+            onClick={toggleInlineImageSize}
+          >
+            {inlineImageToolbar.displaySize === 'small'
+              ? <Maximize2 className="h-6 w-6" />
+              : <Minimize2 className="h-6 w-6" />}
+          </button>
+          <button
+            type="button"
+            aria-label="复制图片"
+            title="复制图片"
+            data-testid="inline-image-copy"
+            className="flex h-11 w-11 items-center justify-center rounded-2xl active:bg-black/5"
+            onClick={copyInlineImageToClipboard}
+          >
+            <Copy className="h-6 w-6" />
+          </button>
+          <button
+            type="button"
+            aria-label="预览图片"
+            title="预览图片"
+            data-testid="inline-image-preview"
+            className="flex h-11 w-11 items-center justify-center rounded-2xl active:bg-black/5"
+            onClick={openInlineImagePreview}
+          >
+            <ImageIcon className="h-6 w-6" />
+          </button>
+          <button
+            type="button"
+            aria-label="删除图片"
+            title="删除图片"
+            data-testid="inline-image-delete"
+            className="flex h-11 w-11 items-center justify-center rounded-2xl active:bg-black/5"
+            onClick={deleteInlineImage}
+          >
+            <Trash2 className="h-6 w-6" />
+          </button>
+        </div>
+      )}
 
       <input 
         type="file" 
@@ -2186,24 +3284,33 @@ export default function Editor() {
               <button 
                 onClick={async () => {
                   setIsAbandonConfirmOpen(false);
-                  if (existingJournal) {
-                    await diaryService.updateEntry(existingJournal.id, {
-                      content: content,
-                      images: images,
+                  const currentContent = normalizeContentForStorage(editorInstanceRef.current?.getHTML() || contentRef.current);
+                  const currentImages = imagesRef.current.filter((img: string) => typeof img === 'string' && img.trim() !== '');
+                  const currentEntry = existingJournalRef.current;
+                  if (currentEntry) {
+                    await diaryService.updateEntry(currentEntry.id, {
+                      content: currentContent,
+                      images: currentImages,
+                      backgroundId: backgroundIdRef.current,
+                      themeId: selectedThemeRef.current?.id,
                       status: 'trashed',
                       trashReason: 'abandoned',
                       trashedAt: new Date().toISOString()
-                    });
-                  } else {
+                    }, { saveHistory: true, immediateSync: true });
+                  } else if (!isNewEntryWithoutMeaningfulContent(currentContent, currentImages)) {
                     await diaryService.createEntry({
-                      content: content,
-                      images: images,
-                      diaryDate: new Date().toISOString(),
+                      id: activeEntryIdRef.current,
+                      content: currentContent,
+                      images: currentImages,
+                      diaryDate: getDraftDiaryDate(),
+                      backgroundId: backgroundIdRef.current,
+                      themeId: selectedThemeRef.current?.id,
                       status: 'trashed',
                       trashReason: 'abandoned',
                       trashedAt: new Date().toISOString()
-                    });
+                    }, { saveHistory: true, immediateSync: true });
                   }
+                  hasUnsavedChanges.current = false;
                   navigate(-1);
                 }}
                 className="px-5 py-2.5 rounded-full font-medium text-white bg-red-500 hover:bg-red-600 transition-colors"
@@ -2234,15 +3341,17 @@ export default function Editor() {
                     // Save current content to history first
                     await diaryService.saveHistory({
                       entryId: existingJournal.id,
-                      content: content,
-                      images: images,
+                      content: normalizeContentForStorage(editor?.getHTML() || content),
+                      images: imagesRef.current,
                       savedAt: new Date().toISOString()
                     });
                     
                     // Restore
-                    setContent(selectedHistory.content);
-                    setImages(selectedHistory.images || []);
-                    editor?.commands.setContent(selectedHistory.content);
+                    const restoredImages = selectedHistory.images || [];
+                    const restoredContent = hydrateContentForEditor(selectedHistory.content, restoredImages);
+                    setImagesWithRef(restoredImages);
+                    setContent(restoredContent);
+                    editor?.commands.setContent(restoredContent);
                     
                     setIsRestoreConfirmOpen(false);
                     setIsHistoryModalOpen(false);
@@ -2496,11 +3605,11 @@ export default function Editor() {
               padding: '12px 0 0',
             }}
           >
-            {/* 拖动条 */}
+            {/* 鎷栧姩鏉?*/}
             <div style={{ width: '36px', height: '4px', borderRadius: '2px',
               backgroundColor: isDark ? '#48484A' : '#E5E5EA', margin: '0 auto 16px' }} />
 
-            {/* Sheet 标题 */}
+            {/* Sheet 鏍囬 */}
             <div style={{
               textAlign: 'center',
               fontSize: '15px',
@@ -2511,12 +3620,12 @@ export default function Editor() {
               分享至
             </div>
 
-            {/* 图标区域：三列等宽，铺满整个 Sheet 宽度 */}
+            {/* 鍥炬爣鍖哄煙锛氫笁鍒楃瓑瀹斤紝閾烘弧鏁翠釜 Sheet 瀹藉害 */}
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',  // 三列等宽
+              gridTemplateColumns: 'repeat(3, 1fr)',  // 涓夊垪绛夊
               gap: '0',
-              padding: '8px 16px 0',                 // 减少左右内边距
+              padding: '8px 16px 0',                 // 鍑忓皯宸﹀彸鍐呰竟璺?
               width: '100%',
             }}>
               {[
@@ -2524,7 +3633,7 @@ export default function Editor() {
                   <div style={{
                     width: '56px', height: '56px',
                     borderRadius: '16px',
-                    backgroundColor: '#07C160',   // 微信品牌绿
+                    backgroundColor: '#07C160',   // 寰俊鍝佺墝缁?
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>
                     <svg width="34" height="28" viewBox="0 0 34 28" fill="none">
@@ -2542,7 +3651,7 @@ export default function Editor() {
                   <div style={{
                     width: '56px', height: '56px',
                     borderRadius: '16px',
-                    backgroundColor: '#446733',   // 品牌绿
+                    backgroundColor: '#446733',   // 鍝佺墝缁?
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>
                     <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
@@ -2589,16 +3698,19 @@ export default function Editor() {
       )}
 
       {/* Full Screen Image Preview Modal */}
-      <AnimatePresence>
-        {previewHashActive && displayIndex !== null && displayIndex >= 0 && displayIndex < images.length && (
-          <ImageViewer 
-            images={images} 
-            initialIndex={displayIndex} 
-            onClose={closePreview} 
-            onChange={handleImageViewerChange} 
-          />
-        )}
-      </AnimatePresence>
+      {typeof document !== 'undefined' && createPortal(
+        <AnimatePresence>
+          {previewHashActive && displayIndex !== null && displayIndex >= 0 && displayIndex < activePreviewImages.length && (
+            <ImageViewer
+              images={activePreviewImages}
+              initialIndex={displayIndex}
+              onClose={closePreview}
+              onChange={handleImageViewerChange}
+            />
+          )}
+        </AnimatePresence>,
+        document.body,
+      )}
 
       <AppToast message={toastMessage} />
     </div>

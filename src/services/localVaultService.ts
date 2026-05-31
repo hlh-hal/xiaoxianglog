@@ -5,6 +5,12 @@ import type { DiaryEntry, EntryStatus } from './diaryService';
 import { htmlToMarkdown } from '../utils/htmlToMarkdown';
 
 export type VaultProvider = 'android-documents' | 'web-directory' | 'unsupported';
+export type VaultCapabilityMode = 'directory-sync' | 'archive-download' | 'unsupported';
+
+export interface VaultCapability {
+  mode: VaultCapabilityMode;
+  reason?: string;
+}
 
 export interface VaultStatus {
   supported: boolean;
@@ -85,6 +91,45 @@ export interface VaultSyncResult {
   attachmentPaths?: string[];
 }
 
+export interface VaultBulkEntrySyncResult extends VaultSyncResult {
+  entryId: string;
+}
+
+export interface VaultBulkSyncResult {
+  count: number;
+  total: number;
+  failCount: number;
+  entries: VaultBulkEntrySyncResult[];
+  errors: { entryId: string; message: string }[];
+}
+
+export interface VaultBulkSyncOptions {
+  onProgress?: (done: number, total: number) => void;
+  retryCount?: number;
+}
+
+export interface VaultPackageOptions {
+  onProgress?: (done: number, total: number) => void;
+}
+
+export interface VaultPackageResult {
+  blob: Blob;
+  fileName: string;
+  entryCount: number;
+  fileCount: number;
+}
+
+interface WrittenEntryFile {
+  attachmentPaths: string[];
+  imageSources: string[];
+  markdown: string;
+}
+
+interface ZipFileInput {
+  path: string;
+  data: Uint8Array;
+}
+
 interface WebVaultDB extends DBSchema {
   handles: {
     key: string;
@@ -135,6 +180,12 @@ const emptyManifest = (): VaultManifest => ({
 
 function isAndroid(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+}
+
+function isMobileWebRuntime(): boolean {
+  if (Capacitor.isNativePlatform()) return false;
+  if (typeof navigator === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
 }
 
 function getWebWindow(): WebFileSystemWindow | null {
@@ -341,6 +392,136 @@ function dataUrlToBlob(data: string, mimeType: string): Blob {
   return new Blob([bytes], { type: mimeType });
 }
 
+function dataUrlToBytes(data: string): Uint8Array {
+  const commaIndex = data.indexOf(',');
+  const payload = (data.startsWith('data:') && commaIndex >= 0 ? data.slice(commaIndex + 1) : data).replace(/\s/g, '');
+  const binary = atob(payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+function uint16(value: number): Uint8Array {
+  return new Uint8Array([value & 0xff, (value >>> 8) & 0xff]);
+}
+
+function uint32(value: number): Uint8Array {
+  return new Uint8Array([value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff]);
+}
+
+let crc32Table: Uint32Array | null = null;
+
+function getCrc32Table(): Uint32Array {
+  if (crc32Table) return crc32Table;
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+    }
+    table[index] = value >>> 0;
+  }
+  crc32Table = table;
+  return table;
+}
+
+function crc32(data: Uint8Array): number {
+  const table = getCrc32Table();
+  let value = 0xffffffff;
+  for (const byte of data) {
+    value = table[(value ^ byte) & 0xff] ^ (value >>> 8);
+  }
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function dosDateTime(date = new Date()): { date: number; time: number } {
+  const year = Math.max(1980, date.getFullYear());
+  return {
+    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+    time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+  };
+}
+
+function createZipBlob(files: ZipFileInput[]): Blob {
+  const encoder = new TextEncoder();
+  const localParts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
+  const { date, time } = dosDateTime();
+  let offset = 0;
+
+  for (const file of files) {
+    const normalizedPath = normalizePath(file.path);
+    const nameBytes = encoder.encode(normalizedPath);
+    const checksum = crc32(file.data);
+
+    const localHeader = concatBytes([
+      uint32(0x04034b50),
+      uint16(20),
+      uint16(0x0800),
+      uint16(0),
+      uint16(time),
+      uint16(date),
+      uint32(checksum),
+      uint32(file.data.length),
+      uint32(file.data.length),
+      uint16(nameBytes.length),
+      uint16(0),
+      nameBytes,
+    ]);
+    localParts.push(localHeader, file.data);
+
+    const centralHeader = concatBytes([
+      uint32(0x02014b50),
+      uint16(20),
+      uint16(20),
+      uint16(0x0800),
+      uint16(0),
+      uint16(time),
+      uint16(date),
+      uint32(checksum),
+      uint32(file.data.length),
+      uint32(file.data.length),
+      uint16(nameBytes.length),
+      uint16(0),
+      uint16(0),
+      uint16(0),
+      uint16(0),
+      uint32(0),
+      uint32(offset),
+      nameBytes,
+    ]);
+    centralParts.push(centralHeader);
+    offset += localHeader.length + file.data.length;
+  }
+
+  const centralDirectory = concatBytes(centralParts);
+  const endOfCentralDirectory = concatBytes([
+    uint32(0x06054b50),
+    uint16(0),
+    uint16(0),
+    uint16(files.length),
+    uint16(files.length),
+    uint32(centralDirectory.length),
+    uint32(offset),
+    uint16(0),
+  ]);
+
+  return new Blob([...localParts, centralDirectory, endOfCentralDirectory], { type: 'application/zip' });
+}
+
 function androidStatusUnavailable(message: string): VaultStatus {
   return {
     supported: true,
@@ -516,6 +697,13 @@ async function getOrCreateWebFile(root: FileSystemDirectoryHandle, path: string)
   return parent.getFileHandle(fileName, { create: true });
 }
 
+async function deleteWebFile(root: FileSystemDirectoryHandle, path: string): Promise<void> {
+  const segments = cleanSegments(path);
+  const fileName = segments[segments.length - 1];
+  const parent = await findWebDirectory(root, segments.slice(0, -1).join('/'), false);
+  await parent?.removeEntry(fileName).catch(() => undefined);
+}
+
 async function findWebFile(root: FileSystemDirectoryHandle, path: string): Promise<FileSystemFileHandle | null> {
   const segments = cleanSegments(path);
   const fileName = segments[segments.length - 1];
@@ -538,6 +726,30 @@ async function ensureWebVaultStructure(root: FileSystemDirectoryHandle): Promise
   await getOrCreateWebDirectory(root, cleanSegments(ATTACHMENT_IMAGE_DIR));
   await getOrCreateWebDirectory(root, cleanSegments(TRASH_DIR));
   await getOrCreateWebDirectory(root, cleanSegments('.xiaoxiang'));
+}
+
+async function verifyWebDirectoryWritable(root: FileSystemDirectoryHandle): Promise<void> {
+  const probeContent = `xiaoxiang-write-probe:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  const probePath = mapPathToSelectedRoot(`.xiaoxiang/write-probe-${Date.now()}.txt`, root.name || '');
+
+  try {
+    const handle = await getOrCreateWebFile(root, probePath);
+    const writable = await handle.createWritable();
+    await writable.write(probeContent);
+    await writable.close();
+
+    const file = await handle.getFile();
+    if (file.size === 0) {
+      throw new Error('探针文件为空');
+    }
+    if (await file.text() !== probeContent) {
+      throw new Error('探针文件读回内容不一致');
+    }
+  } catch (error) {
+    throw new Error(`当前浏览器无法稳定写入所选文件夹：${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    await deleteWebFile(root, probePath);
+  }
 }
 
 async function walkWebMarkdownFiles(
@@ -647,9 +859,10 @@ const webDirectoryBackend: VaultBackend = {
         });
       }
 
+      await ensureWebVaultStructure(handle);
+      await verifyWebDirectoryWritable(handle);
       webRootHandle = handle;
       await storeWebRootHandle(handle);
-      await ensureWebVaultStructure(handle);
 
       return webStatus({
         authorized: true,
@@ -696,28 +909,41 @@ const webDirectoryBackend: VaultBackend = {
     const root = await requireWebRoot();
     const physicalPath = mapPathToSelectedRoot(path, root.name || '');
     const handle = await getOrCreateWebFile(root, physicalPath);
-    const writable = await handle.createWritable();
-    await writable.write(content);
-    await writable.close();
-    const file = await handle.getFile();
-    if (content.length > 0 && file.size === 0) {
-      throw new Error(`写入失败，文件为空: ${path}`);
+    try {
+      const writable = await handle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      const file = await handle.getFile();
+      if (content.length > 0 && file.size === 0) {
+        throw new Error(`写入失败，文件为空: ${path}`);
+      }
+      if (await file.text() !== content) {
+        throw new Error(`写入校验失败: ${path}`);
+      }
+      return { path, size: file.size };
+    } catch (error) {
+      await this.deleteFile(path).catch(() => undefined);
+      throw error;
     }
-    return { path, size: file.size };
   },
 
   async writeBase64File(path: string, base64: string, mimeType: string): Promise<{ path: string; size?: number }> {
     const root = await requireWebRoot();
     const physicalPath = mapPathToSelectedRoot(path, root.name || '');
     const handle = await getOrCreateWebFile(root, physicalPath);
-    const writable = await handle.createWritable();
-    await writable.write(dataUrlToBlob(base64, mimeType));
-    await writable.close();
-    const file = await handle.getFile();
-    if (file.size === 0) {
-      throw new Error(`写入失败，附件为空: ${path}`);
+    try {
+      const writable = await handle.createWritable();
+      await writable.write(dataUrlToBlob(base64, mimeType));
+      await writable.close();
+      const file = await handle.getFile();
+      if (file.size === 0) {
+        throw new Error(`写入失败，附件为空: ${path}`);
+      }
+      return { path, size: file.size };
+    } catch (error) {
+      await this.deleteFile(path).catch(() => undefined);
+      throw error;
     }
-    return { path, size: file.size };
   },
 
   async readTextFile(path: string): Promise<{ path: string; content: string }> {
@@ -777,10 +1003,21 @@ const webDirectoryBackend: VaultBackend = {
     if (!source) throw new Error('源文件不存在');
 
     const target = await getOrCreateWebFile(root, mapPathToSelectedRoot(toPath, root.name || ''));
-    const writable = await target.createWritable();
-    await writable.write(await source.getFile());
-    await writable.close();
-    await this.deleteFile(fromPath);
+    try {
+      const sourceFile = await source.getFile();
+      const writable = await target.createWritable();
+      await writable.write(sourceFile);
+      await writable.close();
+
+      const targetFile = await target.getFile();
+      if (sourceFile.size > 0 && targetFile.size === 0) {
+        throw new Error(`写入失败，文件为空: ${toPath}`);
+      }
+      await this.deleteFile(fromPath);
+    } catch (error) {
+      await this.deleteFile(toPath).catch(() => undefined);
+      throw error;
+    }
 
     return { fromPath, toPath };
   },
@@ -827,6 +1064,13 @@ async function writeManifest(manifest: VaultManifest, backend = getBackend()): P
   await backend.writeTextFile(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+async function cleanupEmptyMarkdownFiles(root: string, backend = getBackend()): Promise<number> {
+  const result = await backend.listMarkdownFiles(root).catch(() => ({ files: [] as VaultMarkdownFile[] }));
+  const emptyFiles = (result.files || []).filter((file) => (file.size || 0) === 0);
+  await Promise.all(emptyFiles.map((file) => backend.deleteFile(file.path).catch(() => undefined)));
+  return emptyFiles.length;
+}
+
 async function existingMarkdownPaths(root: string, backend = getBackend()): Promise<Set<string>> {
   try {
     const result = await backend.listMarkdownFiles(root);
@@ -838,17 +1082,41 @@ async function existingMarkdownPaths(root: string, backend = getBackend()): Prom
   }
 }
 
+async function retryVaultOperation<T>(operation: () => Promise<T>, retryCount = 2): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt < retryCount) {
+        await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastError;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || 'sync failed');
+}
+
 async function uniqueEntryPath(
   entry: DiaryEntry,
   manifest: VaultManifest,
   root: string,
   backend: VaultBackend,
   preferredFileName?: string,
+  usedPathsByRoot?: Map<string, Set<string>>,
 ): Promise<string> {
   const dateKey = formatEntryDate(entry);
   const year = dateKey.slice(0, 4);
   const rootYear = `${root}/${year}`;
-  const used = await existingMarkdownPaths(rootYear, backend);
+  let used = usedPathsByRoot?.get(rootYear);
+  if (!used) {
+    used = await existingMarkdownPaths(rootYear, backend);
+    usedPathsByRoot?.set(rootYear, used);
+  }
 
   for (const record of Object.values(manifest.entries)) {
     if (record.id !== entry.id) {
@@ -860,6 +1128,7 @@ async function uniqueEntryPath(
   const baseName = preferredFileName || `${dateKey}.md`;
   const directPath = `${rootYear}/${baseName}`;
   if (!used.has(directPath)) {
+    used.add(directPath);
     return directPath;
   }
 
@@ -867,11 +1136,60 @@ async function uniqueEntryPath(
   for (let index = 2; index < 1000; index += 1) {
     const candidate = `${rootYear}/${stem}-${index}.md`;
     if (!used.has(candidate)) {
+      used.add(candidate);
       return candidate;
     }
   }
 
-  return `${rootYear}/${stem}-${Date.now()}.md`;
+  const fallback = `${rootYear}/${stem}-${Date.now()}.md`;
+  used.add(fallback);
+  return fallback;
+}
+
+function getUsedPackagePaths(rootYear: string, manifest: VaultManifest, usedPathsByRoot: Map<string, Set<string>>): Set<string> {
+  let used = usedPathsByRoot.get(rootYear);
+  if (used) return used;
+
+  used = new Set<string>();
+  for (const record of Object.values(manifest.entries)) {
+    if (record.path?.startsWith(`${rootYear}/`)) used.add(normalizePath(record.path));
+    if (record.trashPath?.startsWith(`${rootYear}/`)) used.add(normalizePath(record.trashPath));
+  }
+  usedPathsByRoot.set(rootYear, used);
+  return used;
+}
+
+function uniquePackageEntryPath(
+  entry: DiaryEntry,
+  manifest: VaultManifest,
+  root: string,
+  usedPathsByRoot: Map<string, Set<string>>,
+  preferredFileName?: string,
+): string {
+  const dateKey = formatEntryDate(entry);
+  const year = dateKey.slice(0, 4);
+  const rootYear = `${root}/${year}`;
+  const used = getUsedPackagePaths(rootYear, manifest, usedPathsByRoot);
+  const baseName = preferredFileName || `${dateKey}.md`;
+  const directPath = `${rootYear}/${baseName}`;
+
+  if (!used.has(directPath)) {
+    used.add(directPath);
+    return directPath;
+  }
+
+  const stem = baseName.replace(/\.md$/i, '') || dateKey;
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${rootYear}/${stem}-${index}.md`;
+    if (!used.has(candidate)) {
+      used.add(candidate);
+      return candidate;
+    }
+  }
+
+  const fallback = `${rootYear}/${stem}-${Date.now()}.md`;
+  used.add(fallback);
+  return fallback;
 }
 
 async function writeEntryImages(
@@ -923,6 +1241,44 @@ async function writeEntryImages(
   return { paths, sources };
 }
 
+async function collectPackageImages(entry: DiaryEntry): Promise<{ paths: string[]; sources: string[]; files: ZipFileInput[] }> {
+  const paths: string[] = [];
+  const sources: string[] = [];
+  const files: ZipFileInput[] = [];
+  const images = entry.images || [];
+
+  for (let index = 0; index < images.length; index += 1) {
+    const image = images[index];
+    if (!image) continue;
+
+    try {
+      if (image.startsWith('data:image/')) {
+        const { extension } = mimeExtensionFromDataUrl(image);
+        const path = `${ATTACHMENT_IMAGE_DIR}/${entry.id}/${index + 1}.${extension}`;
+        files.push({ path, data: dataUrlToBytes(image) });
+        paths.push(path);
+        sources.push(image);
+        continue;
+      }
+
+      const response = await fetch(image, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      if (blob.size === 0) throw new Error('empty image response');
+      const mimeType = blob.type || 'image/jpeg';
+      const extension = extensionFromUrl(image) || extensionFromMimeType(mimeType);
+      const path = `${ATTACHMENT_IMAGE_DIR}/${entry.id}/${index + 1}.${extension}`;
+      files.push({ path, data: new Uint8Array(await blob.arrayBuffer()) });
+      paths.push(path);
+      sources.push(image);
+    } catch (error) {
+      console.warn('Collect local vault package image failed:', image, error);
+    }
+  }
+
+  return { paths, sources, files };
+}
+
 async function renderEntryMarkdown(
   entry: DiaryEntry,
   targetPath: string,
@@ -942,9 +1298,160 @@ async function renderEntryMarkdown(
   return `# ${dateKey}\n${metadata}\n\n${sections.join('\n\n').trim()}\n`;
 }
 
+async function writeEntryMarkdownFile(
+  entry: DiaryEntry,
+  backend: VaultBackend,
+  targetPath: string,
+  previousRecord?: VaultEntryRecord,
+  verifyAfterWrite = true,
+): Promise<WrittenEntryFile> {
+  const { paths: attachmentPaths, sources: imageSources } = await writeEntryImages(entry, backend, previousRecord);
+  const markdown = await renderEntryMarkdown(entry, targetPath, attachmentPaths, imageSources);
+  await backend.writeTextFile(targetPath, markdown);
+
+  if (verifyAfterWrite) {
+    const verify = await backend.readTextFile(targetPath);
+    if (verify.content !== markdown) {
+      await backend.deleteFile(targetPath).catch(() => undefined);
+      throw new Error(`写入校验失败: ${targetPath}`);
+    }
+  }
+
+  return { attachmentPaths, imageSources, markdown };
+}
+
+async function syncEntryIntoManifest(
+  entry: DiaryEntry,
+  backend: VaultBackend,
+  manifest: VaultManifest,
+  usedPathsByRoot?: Map<string, Set<string>>,
+  verifyAfterWrite = true,
+): Promise<VaultSyncResult> {
+  const record = manifest.entries[entry.id] || { id: entry.id };
+  const isTrashed = entry.status === 'trashed';
+  const root = isTrashed ? TRASH_DIR : USER_LOG_DIR;
+  const sourcePath = isTrashed
+    ? (record.path || entry.vaultPath)
+    : (record.trashPath || entry.vaultTrashPath);
+  let targetPath = isTrashed
+    ? (record.trashPath || entry.vaultTrashPath)
+    : (record.path || entry.vaultPath);
+
+  if (!targetPath) {
+    targetPath = await uniqueEntryPath(
+      entry,
+      manifest,
+      root,
+      backend,
+      sourcePath?.split('/').pop(),
+      usedPathsByRoot,
+    );
+  }
+
+  const { attachmentPaths, imageSources, markdown } = await writeEntryMarkdownFile(
+    entry,
+    backend,
+    targetPath,
+    record,
+    verifyAfterWrite,
+  );
+
+  if (sourcePath && sourcePath !== targetPath) {
+    await backend.deleteFile(sourcePath).catch(() => undefined);
+  }
+
+  await Promise.all(
+    (record.attachmentPaths || [])
+      .filter((path) => !attachmentPaths.includes(path))
+      .map((path) => backend.deleteFile(path).catch(() => undefined)),
+  );
+
+  if (isTrashed) {
+    record.trashPath = targetPath;
+    delete record.path;
+  } else {
+    record.path = targetPath;
+    delete record.trashPath;
+  }
+
+  record.attachmentPaths = attachmentPaths;
+  record.imageSources = imageSources;
+  record.contentHash = stableHash(markdown);
+  record.diaryDate = entry.diaryDate;
+  record.updatedAt = entry.updatedAt;
+  record.status = entry.status;
+  manifest.entries[entry.id] = record;
+
+  return {
+    vaultPath: record.path,
+    vaultTrashPath: record.trashPath,
+    attachmentPaths,
+  };
+}
+
+async function packageEntry(
+  entry: DiaryEntry,
+  manifest: VaultManifest,
+  usedPathsByRoot: Map<string, Set<string>>,
+): Promise<{ record: VaultEntryRecord; files: ZipFileInput[] }> {
+  const record = manifest.entries[entry.id] || { id: entry.id };
+  const isTrashed = entry.status === 'trashed';
+  const root = isTrashed ? TRASH_DIR : USER_LOG_DIR;
+  const sourcePath = isTrashed
+    ? (record.path || entry.vaultPath)
+    : (record.trashPath || entry.vaultTrashPath);
+  const targetPath = isTrashed
+    ? (record.trashPath || entry.vaultTrashPath || uniquePackageEntryPath(entry, manifest, root, usedPathsByRoot, sourcePath?.split('/').pop()))
+    : (record.path || entry.vaultPath || uniquePackageEntryPath(entry, manifest, root, usedPathsByRoot, sourcePath?.split('/').pop()));
+  const imageResult = await collectPackageImages(entry);
+  const markdown = await renderEntryMarkdown(entry, targetPath, imageResult.paths, imageResult.sources);
+
+  if (isTrashed) {
+    record.trashPath = targetPath;
+    delete record.path;
+  } else {
+    record.path = targetPath;
+    delete record.trashPath;
+  }
+  record.attachmentPaths = imageResult.paths;
+  record.imageSources = imageResult.sources;
+  record.contentHash = stableHash(markdown);
+  record.diaryDate = entry.diaryDate;
+  record.updatedAt = entry.updatedAt;
+  record.status = entry.status;
+  manifest.entries[entry.id] = record;
+
+  return {
+    record,
+    files: [
+      ...imageResult.files,
+      { path: targetPath, data: new TextEncoder().encode(markdown) },
+    ],
+  };
+}
+
 export const localVaultService = {
   isSupported(): boolean {
     return getBackend().isSupported();
+  },
+
+  getVaultCapability(): VaultCapability {
+    if (isAndroid()) {
+      return { mode: 'directory-sync' };
+    }
+    if (supportsWebDirectoryPicker()) {
+      return { mode: 'directory-sync' };
+    }
+    if (isMobileWebRuntime()) {
+      return {
+        mode: 'archive-download',
+        reason: '当前手机浏览器未提供文件夹写入能力，将生成可下载的日志包',
+      };
+    }
+    return {
+      mode: 'unsupported',
+      reason: '当前浏览器不支持网页申请文件夹写入权限',
+    };
   },
 
   async chooseVaultDirectory(): Promise<VaultStatus> {
@@ -997,51 +1504,9 @@ export const localVaultService = {
     if (!status.available) return null;
 
     const manifest = await readManifest(backend);
-    const record = manifest.entries[entry.id] || { id: entry.id };
-    const root = entry.status === 'trashed' ? TRASH_DIR : USER_LOG_DIR;
-    let targetPath = entry.status === 'trashed' ? record.trashPath : record.path;
-
-    if (!targetPath) {
-      targetPath = await uniqueEntryPath(entry, manifest, root, backend);
-    }
-
-    const { paths: attachmentPaths, sources: imageSources } = await writeEntryImages(entry, backend, record);
-    const markdown = await renderEntryMarkdown(entry, targetPath, attachmentPaths, imageSources);
-    await backend.writeTextFile(targetPath, markdown);
-    await Promise.all(
-      (record.attachmentPaths || [])
-        .filter((path) => !attachmentPaths.includes(path))
-        .map((path) => backend.deleteFile(path).catch(() => undefined)),
-    );
-
-    if (entry.status === 'trashed') {
-      if (record.path && record.path !== targetPath) {
-        await backend.deleteFile(record.path).catch(() => undefined);
-      }
-      record.trashPath = targetPath;
-      delete record.path;
-    } else {
-      if (record.trashPath && record.trashPath !== targetPath) {
-        await backend.deleteFile(record.trashPath).catch(() => undefined);
-      }
-      record.path = targetPath;
-      delete record.trashPath;
-    }
-
-    record.attachmentPaths = attachmentPaths;
-    record.imageSources = imageSources;
-    record.contentHash = stableHash(markdown);
-    record.diaryDate = entry.diaryDate;
-    record.updatedAt = entry.updatedAt;
-    record.status = entry.status;
-    manifest.entries[entry.id] = record;
+    const result = await syncEntryIntoManifest(entry, backend, manifest);
     await writeManifest(manifest, backend);
-
-    return {
-      vaultPath: record.path,
-      vaultTrashPath: record.trashPath,
-      attachmentPaths,
-    };
+    return result;
   },
 
   async moveEntryToTrash(entry: DiaryEntry): Promise<VaultSyncResult | null> {
@@ -1050,31 +1515,10 @@ export const localVaultService = {
     if (!status.available) return null;
 
     const manifest = await readManifest(backend);
-    const record = manifest.entries[entry.id] || { id: entry.id };
-    const sourcePath = record.path;
-    const fileName = sourcePath?.split('/').pop();
-    const targetPath = record.trashPath || (await uniqueEntryPath(entry, manifest, TRASH_DIR, backend, fileName));
-
-    if (sourcePath) {
-      await backend.moveFile(sourcePath, targetPath).catch(async () => {
-        await this.syncEntry({ ...entry, status: 'trashed' });
-      });
-    } else {
-      await this.syncEntry({ ...entry, status: 'trashed' });
-    }
-
-    record.trashPath = targetPath;
-    delete record.path;
-    record.diaryDate = entry.diaryDate;
-    record.updatedAt = entry.updatedAt;
-    record.status = 'trashed';
-    manifest.entries[entry.id] = record;
+    const trashedEntry = { ...entry, status: 'trashed' as EntryStatus };
+    const result = await syncEntryIntoManifest(trashedEntry, backend, manifest);
     await writeManifest(manifest, backend);
-
-    return {
-      vaultTrashPath: targetPath,
-      attachmentPaths: record.attachmentPaths || [],
-    };
+    return result;
   },
 
   async restoreEntry(entry: DiaryEntry): Promise<VaultSyncResult | null> {
@@ -1083,30 +1527,90 @@ export const localVaultService = {
     if (!status.available) return null;
 
     const manifest = await readManifest(backend);
-    const record = manifest.entries[entry.id] || { id: entry.id };
-    const sourcePath = record.trashPath;
-    const fileName = sourcePath?.split('/').pop();
-    const targetPath = record.path || (await uniqueEntryPath(entry, manifest, USER_LOG_DIR, backend, fileName));
+    const activeEntry = { ...entry, status: 'active' as EntryStatus };
+    const result = await syncEntryIntoManifest(activeEntry, backend, manifest);
+    await writeManifest(manifest, backend);
+    return result;
+  },
 
-    if (sourcePath) {
-      await backend.moveFile(sourcePath, targetPath).catch(async () => {
-        await this.syncEntry({ ...entry, status: 'active' });
-      });
-    } else {
-      await this.syncEntry({ ...entry, status: 'active' });
+  async syncEntries(entries: DiaryEntry[], options: VaultBulkSyncOptions = {}): Promise<VaultBulkSyncResult> {
+    const backend = getBackend();
+    const status = await getStatusOrUnavailable(backend);
+    if (!status.available) {
+      throw new Error(status.unavailableReason || 'Local vault is not available');
     }
 
-    record.path = targetPath;
-    delete record.trashPath;
-    record.diaryDate = entry.diaryDate;
-    record.updatedAt = entry.updatedAt;
-    record.status = 'active';
-    manifest.entries[entry.id] = record;
-    await writeManifest(manifest, backend);
+    const manifest = await readManifest(backend);
+    const usedPathsByRoot = new Map<string, Set<string>>();
+    const syncedEntries: VaultBulkEntrySyncResult[] = [];
+    const errors: { entryId: string; message: string }[] = [];
+    const total = entries.length;
+    options.onProgress?.(0, total);
+
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      try {
+        const entryToSync = entry.status === 'trashed'
+          ? { ...entry, status: 'trashed' as EntryStatus }
+          : entry;
+        const result = await retryVaultOperation(
+          () => syncEntryIntoManifest(entryToSync, backend, manifest, usedPathsByRoot, false),
+          options.retryCount,
+        );
+        if (!result.vaultPath && !result.vaultTrashPath) {
+          throw new Error('Local vault write returned no file path');
+        }
+        syncedEntries.push({ entryId: entry.id, ...result });
+      } catch (error) {
+        errors.push({ entryId: entry.id, message: getErrorMessage(error) });
+        console.warn('Sync entry to local vault failed:', error);
+      } finally {
+        options.onProgress?.(index + 1, total);
+      }
+    }
+
+    if (syncedEntries.length > 0) {
+      await writeManifest(manifest, backend);
+    }
 
     return {
-      vaultPath: targetPath,
-      attachmentPaths: record.attachmentPaths || [],
+      count: syncedEntries.length,
+      total,
+      failCount: errors.length,
+      entries: syncedEntries,
+      errors,
+    };
+  },
+
+  async createVaultPackage(entries: DiaryEntry[], options: VaultPackageOptions = {}): Promise<VaultPackageResult> {
+    const manifest = emptyManifest();
+    const usedPathsByRoot = new Map<string, Set<string>>();
+    const files: ZipFileInput[] = [];
+    const total = entries.length;
+
+    options.onProgress?.(0, total);
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      const entryToPackage = entry.status === 'trashed'
+        ? { ...entry, status: 'trashed' as EntryStatus }
+        : entry;
+      const result = await packageEntry(entryToPackage, manifest, usedPathsByRoot);
+      files.push(...result.files);
+      options.onProgress?.(index + 1, total);
+    }
+
+    manifest.updatedAt = new Date().toISOString();
+    files.push({
+      path: MANIFEST_PATH,
+      data: new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`),
+    });
+
+    const fileName = `小象日志本地日志包-${format(new Date(), 'yyyy-MM-dd')}.zip`;
+    return {
+      blob: createZipBlob(files),
+      fileName,
+      entryCount: entries.length,
+      fileCount: files.length,
     };
   },
 
@@ -1174,5 +1678,17 @@ export const localVaultService = {
 
   async readEntriesFromVault(): Promise<VaultImportedEntry[]> {
     return (await this.scanEntriesFromVault()).entries;
+  },
+
+  async cleanupEmptyMarkdownFiles(): Promise<number> {
+    const backend = getBackend();
+    const status = await getStatusOrUnavailable(backend);
+    if (!status.available) return 0;
+
+    const [activeCount, trashCount] = await Promise.all([
+      cleanupEmptyMarkdownFiles(USER_LOG_DIR, backend),
+      cleanupEmptyMarkdownFiles(TRASH_DIR, backend),
+    ]);
+    return activeCount + trashCount;
   },
 };

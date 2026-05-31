@@ -1,0 +1,18 @@
+# TODO
+
+这个文件记录跨会话仍然有价值的待办和阻塞项。临时聊天里的小步骤不用写进来。
+
+## 现在优先
+
+- [ ] 2026-05-27 PWA 通知补修已上传云端：线上首页引用 `assets/index-BRuGXoKy.js`，后端 dist/src/schema/package 已上传且未覆盖 `.env`。下一步在宝塔重启 `C:\wwwroot\xiaoxiang-server` Node 项目，确认线上 `.env` 有 VAPID 三项配置，再用真机 Chrome PWA 验证后台/锁屏系统通知。
+- [ ] 确认当前工作区多处未提交改动是否需要整理提交，尤其是 `AGENTS.md`/`vault/`、旧 `agent.md` 删除、本地日志同步、PWA、通知、排行榜和 nginx 配置。
+- [ ] 确认是否把 `vault/` 放在当前代码仓库内长期维护，还是迁移到 Obsidian/云盘同步目录后在 `AGENTS.md` 改成绝对路径。
+
+## 阻塞项
+
+- 暂无。
+
+## 稍后再看
+
+- [ ] 提交前确认 Windows 下 `agent.md` 删除与 `AGENTS.md` 新增是否按预期表现为入口文档迁移。
+- [ ] 后续每次实质工作结束前按 `vault/agent/memory-workflow.md` 检查是否需要写入知识库。

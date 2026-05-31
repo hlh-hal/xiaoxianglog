@@ -3,6 +3,7 @@ export interface AppSettings {
   reminderTime: string;
   saveOnExit: boolean;
   autoAdjustTime: boolean;
+  inlineImagesInEditor: boolean;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -10,6 +11,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   reminderTime: '21:00',
   saveOnExit: true,
   autoAdjustTime: true,
+  inlineImagesInEditor: false,
 };
 
 export interface FontSettings {

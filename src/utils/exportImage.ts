@@ -563,6 +563,79 @@ export function measureExportCard(el: HTMLElement): { cardH: number } {
   return { cardH: offsetHeight };
 }
 
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForFontsReady(timeoutMs: number): Promise<void> {
+  const fontSet = document.fonts;
+  if (!fontSet?.ready) return;
+  await Promise.race([fontSet.ready.then(() => undefined), delay(timeoutMs)]);
+}
+
+async function waitForImagesReady(root: HTMLElement, timeoutMs: number): Promise<void> {
+  const images = Array.from(root.querySelectorAll('img'));
+  if (images.length === 0) return;
+
+  await Promise.race([
+    Promise.all(
+      images.map((img) => {
+        if (img.complete) return Promise.resolve();
+        return new Promise<void>((resolve) => {
+          img.onload = () => resolve();
+          img.onerror = () => resolve();
+        });
+      })
+    ).then(() => undefined),
+    delay(timeoutMs),
+  ]);
+}
+
+function getLayoutSnapshot(el: HTMLElement): string {
+  const rect = el.getBoundingClientRect();
+  return [
+    Math.round(rect.width * 100) / 100,
+    Math.round(rect.height * 100) / 100,
+    el.scrollWidth,
+    el.scrollHeight,
+    el.offsetWidth,
+    el.offsetHeight,
+  ].join(':');
+}
+
+/**
+ * Wait until the export card is safe for html2canvas.
+ *
+ * Mixed Chinese/English text can shift after React paint while browser fonts and
+ * line boxes settle. Capturing during that short window may make glyphs overlap,
+ * so the export path waits for fonts/images and then requires a stable layout
+ * across consecutive animation frames.
+ */
+export async function waitForExportRenderReady(el: HTMLElement): Promise<void> {
+  await waitForFontsReady(1500);
+  await waitForImagesReady(el, 3000);
+
+  let stableFrames = 0;
+  let previous = '';
+  const maxFrames = 24;
+
+  for (let i = 0; i < maxFrames; i++) {
+    await nextAnimationFrame();
+    const current = getLayoutSnapshot(el);
+    if (current === previous) {
+      stableFrames++;
+      if (stableFrames >= 2) return;
+    } else {
+      stableFrames = 0;
+      previous = current;
+    }
+  }
+}
+
 /** html2canvas 单次产出 canvas 的物理单边安全阈值（px）。*/
 const SAFE_MAX_SIDE = 12000;
 
