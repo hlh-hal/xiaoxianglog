@@ -169,7 +169,7 @@ export default function Community() {
         </div>
       </header>
 
-      <main className="app-content-container pt-[calc(var(--app-total-header-height)+12px)] pb-24 md:pb-10">
+      <main className="app-content-container !px-2 pt-[calc(var(--app-total-header-height)+12px)] pb-24 sm:!px-4 md:!px-6 md:pb-10">
         <nav className="flex justify-center gap-10 mb-6 sticky top-[var(--app-total-header-height)] z-30 py-2 bg-surface/90 backdrop-blur-md">
           <button 
             onClick={() => setActiveTab('recommend')}
@@ -194,7 +194,7 @@ export default function Community() {
             <div className="text-center py-20 text-outline">暂无内容</div>
           ) : (
             posts.map((post) => (
-              <article id={post.id} key={post.id} className="bg-surface-container-lowest rounded-2xl p-6 flex flex-col gap-5 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)] relative">
+              <article id={post.id} key={post.id} className="bg-surface-container-lowest rounded-2xl p-5 md:p-6 flex flex-col gap-5 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)] relative">
                 <header className="flex items-start gap-3">
                   <UserAvatar
                     userId={post.user.id}
@@ -221,7 +221,7 @@ export default function Community() {
                   </div>
                 </header>
 
-                <div className="border-l-2 border-primary-container pl-4 cursor-pointer active:opacity-70 transition-opacity" onClick={() => { sessionStorage.setItem('last_viewed_community_post', post.id); navigate(`/post/${post.id}`); }}>
+                <div className="border-l-2 border-l-[#c5efad] pl-4 cursor-pointer active:opacity-70 transition-opacity" onClick={() => { sessionStorage.setItem('last_viewed_community_post', post.id); navigate(`/post/${post.id}`); }}>
                   <p className="text-on-surface leading-relaxed text-[15px] font-light whitespace-pre-wrap line-clamp-5 break-words">
                     {stripAllMarkdown(post.content || '').replace(/\n{3,}/g, '\n\n').trim()}
                   </p>
