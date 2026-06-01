@@ -1,7 +1,7 @@
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 
 const HARNESS_URL = 'http://localhost:3000/tests/exports/harness.html';
-const CASES = ['H1', 'H2', 'H3', 'H4', 'H5'] as const;
+const CASES = ['H1', 'H2', 'H3', 'H4', 'H5', 'H6'] as const;
 type CaseId = (typeof CASES)[number];
 
 interface HarnessResult {
@@ -27,6 +27,7 @@ const EXPECTATIONS: CaseExpectation[] = [
   { caseId: 'H3', expect: 'pass', description: 'blockquote' },
   { caseId: 'H4', expect: 'pass', description: 'plain paragraph' },
   { caseId: 'H5', expect: 'pass', description: 'mixed Chinese/English export text with ai skill phrase' },
+  { caseId: 'H6', expect: 'pass', description: 'Edge mixed Chinese/Latin overlap regression text' },
 ];
 
 const OKLCH_PATTERN = /Attempting to parse an unsupported color function/i;

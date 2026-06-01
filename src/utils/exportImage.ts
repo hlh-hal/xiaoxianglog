@@ -650,6 +650,121 @@ export function pickExportScale(cardH: number): 1 | 1.5 | 2 {
   return 1;
 }
 
+type Html2CanvasOptions = {
+  useCORS: boolean;
+  allowTaint: boolean;
+  scale: number;
+  backgroundColor: string | null;
+  logging: boolean;
+  width: number;
+  windowWidth: number;
+};
+
+export type Html2CanvasRenderer = (
+  element: HTMLElement,
+  options: Html2CanvasOptions,
+) => Promise<HTMLCanvasElement>;
+
+export async function renderExportCanvas(
+  el: HTMLElement,
+  html2canvas: Html2CanvasRenderer,
+  scale: 1 | 1.5 | 2,
+): Promise<HTMLCanvasElement> {
+  const baseOptions: Html2CanvasOptions = {
+    useCORS: true,
+    allowTaint: false,
+    scale,
+    backgroundColor: null,
+    logging: false,
+    width: 375,
+    windowWidth: 375,
+  };
+
+  const restoreTextBreaks = insertExportTextBreaks(el);
+  try {
+    return await html2canvas(el, baseOptions);
+  } finally {
+    restoreTextBreaks();
+  }
+}
+
+function insertExportTextBreaks(root: HTMLElement): () => void {
+  const content = root.querySelector<HTMLElement>('[data-export-content="true"]');
+  if (!content) return () => undefined;
+
+  const restoreCallbacks: Array<() => void> = [];
+  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  let current = walker.nextNode();
+  while (current) {
+    textNodes.push(current as Text);
+    current = walker.nextNode();
+  }
+
+  for (const textNode of textNodes) {
+    const parent = textNode.parentElement;
+    if (!parent || parent.closest('code, pre')) continue;
+
+    const replacement = createTextBreakFragment(textNode.data);
+    if (!replacement) continue;
+
+    const nodes = Array.from(replacement.childNodes);
+    parent.replaceChild(replacement, textNode);
+    restoreCallbacks.push(() => {
+      const first = nodes[0];
+      const activeParent = first?.parentNode;
+      if (!activeParent) return;
+      activeParent.insertBefore(textNode, first);
+      nodes.forEach((node) => {
+        if (node.parentNode === activeParent) activeParent.removeChild(node);
+      });
+    });
+  }
+
+  return () => {
+    for (let i = restoreCallbacks.length - 1; i >= 0; i--) {
+      restoreCallbacks[i]();
+    }
+  };
+}
+
+function createTextBreakFragment(text: string): DocumentFragment | null {
+  const chars = Array.from(text);
+  let hasBreak = false;
+  const fragment = document.createDocumentFragment();
+  let buffer = '';
+
+  for (let i = 0; i < chars.length; i++) {
+    const char = chars[i];
+    const previous = i > 0 ? chars[i - 1] : '';
+    if (previous && shouldInsertExportBreak(previous, char)) {
+      if (buffer) {
+        fragment.appendChild(document.createTextNode(buffer));
+        buffer = '';
+      }
+      fragment.appendChild(document.createElement('wbr'));
+      hasBreak = true;
+    }
+    buffer += char;
+  }
+
+  if (!hasBreak) return null;
+  if (buffer) fragment.appendChild(document.createTextNode(buffer));
+  return fragment;
+}
+
+function shouldInsertExportBreak(left: string, right: string): boolean {
+  return (isCjkChar(left) && isAsciiWordChar(right)) || (isAsciiWordChar(left) && isCjkChar(right));
+}
+
+function isAsciiWordChar(char: string): boolean {
+  return /^[A-Za-z0-9]$/.test(char);
+}
+
+function isCjkChar(char: string): boolean {
+  return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(char);
+}
+
 export type ExportErrorReason = 'unsupported_color' | 'oversize' | 'io' | 'unknown';
 
 /**

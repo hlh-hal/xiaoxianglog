@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, ChevronRight, Lightbulb, Loader2, MessageSquare, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Lightbulb, Loader2, MessageSquare, X } from 'lucide-react';
 import { Link, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { authService } from '../services/authService';
 import { diaryService } from '../services/diaryService';
@@ -465,20 +465,6 @@ export default function Settings() {
     }
   };
 
-  const handleManualCloudSync = async () => {
-    setIsLoading(true);
-    try {
-      await diaryService.syncCurrentAccount();
-      showToast('账号日志已同步');
-    } catch (error: any) {
-      console.error(error);
-      showToast(error?.message || '账号同步失败，请稍后重试');
-    } finally {
-      setIsLoading(false);
-      setLoadingMessage('处理中...');
-    }
-  };
-
   const handleImport = (useAI: boolean = false) => {
     setActiveSheet(null);
     const input = document.createElement('input');
@@ -810,25 +796,6 @@ export default function Settings() {
               </div>
               <Toggle checked={settings.inlineImagesInEditor} onChange={(value) => updateSetting('inlineImagesInEditor', value)} />
             </div>
-          </div>
-        </section>
-
-        <section className="space-y-3">
-          <SectionTitle title="账号同步" />
-          <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(47,52,46,0.02)] overflow-hidden">
-            <button
-              onClick={handleManualCloudSync}
-              className="w-full flex items-center justify-between px-5 py-4 active:bg-surface-container-low transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <RefreshCw className="w-5 h-5 text-primary" />
-                <div className="flex flex-col items-start gap-1">
-                  <span className="text-[15px] font-medium">立即同步账号日志</span>
-                  <span className="text-xs text-on-surface-variant">同一账号在手机、电脑和不同浏览器保持一致</span>
-                </div>
-              </div>
-              <ChevronRight className="w-5 h-5 text-outline-variant" />
-            </button>
           </div>
         </section>
 

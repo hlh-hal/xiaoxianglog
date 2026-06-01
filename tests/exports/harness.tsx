@@ -26,6 +26,7 @@ import {
   measureExportCard,
   pickExportScale,
   waitForExportRenderReady,
+  renderExportCanvas,
 } from '../../src/utils/exportImage';
 
 // 引入全局样式，保证 Tailwind v4 + @tailwindcss/typography 的 prose / preflight
@@ -34,7 +35,7 @@ import '../../src/index.css';
 
 // ========== Exploration (Task 1) ==========
 
-type ExplorationCaseId = 'H1' | 'H2' | 'H3' | 'H4' | 'H5';
+type ExplorationCaseId = 'H1' | 'H2' | 'H3' | 'H4' | 'H5' | 'H6';
 
 interface ExplorationResult {
   caseId: ExplorationCaseId;
@@ -78,12 +79,20 @@ const H5_HTML = `
 <p>感谢：老己又活了一天，真好。</p>
 `.trim();
 
+const H6_HTML = `
+<p>2026.5.29</p>
+<p>充头：跟D老师生成完ai提示词，又去codebud使用提示词生成论文，明天改一改就能用了。</p>
+<p>感谢：ha改完bug还跟我讲了，挺好的。杰跟我讲如何利用ai听课，但是我并不支持这个观点。</p>
+<p>思考：明天要改论文，还有象友杯的辩论赛。今天晚上想了一下暑假干什么，然后做面试模拟skill和日程安排APP。</p>
+`.trim();
+
 const EXPLORATION_CASE_MAP: Record<ExplorationCaseId, string> = {
   H1: H1_HTML,
   H2: H2_HTML,
   H3: H3_HTML,
   H4: H4_HTML,
   H5: H5_HTML,
+  H6: H6_HTML,
 };
 
 // ========== Preservation (Task 2) ==========
@@ -302,15 +311,7 @@ async function runExplorationCase(caseId: ExplorationCaseId): Promise<Exploratio
 
     let canvas: HTMLCanvasElement;
     try {
-      canvas = await html2canvas(el, {
-        useCORS: true,
-        allowTaint: false,
-        scale,
-        backgroundColor: null,
-        logging: false,
-        width: 375,
-        windowWidth: 375,
-      });
+      canvas = await renderExportCanvas(el, html2canvas, scale);
     } finally {
       restoreColors();
     }
@@ -434,15 +435,7 @@ async function runPreservationCaseImpl(caseId: PreservationCaseId): Promise<Pres
       };
     }
 
-    const canvas = await html2canvas(el, {
-      useCORS: true,
-      allowTaint: false,
-      scale: 2,
-      backgroundColor: null,
-      logging: false,
-      width: 375,
-      windowWidth: 375,
-    });
+    const canvas = await renderExportCanvas(el, html2canvas, 2);
 
     const dataUrl = canvas.toDataURL('image/png');
     if (

@@ -90,3 +90,31 @@ Verification:
 - Puppeteer smoke opened inline image preview; `location.hash` became `#preview`, ImageViewer rendered, editor focus stayed off, and after closing preview the top text, image node, and bottom text remained in place.
 - Success screenshots: `inline-image-click-toolbar-success.png` and `inline-image-click-focus-success.png`.
 - Frontend cloud deploy completed with `deploy-upload.ps1 -Target front`; live `https://xiaoxianglog.cn/` now references `assets/index-Deb1Ma6L.js` and `assets/index-igYhQRrJ.css`, and those remote assets contain the new inline image toolbar/focus repair markers.
+
+## 2026-05-31 settings option redeploy check
+
+- User reported that the PWA Settings page no longer showed the "图片插入正文" option under the editor section.
+- Source still contained the Settings row and editor-side `settingsService.getSettings().inlineImagesInEditor` usage, but live `/settings` was loading `assets/index-CmSA6B0S.js` and the rendered DOM did not include the option.
+- Rebuilt frontend with `npm run build`; local production preview on `/settings` showed the option correctly.
+- Re-uploaded frontend `dist` with `deploy-upload.ps1 -Target front`.
+- Live verification: both `https://xiaoxianglog.cn/` and `https://www.xiaoxianglog.cn/` now reference `assets/index-BajN9RgE.js` and `assets/index-CBDlEqtH.css`; remote JS contains both `inlineImagesInEditor` and `inline-image-toolbar-active`; Puppeteer screenshot of live `/settings` shows the "图片插入正文" row again.
+- Success screenshot: `remote-settings-inline-option-fixed.png`.
+
+## 2026-05-31 first inline image tap from home
+
+- Root cause: when an existing diary is opened from Home, `isEditing` starts as `false`. The first tap on a body inline image could still create a ProseMirror `NodeSelection` and yellow image outline, but the toolbar render condition required `inlineImageToolbar && isEditing`, so the user saw a selected/glowing image with no floating toolbar. After editing text, `isEditing=true`, which is why later taps worked.
+- Added `ensureInlineImageEditingMode()` in `src/pages/Editor.tsx` for inline-image tool mode only. It flips `isEditingRef`, `isEditing`, and `editor.setEditable(true)` without calling focus, so tapping an image enables the image tools but does not summon the keyboard.
+- Updated `selectInlineImageFromElement()` to call that helper before selecting/showing the toolbar, and made it idempotent when the same inline image is already selected.
+- Routed the ProseMirror selection update and outer `<main>` image pointer/click fallback through the same selection helper, so the first tap from a read-state existing diary is not swallowed by the outer click handling.
+- Added `shouldShowInlineImageToolbar = Boolean(inlineImageToolbar && isEditing && !previewHashActive)` and reused it for both toolbar rendering and `.inline-image-toolbar-active`, keeping the yellow selected-image outline and toolbar visibility in sync.
+
+Verification:
+
+- `npm run build` passed.
+- Puppeteer mobile smoke on a seeded existing diary: initial `.ProseMirror` was `contenteditable="false"`; first image tap showed `[data-testid="inline-image-toolbar"]`, switched editor to editable, and kept focus off `.ProseMirror`.
+- The smoke tapped text below the image; toolbar closed, selected image class disappeared, and `.ProseMirror` regained focus.
+- The smoke tapped the same image 5 more times; each tap showed the toolbar quickly and did not focus the editor.
+- The smoke opened inline-image preview and closed it; URL hash entered and left `#preview`, the ImageViewer rendered, and top text/image/bottom text remained in place.
+- Success screenshot: `inline-first-click-toolbar-success.png`.
+- Frontend cloud deploy completed with `deploy-upload.ps1 -Target front`. Live `https://xiaoxianglog.cn/` and `https://www.xiaoxianglog.cn/` now reference `assets/index-Cyx57CBE.js` and `assets/index-CBDlEqtH.css`; the remote JS contains `inline-image-toolbar-active`, `inline-image-preview`, and `inlineImagesInEditor`.
+- Live `/settings` was rechecked after deploy; the "图片插入正文" settings row is visible. Success screenshot: `remote-settings-inline-option-after-deploy.png`.

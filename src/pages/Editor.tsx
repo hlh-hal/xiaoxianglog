@@ -20,7 +20,7 @@ import html2canvas from 'html2canvas';
 import { useTheme } from '../contexts/ThemeContext';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
 import { useAuth } from '../contexts/AuthContext';
-import { sanitizeModernColors, measureExportCard, pickExportScale, decodeErrorReason, waitForExportRenderReady } from '../utils/exportImage';
+import { sanitizeModernColors, measureExportCard, pickExportScale, decodeErrorReason, waitForExportRenderReady, renderExportCanvas } from '../utils/exportImage';
 import { DiaryTheme, allThemes } from '../types/theme';
 import { api, getAccessToken } from '../services/apiClient';
 import { createRoot } from 'react-dom/client';
@@ -226,6 +226,19 @@ type InlineImagePreviewSnapshot = {
   src: string;
   hadUnsavedChanges: boolean;
   scrollTop: number;
+};
+
+type TextSelectionScrollGuard = {
+  scrollTop: number;
+  scrollLeft: number;
+  windowScrollX: number;
+  windowScrollY: number;
+  pointerId: number | null;
+  startX: number;
+  startY: number;
+  startedAt: number;
+  frame: number | null;
+  releaseTimer: number | null;
 };
 
 export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: DiaryEntry | { diaryDate: number }, theme: DiaryTheme, htmlContent: string, images: string[] }) => {
@@ -440,7 +453,7 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
         {/* 姝ｆ枃鍐呭 */}
         <div style={{
           flex: 1,
-          padding: '0 32px',
+          padding: '0 24px',
           color: theme.textColor,
         }}>
           <div 
@@ -460,7 +473,7 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
         {/* 鍥剧墖鍖哄煙锛堟湁鍥炬椂鏄剧ず锛?*/}
         {images.length > 0 && (
           <div style={{
-            padding: '32px 32px 0',
+            padding: '32px 24px 0',
             display: 'grid',
             gridTemplateColumns: '1fr 1fr',
             gap: '12px',
@@ -479,7 +492,7 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
 
         {/* 搴曢儴鍝佺墝鏍?*/}
         <div style={{
-          padding: '24px 32px 32px',
+          padding: '24px 24px 32px',
           marginTop: '40px',
           borderTop: `1px solid ${theme.backgroundImage
             ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.08)'}`,
@@ -565,6 +578,8 @@ export default function Editor() {
   const selectedThemeRef = useRef<DiaryTheme | null>(null);
   const templatesRef = useRef<DiaryTemplate[]>([]);
   const suppressNextEditorClickRef = useRef(false);
+  const previewEntryClickGuardUntilRef = useRef(id ? Date.now() + 600 : 0);
+  const previewEditorPointerDownAtRef = useRef(0);
   const keepInlineImageToolbarOnBlurRef = useRef(false);
   const inlineImageToolbarRef = useRef<InlineImageToolbarState | null>(null);
   const tapScrollLockRef = useRef<{
@@ -588,6 +603,7 @@ export default function Editor() {
     timers: number[];
     remainingFrames: number;
   } | null>(null);
+  const textSelectionScrollGuardRef = useRef<TextSelectionScrollGuard | null>(null);
 
   // Menu and Modals State
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -698,6 +714,20 @@ export default function Editor() {
     })
   ), []);
 
+  const getDefaultDisplayImagesForContent = useCallback((html: string, sourceImages: string[]) => {
+    const inlineImageSources = getInlineImageSources(html);
+    const inlineImageKeys = getInlineImageKeys(html);
+    inlineImageSources.forEach(src => {
+      const key = inlineImageObjectUrlKeysRef.current.get(src) || parseInlineImageRef(src) || (
+        src.startsWith('data:image/') ? createInlineImageKey(src) : ''
+      );
+      if (key) inlineImageKeys.add(key);
+    });
+    return sourceImages.filter(src => (
+      !inlineImageSources.has(src) && !inlineImageKeys.has(createInlineImageKey(src))
+    ));
+  }, []);
+
   useEffect(() => () => {
     inlineImageObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     inlineImageObjectUrlsRef.current.clear();
@@ -741,6 +771,10 @@ export default function Editor() {
   useEffect(() => {
     isEditingRef.current = isEditing && !previewHashActive;
   }, [isEditing, previewHashActive]);
+
+  useEffect(() => {
+    previewEntryClickGuardUntilRef.current = id ? Date.now() + 600 : 0;
+  }, [id]);
 
   const getDraftDiaryDate = useCallback(() => {
     if (existingJournalRef.current?.diaryDate) {
@@ -954,6 +988,245 @@ export default function Editor() {
     return Boolean(position);
   }, [restoreTapScrollLock]);
 
+  const stopTextSelectionScrollGuard = useCallback(() => {
+    const guard = textSelectionScrollGuardRef.current;
+    if (!guard) return;
+
+    if (guard.frame !== null) {
+      window.cancelAnimationFrame(guard.frame);
+    }
+    if (guard.releaseTimer !== null) {
+      window.clearTimeout(guard.releaseTimer);
+    }
+    textSelectionScrollGuardRef.current = null;
+  }, []);
+
+  const ensureTextSelectionScrollGuard = useCallback((
+    pointerId: number | null,
+    startX = 0,
+    startY = 0,
+  ) => {
+    if (!isEditingRef.current) return null;
+
+    const scrollEl = editorScrollRef.current;
+    if (!scrollEl) return null;
+
+    let guard = textSelectionScrollGuardRef.current;
+    if (!guard) {
+      guard = {
+        scrollTop: scrollEl.scrollTop,
+        scrollLeft: scrollEl.scrollLeft,
+        windowScrollX: window.scrollX,
+        windowScrollY: window.scrollY,
+        pointerId,
+        startX,
+        startY,
+        startedAt: Date.now(),
+        frame: null,
+        releaseTimer: null,
+      };
+      textSelectionScrollGuardRef.current = guard;
+    } else {
+      guard.pointerId = pointerId ?? guard.pointerId;
+      guard.startX = startX || guard.startX;
+      guard.startY = startY || guard.startY;
+      if (guard.releaseTimer !== null) {
+        window.clearTimeout(guard.releaseTimer);
+        guard.releaseTimer = null;
+      }
+    }
+
+    return guard;
+  }, []);
+
+  const getEditorTextSelectionRects = useCallback(() => {
+    const editorDom = editorInstanceRef.current?.view.dom;
+    const selection = window.getSelection();
+
+    if (!editorDom || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return null;
+    }
+
+    const anchorNode = selection.anchorNode;
+    const focusNode = selection.focusNode;
+    if (!anchorNode || !focusNode) return null;
+
+    if (!editorDom.contains(anchorNode) || !editorDom.contains(focusNode)) {
+      return null;
+    }
+
+    const range = selection.getRangeAt(0);
+    const rects = Array.from(range.getClientRects()).filter(rect => (
+      rect.width > 0 && rect.height > 0
+    ));
+
+    return rects.length > 0 ? rects : null;
+  }, []);
+
+  const isSelectionInsideScrollSafeArea = useCallback((rects: DOMRect[]) => {
+    const scrollEl = editorScrollRef.current;
+    if (!scrollEl) return false;
+
+    const containerRect = scrollEl.getBoundingClientRect();
+    const visualViewport = window.visualViewport;
+    const visualTop = visualViewport?.offsetTop ?? 0;
+    const visualBottom = visualViewport
+      ? visualViewport.offsetTop + visualViewport.height
+      : window.innerHeight;
+    const topBoundary = Math.max(containerRect.top, visualTop) + 76;
+    const bottomInset = keyboardInset > 0 ? 72 : 140;
+    const bottomBoundary = Math.min(containerRect.bottom, visualBottom) - bottomInset;
+
+    if (bottomBoundary <= topBoundary) return false;
+
+    return rects.every(rect => (
+      rect.top >= topBoundary && rect.bottom <= bottomBoundary
+    ));
+  }, [keyboardInset]);
+
+  const restoreTextSelectionScrollGuard = useCallback(() => {
+    const guard = textSelectionScrollGuardRef.current;
+    const scrollEl = editorScrollRef.current;
+    if (!guard || !scrollEl) return false;
+
+    const rects = getEditorTextSelectionRects();
+    if (!rects) return false;
+
+    if (!isSelectionInsideScrollSafeArea(rects)) {
+      return true;
+    }
+
+    if (scrollEl.scrollTop !== guard.scrollTop) {
+      scrollEl.scrollTop = guard.scrollTop;
+    }
+    if (scrollEl.scrollLeft !== guard.scrollLeft) {
+      scrollEl.scrollLeft = guard.scrollLeft;
+    }
+    if (window.scrollX !== guard.windowScrollX || window.scrollY !== guard.windowScrollY) {
+      window.scrollTo(guard.windowScrollX, guard.windowScrollY);
+    }
+
+    return true;
+  }, [getEditorTextSelectionRects, isSelectionInsideScrollSafeArea]);
+
+  const scheduleTextSelectionScrollGuard = useCallback(() => {
+    const guard = textSelectionScrollGuardRef.current;
+    if (!guard) return false;
+
+    if (guard.frame !== null) {
+      window.cancelAnimationFrame(guard.frame);
+      guard.frame = null;
+    }
+
+    let remainingFrames = 8;
+    const restoreFrame = () => {
+      const activeGuard = textSelectionScrollGuardRef.current;
+      if (!activeGuard) return;
+
+      restoreTextSelectionScrollGuard();
+      remainingFrames -= 1;
+
+      if (remainingFrames > 0) {
+        activeGuard.frame = window.requestAnimationFrame(restoreFrame);
+      } else {
+        activeGuard.frame = null;
+      }
+    };
+
+    restoreTextSelectionScrollGuard();
+    guard.frame = window.requestAnimationFrame(restoreFrame);
+    return true;
+  }, [restoreTextSelectionScrollGuard]);
+
+  const releaseTextSelectionScrollGuard = useCallback((delay = 700) => {
+    const guard = textSelectionScrollGuardRef.current;
+    if (!guard) return;
+
+    if (guard.releaseTimer !== null) {
+      window.clearTimeout(guard.releaseTimer);
+    }
+    guard.releaseTimer = window.setTimeout(() => {
+      stopTextSelectionScrollGuard();
+    }, delay);
+  }, [stopTextSelectionScrollGuard]);
+
+  const isEditorTextSelectionActive = useCallback(() => (
+    getEditorTextSelectionRects() !== null
+  ), [getEditorTextSelectionRects]);
+
+  const startTextSelectionScrollGuard = useCallback((e: React.PointerEvent<HTMLElement>) => {
+    if (!isEditingRef.current) return;
+
+    const target = e.target as HTMLElement;
+    const editorEl = e.currentTarget.querySelector('.ProseMirror');
+    const isEditorTextTarget = Boolean(editorEl?.contains(target));
+    const isInteractiveTarget = Boolean(target.closest(
+      'button,a,input,textarea,select,[role="button"],[data-inline-image-toolbar],img[data-diary-inline-image]',
+    ));
+
+    if (!isEditorTextTarget || isInteractiveTarget) return;
+
+    ensureTextSelectionScrollGuard(e.pointerId, e.clientX, e.clientY);
+  }, [ensureTextSelectionScrollGuard]);
+
+  const handleTextSelectionPointerMove = useCallback((e: React.PointerEvent<HTMLElement>) => {
+    const guard = textSelectionScrollGuardRef.current;
+    if (!guard || (guard.pointerId !== null && guard.pointerId !== e.pointerId)) {
+      return false;
+    }
+
+    const hasSelection = isEditorTextSelectionActive();
+    if (hasSelection) {
+      scheduleTextSelectionScrollGuard();
+      return true;
+    }
+
+    const moved = Math.hypot(e.clientX - guard.startX, e.clientY - guard.startY);
+    if (moved > 12 && Date.now() - guard.startedAt < 450) {
+      stopTextSelectionScrollGuard();
+    }
+
+    return false;
+  }, [isEditorTextSelectionActive, scheduleTextSelectionScrollGuard, stopTextSelectionScrollGuard]);
+
+  const handleTextSelectionTouchMove = useCallback(() => {
+    if (!textSelectionScrollGuardRef.current && !isEditorTextSelectionActive()) {
+      return false;
+    }
+
+    if (!textSelectionScrollGuardRef.current) {
+      ensureTextSelectionScrollGuard(null);
+    }
+
+    scheduleTextSelectionScrollGuard();
+    releaseTextSelectionScrollGuard();
+    return isEditorTextSelectionActive();
+  }, [ensureTextSelectionScrollGuard, isEditorTextSelectionActive, releaseTextSelectionScrollGuard, scheduleTextSelectionScrollGuard]);
+
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      if (!isEditingRef.current || !isEditorTextSelectionActive()) return;
+
+      ensureTextSelectionScrollGuard(null);
+      scheduleTextSelectionScrollGuard();
+      releaseTextSelectionScrollGuard(1400);
+    };
+
+    const handleEditorScroll = () => {
+      if (!textSelectionScrollGuardRef.current || !isEditorTextSelectionActive()) return;
+      scheduleTextSelectionScrollGuard();
+    };
+
+    const scrollEl = editorScrollRef.current;
+    document.addEventListener('selectionchange', handleSelectionChange);
+    scrollEl?.addEventListener('scroll', handleEditorScroll, { passive: true });
+
+    return () => {
+      document.removeEventListener('selectionchange', handleSelectionChange);
+      scrollEl?.removeEventListener('scroll', handleEditorScroll);
+    };
+  }, [ensureTextSelectionScrollGuard, isEditorTextSelectionActive, releaseTextSelectionScrollGuard, scheduleTextSelectionScrollGuard]);
+
   const finishTapScrollLock = useCallback((e: React.PointerEvent<HTMLElement>) => {
     const lock = tapScrollLockRef.current;
     if (!lock || lock.pointerId !== e.pointerId || lock.moved) return false;
@@ -994,7 +1267,8 @@ export default function Editor() {
   useEffect(() => () => {
     stopInputScrollLock();
     stopTapScrollLock();
-  }, [stopInputScrollLock, stopTapScrollLock]);
+    stopTextSelectionScrollGuard();
+  }, [stopInputScrollLock, stopTapScrollLock, stopTextSelectionScrollGuard]);
 
   const restoreInlinePreviewSnapshot = useCallback(() => {
     const snapshot = inlinePreviewSnapshotRef.current;
@@ -1298,6 +1572,14 @@ export default function Editor() {
     }, 120);
   }, []);
 
+  const ensureInlineImageEditingMode = useCallback(() => {
+    if (previewHashActive) return;
+    const activeEditor = editorInstanceRef.current;
+    isEditingRef.current = true;
+    setIsEditing(true);
+    activeEditor?.setEditable(true);
+  }, [previewHashActive]);
+
   const findInlineImageNodePos = useCallback((img: HTMLImageElement) => {
     const activeEditor = editorInstanceRef.current;
     if (!activeEditor) return null;
@@ -1343,13 +1625,18 @@ export default function Editor() {
     const node = activeEditor.state.doc.nodeAt(pos);
     if (!node || node.type.name !== 'diaryInlineImage') return false;
 
-    activeEditor.view.dispatch(
-      activeEditor.state.tr.setSelection(NodeSelection.create(activeEditor.state.doc, pos)),
-    );
+    ensureInlineImageEditingMode();
+
+    const selection = activeEditor.state.selection;
+    if (!(selection instanceof NodeSelection && selection.from === pos && selection.node.type.name === 'diaryInlineImage')) {
+      activeEditor.view.dispatch(
+        activeEditor.state.tr.setSelection(NodeSelection.create(activeEditor.state.doc, pos)),
+      );
+    }
     showInlineImageToolbar(pos, node.attrs, img);
     blurEditorForInlineImageToolbar();
     return true;
-  }, [blurEditorForInlineImageToolbar, findInlineImageNodePos, showInlineImageToolbar]);
+  }, [blurEditorForInlineImageToolbar, ensureInlineImageEditingMode, findInlineImageNodePos, showInlineImageToolbar]);
 
   const getActiveInlineImageForPreview = useCallback(() => {
     const activeEditor = editorInstanceRef.current;
@@ -1401,6 +1688,7 @@ export default function Editor() {
     } else {
       htmlContent = content;
     }
+    const exportImages = getDefaultDisplayImagesForContent(htmlContent, images);
 
     // 涓存椂鎸傝浇鍒?body
     const wrapper = document.createElement('div');
@@ -1414,7 +1702,7 @@ export default function Editor() {
         entry={existingJournal || { diaryDate: displayDate.getTime() }} 
         theme={currentTheme} 
         htmlContent={htmlContent}
-        images={images}
+        images={exportImages}
       />
     );
 
@@ -1455,15 +1743,7 @@ export default function Editor() {
 
       let canvas: HTMLCanvasElement;
       try {
-        canvas = await html2canvas(el, {
-          useCORS: true,
-          allowTaint: false,
-          scale,
-          backgroundColor: null,
-          logging: false,
-          width: 375,
-          windowWidth: 375,
-        });
+        canvas = await renderExportCanvas(el, html2canvas, scale);
       } finally {
         restoreColors();
       }
@@ -1739,6 +2019,7 @@ export default function Editor() {
       setUpdateTick(t => t + 1);
       const selection = editor.state.selection;
       if (selection instanceof NodeSelection && selection.node.type.name === 'diaryInlineImage') {
+        ensureInlineImageEditingMode();
         window.requestAnimationFrame(() => {
           const img = editor.view.dom.querySelector<HTMLImageElement>(
             '.diary-inline-image.ProseMirror-selectednode',
@@ -2480,18 +2761,9 @@ export default function Editor() {
     scrollPaddingBottom: `calc(120px + ${editorBottomBreathingRoom})`,
     overflowAnchor: 'none',
   };
-  const inlineImageSources = getInlineImageSources(content);
-  const inlineImageKeys = getInlineImageKeys(content);
-  inlineImageSources.forEach(src => {
-    const key = inlineImageObjectUrlKeysRef.current.get(src) || parseInlineImageRef(src) || (
-      src.startsWith('data:image/') ? createInlineImageKey(src) : ''
-    );
-    if (key) inlineImageKeys.add(key);
-  });
-  const defaultDisplayImages = images.filter(src => (
-    !inlineImageSources.has(src) && !inlineImageKeys.has(createInlineImageKey(src))
-  ));
+  const defaultDisplayImages = getDefaultDisplayImagesForContent(content, images);
   const activePreviewImages = previewImagesOverride ?? images;
+  const shouldShowInlineImageToolbar = Boolean(inlineImageToolbar && isEditing && !previewHashActive);
 
   const toggleInlineImageSize = () => {
     if (!inlineImageToolbar || !editor) return;
@@ -2817,18 +3089,27 @@ export default function Editor() {
 
       <main
         ref={editorScrollRef}
-        className={`fixed inset-x-0 top-0 bottom-0 z-10 overflow-y-auto overscroll-contain ${inlineImageToolbar ? 'inline-image-toolbar-active' : ''}`}
+        className={`fixed inset-x-0 top-0 bottom-0 z-10 overflow-y-auto overscroll-contain ${shouldShowInlineImageToolbar ? 'inline-image-toolbar-active' : ''}`}
         style={editorScrollStyle}
         onTouchMove={() => {
+          if (handleTextSelectionTouchMove()) return;
           stopInputScrollLock();
-          closeInlineImageToolbar({ clearSelection: true, blur: true });
+          closeInlineImageToolbar({ clearSelection: true });
         }}
         onWheel={() => {
           stopInputScrollLock();
           closeInlineImageToolbar({ clearSelection: true, blur: true });
         }}
-        onPointerMove={updateTapScrollLockMove}
+        onPointerMove={(e) => {
+          if (handleTextSelectionPointerMove(e)) return;
+          updateTapScrollLockMove(e);
+        }}
         onPointerDown={(e) => {
+          const editorEl = (e.currentTarget as HTMLElement).querySelector('.ProseMirror');
+          if (!isEditing && editorEl?.contains(e.target as Node)) {
+            previewEditorPointerDownAtRef.current = Date.now();
+          }
+          startTextSelectionScrollGuard(e);
           startTapScrollLock(e);
         }}
         onPointerUp={(e) => {
@@ -2837,14 +3118,29 @@ export default function Editor() {
             e.preventDefault();
             e.stopPropagation();
             brieflySuppressEditorClick();
+            selectInlineImageFromElement(img);
             stopTapScrollLock();
             return;
           }
+          if (isEditorTextSelectionActive()) {
+            scheduleTextSelectionScrollGuard();
+            releaseTextSelectionScrollGuard();
+            stopTapScrollLock();
+            return;
+          }
+          stopTextSelectionScrollGuard();
           finishTapScrollLock(e);
         }}
-        onPointerCancel={stopTapScrollLock}
+        onPointerCancel={() => {
+          stopTextSelectionScrollGuard();
+          stopTapScrollLock();
+        }}
         onClick={(e) => {
-          const clickedInlineImage = (e.target as HTMLElement).closest('img[data-diary-inline-image]');
+          const target = e.target as HTMLElement;
+          const editorEl = (e.currentTarget as HTMLElement).querySelector('.ProseMirror');
+          const isEditorTap = Boolean(editorEl && editorEl.contains(e.target as Node));
+          const isBlankSurfaceTap = target === e.currentTarget || target.dataset.editorBlankSurface === 'true';
+          const clickedInlineImage = target.closest('img[data-diary-inline-image]');
           if (showThemeBar) {
             setShowThemeBar(false);
           }
@@ -2855,14 +3151,21 @@ export default function Editor() {
             e.preventDefault();
             e.stopPropagation();
             suppressNextEditorClickRef.current = false;
+            selectInlineImageFromElement(clickedInlineImage as HTMLImageElement);
             blurEditorForInlineImageToolbar();
             return;
           }
-          closeInlineImageToolbar({ clearSelection: true, focusAt: { x: e.clientX, y: e.clientY } });
           if (suppressNextEditorClickRef.current) {
             suppressNextEditorClickRef.current = false;
+            return;
           }
           if (!isEditing) {
+            const hasFreshEditorPointerDown = Date.now() - previewEditorPointerDownAtRef.current < 1000;
+            if (!isEditorTap || (Date.now() < previewEntryClickGuardUntilRef.current && !hasFreshEditorPointerDown)) {
+              closeInlineImageToolbar({ clearSelection: true });
+              return;
+            }
+            closeInlineImageToolbar({ clearSelection: true, focusAt: { x: e.clientX, y: e.clientY } });
             setIsEditing(true);
             setTimeout(() => {
               if (!focusEditorAtPointWithoutScroll(e.clientX, e.clientY)) {
@@ -2872,10 +3175,7 @@ export default function Editor() {
           } else {
             // 鍙湁褰撶偣鍑诲彂鐢熷湪缂栬緫鍣ㄥ唴瀹瑰尯鍩熷唴鏃舵墠 re-focus锛?
             // 閬垮厤鐐瑰嚮搴曢儴绌虹櫧鍖哄煙鏃惰Е鍙?scrollIntoView 鎶婇〉闈㈣烦鍥炲厜鏍囦綅缃€?
-            const editorEl = (e.currentTarget as HTMLElement).querySelector('.ProseMirror');
-            const target = e.target as HTMLElement;
-            const isEditorTap = Boolean(editorEl && editorEl.contains(e.target as Node));
-            const isBlankSurfaceTap = target === e.currentTarget || target.dataset.editorBlankSurface === 'true';
+            closeInlineImageToolbar({ clearSelection: true, focusAt: { x: e.clientX, y: e.clientY } });
             if (isEditorTap || isBlankSurfaceTap) {
               if (!focusEditorAtPointWithoutScroll(e.clientX, e.clientY)) {
                 editor?.commands.focus(undefined, { scrollIntoView: false });
@@ -2991,7 +3291,7 @@ export default function Editor() {
         </div>
       </main>
 
-      {inlineImageToolbar && isEditing && (
+      {shouldShowInlineImageToolbar && inlineImageToolbar && (
         <div
           data-inline-image-toolbar="true"
           data-testid="inline-image-toolbar"
