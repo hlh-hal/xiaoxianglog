@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
-import { diaryService, ChatMessage } from './diaryService';
-import { apiStreamRequest } from './apiClient';
+import { diaryService, ChatMessage, DiaryEntry } from './diaryService';
+import { api, apiStreamRequest } from './apiClient';
 
 export interface AIStyle {
   id: string;
@@ -139,6 +139,136 @@ export const AI_STYLES: AIStyle[] = [
 
 function stripMarkdown(md: string) {
   return md.replace(/[#*`>]/g, '').trim();
+}
+
+function stripHtml(value: string) {
+  if (!value) return '';
+  if (typeof DOMParser !== 'undefined') {
+    try {
+      const doc = new DOMParser().parseFromString(value, 'text/html');
+      return (doc.body.textContent || '').trim();
+    } catch {
+      // Fall through to the regex fallback.
+    }
+  }
+  return value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+const DAILY_ECHO_MAX_CHARS = 260;
+
+function getLastSentenceEndIndex(value: string, maxChars = DAILY_ECHO_MAX_CHARS) {
+  const chars = Array.from(value);
+  let lastEnd = -1;
+  let count = 0;
+
+  for (let i = 0; i < chars.length && count < maxChars; i += 1) {
+    count += 1;
+    if (/[。！？!?]/.test(chars[i])) {
+      lastEnd = i;
+    }
+  }
+
+  return lastEnd;
+}
+
+function isVagueEchoContent(value: string) {
+  const compact = value.replace(/\s+/g, '');
+  const vaguePatterns = [
+    /这一页已经被小象/,
+    /小象轻轻收到了/,
+    /说不清全部感受/,
+    /愿意把它写下来/,
+    /温柔的整理/,
+    /我感受到.*很充实/,
+    /读完你今天的记录/,
+  ];
+  return vaguePatterns.some(pattern => pattern.test(compact));
+}
+
+function normalizeEchoContent(value: string) {
+  const cleaned = stripMarkdown(value)
+    .replace(/^小象回声[:：\s]*/i, '')
+    .replace(/^(分析如下|回应如下|我会这样回应)[:：\s]*/i, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (!cleaned) return '';
+
+  const chars = Array.from(cleaned);
+  const lastEnd = getLastSentenceEndIndex(cleaned);
+  const endsWithSentence = /[。！？!?]$/.test(cleaned);
+  const withinLimit = chars.length <= DAILY_ECHO_MAX_CHARS;
+
+  const complete = withinLimit && endsWithSentence
+    ? cleaned
+    : lastEnd >= 24
+      ? chars.slice(0, lastEnd + 1).join('').trim()
+      : '';
+
+  if (!complete || isVagueEchoContent(complete)) return '';
+  return complete;
+}
+
+function pickDiaryEchoDetail(diaryText: string) {
+  const normalized = diaryText
+    .replace(/开心的事|充实的事|感谢的人|今日思考|改进的事/g, ' ')
+    .replace(/[：:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const fragments = normalized
+    .split(/[。！？!?，,；;\n]/)
+    .map(fragment => fragment.replace(/^\d+[、,.，\s]*/, '').trim())
+    .filter(fragment => fragment.length >= 6 && fragment.length <= 34);
+
+  return fragments[0] || normalized.slice(0, 28) || '今天这些具体的小事';
+}
+
+function buildFallbackEcho(diaryText: string) {
+  const detail = pickDiaryEchoDetail(diaryText);
+  return `小象看到你写下了“${detail}”。这不是一句空泛的概括，而是今天真实发生过的一个点；能把它收回来，说明你在把混在一起的一天慢慢分清。`;
+}
+
+export async function generateDiaryEcho(entry: DiaryEntry, regenerateCount = 0): Promise<string> {
+  const gentleStyle = AI_STYLES.find((style) => style.id === 'gentle') || AI_STYLES[0];
+  const diaryText = stripHtml(entry.content || '').slice(0, 2200);
+  const diaryDate = entry.diaryDate ? entry.diaryDate.split('T')[0] : new Date().toISOString().split('T')[0];
+
+  const systemPrompt = `${gentleStyle.systemPrompt}
+
+## 小象回声场景
+你正在为用户刚刚保存的一篇日记生成「小象回声」。这不是聊天回复，也不是长篇分析，而是日记写完后留在页面底部的一段轻柔回应。
+
+请严格遵守：
+1. 只输出一段自然中文，不要标题、列表、字段名、引号或 Markdown。
+2. 120 到 220 个中文字之间，最多 3 句话，每句话必须完整结束，不能停在半句。
+3. 必须点名日记里的 2 个具体细节，例如具体事件、人物、行动、困扰或小成就；不要只说“这一页”“这些感受”“今天很充实”。
+4. 先回应这篇日记呈现出的情绪，再把具体细节串起来，最后给一个温柔但不说教的心理视角。
+5. 不说“你应该”，不做诊断，不替代心理咨询，不引导分享。
+6. 禁止使用空泛模板句：例如“这一页已经被小象轻轻收到了”“哪怕现在还说不清全部感受”“写下来就是温柔的整理”。
+7. 可以自然使用 0-1 个温暖 emoji，但不要堆砌。
+8. 如果日记里出现自伤、自杀、伤害他人或严重危机风险，请在 220 字以内温柔但明确地鼓励用户立刻联系现实中可信任的人或当地紧急服务。`;
+
+  const userPrompt = `请为这篇日记生成一段「小象回声」。
+
+日期：${diaryDate}
+这是第 ${regenerateCount + 1} 次生成；如果不是第一次，请换一种说法，但保持温柔陪伴风格。
+
+日记内容：
+${diaryText || '这篇日记内容很短。'}`;
+
+  const result = await api.post<{ content: string }>('/chat/complete', {
+    modelId: import.meta.env.VITE_AI_MODEL || 'xiaomi-mimo',
+    temperature: 0.62,
+    maxTokens: 360,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+  });
+
+  const content = normalizeEchoContent(result.content || '');
+  return content || buildFallbackEcho(diaryText);
 }
 
 export async function sendMessage(

@@ -80,17 +80,16 @@ export function CardFlowList({ journals, isMultiSelectMode, selectedJournals, ha
               const validImages = (journal.images || []).filter(img => typeof img === 'string' && img.trim() !== '');
               if (validImages.length === 0) return null;
               return (
-                <div className={`mt-4 grid gap-2 ${
-                  validImages.length === 1 ? 'grid-cols-1' : 
+                <div className={`mt-4 grid gap-1.5 ${
                   validImages.length === 2 ? 'grid-cols-2' :
                   validImages.length === 4 ? 'grid-cols-2' : 'grid-cols-3'
                 }`}>
                   {validImages.map((img, idx) => (
-                    <div key={idx} className={validImages.length === 1 ? 'aspect-[4/3] md:aspect-[16/10]' : 'aspect-square'}>
+                    <div key={idx} className="aspect-square">
                       <SafeImage
                         src={img} 
                         alt="Journal attachment" 
-                        className={`w-full h-full object-cover transition-transform duration-700 ${validImages.length === 1 ? 'rounded-2xl hover:scale-[1.02]' : 'rounded-[16px] hover:scale-105'} `} 
+                        className="w-full h-full rounded-[16px] object-cover transition-transform duration-700 hover:scale-105"
                         referrerPolicy="no-referrer"
                       />
                     </div>

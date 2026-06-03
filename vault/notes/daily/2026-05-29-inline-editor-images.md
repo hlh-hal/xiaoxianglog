@@ -118,3 +118,21 @@ Verification:
 - Success screenshot: `inline-first-click-toolbar-success.png`.
 - Frontend cloud deploy completed with `deploy-upload.ps1 -Target front`. Live `https://xiaoxianglog.cn/` and `https://www.xiaoxianglog.cn/` now reference `assets/index-Cyx57CBE.js` and `assets/index-CBDlEqtH.css`; the remote JS contains `inline-image-toolbar-active`, `inline-image-preview`, and `inlineImagesInEditor`.
 - Live `/settings` was rechecked after deploy; the "图片插入正文" settings row is visible. Success screenshot: `remote-settings-inline-option-after-deploy.png`.
+
+## 2026-06-02 inline image delete removes attachment
+
+- User reported that after deleting a body inline image through the floating image toolbar, the same image appeared again in the bottom default attachment area and still existed in Gallery.
+- Root cause: `deleteInlineImage()` only deleted the Tiptap `diaryInlineImage` node from `content`. It intentionally left `images` untouched from an older assumption, so once the inline node disappeared, `getDefaultDisplayImagesForContent(content, images)` considered the attachment no longer inline and rendered it at the bottom; Gallery also reads `entry.images`, so the deleted image remained there after save.
+- Changed `deleteInlineImage()` in `src/pages/Editor.tsx` to resolve the inline image's attachment via `imageKey`, `diary-image-ref:`, blob URL key map, data URL hash, or direct `images` match.
+- After deleting the node, the editor checks the remaining content for the same inline key/source. If no other inline image still references that attachment, it removes the matching image from `imagesRef`/React `images` via `setImagesWithRef`.
+- When the removed image had a registered blob object URL, the object URL is revoked and its key mapping is cleared.
+- Protective behavior: if the same attachment is still referenced by another inline image node, the attachment is kept to avoid breaking the other image.
+
+Verification:
+
+- `npm run build` passed.
+- Puppeteer mobile smoke on local preview: seeded a diary with `Before / inline image / After`, clicked the inline image toolbar delete button, and confirmed `#diary-content-export img` count became 0 while both text paragraphs remained.
+- The same smoke clicked Save and then inspected IndexedDB: the saved entry had `images.length === 0`, no `data-diary-inline-image`, no `diary-image-ref:`, and did not keep the seed image.
+- The smoke opened `/gallery`; Gallery showed 0 images for the seeded test data and did not contain the deleted image.
+- Success screenshot: `inline-delete-removes-attachment-success.png`.
+- Frontend cloud deploy completed with `deploy-upload.ps1 -Target front`. Live `https://xiaoxianglog.cn/` and `https://www.xiaoxianglog.cn/` now reference `assets/index-DQjogC8I.js` and `assets/index-BH8rjVXP.css`; remote JS contains the inline image delete path and attachment cleanup markers.

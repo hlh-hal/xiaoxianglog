@@ -4,6 +4,7 @@ export interface AppSettings {
   saveOnExit: boolean;
   autoAdjustTime: boolean;
   inlineImagesInEditor: boolean;
+  dailyEchoFloatEnabled: boolean;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -12,6 +13,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   saveOnExit: true,
   autoAdjustTime: true,
   inlineImagesInEditor: false,
+  dailyEchoFloatEnabled: true,
 };
 
 export interface FontSettings {

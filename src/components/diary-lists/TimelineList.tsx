@@ -22,7 +22,7 @@ interface ListProps {
 
 export function TimelineList({ journals, isMultiSelectMode, selectedJournals, handlePointerDown, handlePointerMove, handlePointerUp }: ListProps) {
   return (
-    <div className="relative -ml-3 md:ml-0">
+    <div className="relative -ml-5 md:ml-0">
       {/* Vertical Line */}
       <div className="absolute left-[19px] top-4 bottom-4 w-[2px] bg-primary/10 z-0"></div>
 
@@ -80,7 +80,7 @@ export function TimelineList({ journals, isMultiSelectMode, selectedJournals, ha
                 const summary = excerpt(fullContent, maxLength);
 
                 return (
-                  <p className="text-[15px] font-light text-on-surface-variant line-clamp-5 mb-4 whitespace-pre-wrap" style={{ fontFamily: 'var(--diary-font-family)', lineHeight: '1.7', letterSpacing: '0.01em' }}>
+                  <p className="text-[15px] font-light text-on-surface-variant line-clamp-6 mb-4 whitespace-pre-wrap" style={{ fontFamily: 'var(--diary-font-family)', lineHeight: '1.7', letterSpacing: '0.01em' }}>
                     {summary}
                   </p>
                 );
@@ -90,17 +90,16 @@ export function TimelineList({ journals, isMultiSelectMode, selectedJournals, ha
                 const validImages = (journal.images || []).filter(img => typeof img === 'string' && img.trim() !== '');
                 if (validImages.length === 0) return null;
                 return (
-                  <div className={`mt-4 grid gap-2 ${
-                    validImages.length === 1 ? 'grid-cols-1' : 
+                  <div className={`mt-4 grid gap-1.5 ${
                     validImages.length === 2 ? 'grid-cols-2' :
                     validImages.length === 4 ? 'grid-cols-2' : 'grid-cols-3'
                   }`}>
                     {validImages.map((img, idx) => (
-                      <div key={idx} className={validImages.length === 1 ? 'aspect-[4/3] md:aspect-[16/10]' : 'aspect-square'}>
+                      <div key={idx} className="aspect-square">
                         <SafeImage
                           src={img} 
                           alt="Journal attachment" 
-                          className={`w-full h-full object-cover transition-transform duration-700 ${validImages.length === 1 ? 'rounded-2xl hover:scale-[1.02]' : 'rounded-[16px] hover:scale-105'} `} 
+                          className="w-full h-full rounded-[16px] object-cover transition-transform duration-700 hover:scale-105"
                           referrerPolicy="no-referrer"
                         />
                       </div>

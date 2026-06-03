@@ -73,6 +73,7 @@ model DiaryEntry {
   tags        String?  // JSON 字符串: ["tag1", "tag2"]
   themeId     String?  @map("theme_id")
   images      String?  // JSON 字符串: ["url1", "url2"]
+  dailyEcho   String?  @map("daily_echo") // JSON 字符串: 小象回声
   syncVersion Int      @default(0) @map("sync_version") // 乐观锁
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")

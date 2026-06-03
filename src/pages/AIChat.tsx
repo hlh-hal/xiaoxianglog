@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
 import { diaryService, ChatMessage, ChatSession } from '../services/diaryService';
 import { buildDiaryContext } from '../services/diaryContext';
@@ -44,6 +44,7 @@ function createId() {
 
 export default function AIChat() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { isDark } = useTheme();
   const keyboardInset = useKeyboardInset();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -81,6 +82,7 @@ export default function AIChat() {
   const [activeContextSession, setActiveContextSession] = useState<ChatSession | null>(null);
   const [contextMenuPos, setContextMenuPos] = useState<{x: number, y: number} | null>(null);
   const pressTimer = useRef<NodeJS.Timeout | null>(null);
+  const handledDailyEchoStateKeyRef = useRef('');
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
 
@@ -192,6 +194,38 @@ export default function AIChat() {
     setSystemHint(null);
     setShowHistory(false);
   };
+
+  useEffect(() => {
+    const state = location.state as {
+      source?: string;
+      entryId?: string;
+      entryDate?: string;
+      diaryText?: string;
+      echoText?: string;
+    } | null;
+
+    if (state?.source !== 'daily-echo' || !state.entryId || !state.echoText) return;
+    const stateKey = `${state.entryId}:${state.echoText}`;
+    if (handledDailyEchoStateKeyRef.current === stateKey) return;
+    handledDailyEchoStateKeyRef.current = stateKey;
+
+    setCurrentStyleId('gentle');
+    localStorage.setItem('xiang_ai_style', 'gentle');
+    startNewChat();
+    setAttachedContext(`你正在接续“小象回声”之后的对话。请继续使用温柔陪伴风格，先接住感受，再轻轻帮助用户把这篇日记看清楚，不要长篇说教。
+
+【日记日期】
+${state.entryDate || ''}
+
+【日记内容】
+${state.diaryText || ''}
+
+【小象回声】
+${state.echoText}`);
+    setInput('想继续聊聊这篇小象回声。');
+    setSystemHint('已带入这篇日记和小象回声');
+    setTimeout(() => setSystemHint(null), 3000);
+  }, [location.state]);
 
   const loadSession = (s: ChatSession) => {
     if (abortControllerRef.current) {

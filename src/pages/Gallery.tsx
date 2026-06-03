@@ -14,6 +14,7 @@ interface GalleryImage {
   entryId: string;
   date: string;
   entryTitle: string;
+  sourceType: 'diaryImage' | 'echoCard';
 }
 
 interface DayGroup {
@@ -38,6 +39,9 @@ function getEntriesSignature(entries: any[]): string {
     entry.updatedAt,
     entry.images?.length || 0,
     entry.content?.length || 0,
+    entry.dailyEcho?.generatedAt || '',
+    entry.dailyEcho?.card?.renderedAt || '',
+    entry.dailyEcho?.card?.imageUrl || '',
   ].join(':')).join('|');
 }
 
@@ -98,9 +102,23 @@ export default function Gallery() {
             url,
             entryId: entry.id,
             date: dateStr,
-            entryTitle
+            entryTitle,
+            sourceType: 'diaryImage',
           });
         });
+
+        const echoCardUrl = entry.dailyEcho?.status === 'saved'
+          ? entry.dailyEcho?.card?.imageUrl || entry.dailyEcho?.card?.localDataUrl
+          : '';
+        if (echoCardUrl) {
+          allImages.push({
+            url: echoCardUrl,
+            entryId: entry.id,
+            date: dateStr,
+            entryTitle: `${entryTitle} · 小象回声`,
+            sourceType: 'echoCard',
+          });
+        }
       });
       
       // Sort by date descending
@@ -207,9 +225,9 @@ export default function Gallery() {
                   </h3>
                   <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-[6px] md:gap-2">
                     {dayGroup.images.map((img, idx) => (
-                      <div 
-                        key={`${img.entryId}-${idx}`} 
-                        className="aspect-square bg-surface-container-low rounded-[12px] overflow-hidden cursor-pointer"
+                      <div
+                        key={`${img.entryId}-${img.sourceType}-${idx}`}
+                        className="aspect-square bg-surface-container-low rounded-[12px] overflow-hidden cursor-pointer relative"
                         onClick={() => openLightbox(img)}
                       >
                         <SafeImage
@@ -218,6 +236,11 @@ export default function Gallery() {
                           alt="" 
                           referrerPolicy="no-referrer"
                         />
+                        {img.sourceType === 'echoCard' && (
+                          <span className="absolute left-1.5 top-1.5 rounded-full bg-[#446733]/90 px-2 py-0.5 text-[10px] font-medium text-white shadow-sm">
+                            回声
+                          </span>
+                        )}
                       </div>
                     ))}
                   </div>

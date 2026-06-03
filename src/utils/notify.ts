@@ -277,7 +277,6 @@ export async function sendBrowserNotification(
   const notificationOptions: XiangNotificationOptions = {
     body,
     icon: '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
     tag: options.tag || 'xiang-notification',
     renotify: options.renotify,
     data: options.data,

@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'xiaoxiang-pwa-v5';
+const CACHE_VERSION = 'xiaoxiang-pwa-v6';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -97,7 +97,6 @@ self.addEventListener('push', (event) => {
   const options = {
     body: payload.body || '你有一条新提醒',
     icon: payload.icon || '/icons/xiaoxiang-pwa-192.png',
-    badge: payload.badge || '/icons/xiaoxiang-pwa-192.png',
     tag: payload.tag || 'xiang-notification',
     renotify: true,
     data: {

@@ -44,6 +44,24 @@ function makeHistorySummary(content: string): string {
 
 export type EntryStatus = 'active' | 'draft' | 'trashed';
 
+export type DailyEchoStatus = 'draft' | 'saved' | 'dismissed' | 'failed';
+
+export interface DailyEcho {
+  status: DailyEchoStatus;
+  content: string;
+  styleId: 'gentle';
+  generatedAt: string;
+  sourceEntryUpdatedAt: string;
+  regenerateCount: number;
+  card?: {
+    imageUrl?: string;
+    localDataUrl?: string;
+    width: number;
+    height: number;
+    renderedAt: string;
+  };
+}
+
 export interface DiaryEntry {
   id: string;
   userId?: string;
@@ -65,6 +83,7 @@ export interface DiaryEntry {
   prompts?: any;
   backgroundId?: string;
   themeId?: string | null;
+  dailyEcho?: DailyEcho;
   syncVersion?: number;
   vaultPath?: string;
   vaultTrashPath?: string;
@@ -421,10 +440,11 @@ async function uploadEntryImagesForSync(db: IDBPDatabase<DiaryDB>, entry: DiaryE
   if (!images.some(isDataImage)) {
     const changed = images.length !== (entry.images || []).length;
     const normalizedEntry = { ...entry, images };
-    if (changed) {
-      await db.put('entries', normalizedEntry);
+    const echoPrepared = await uploadDailyEchoCardForSync(normalizedEntry);
+    if (changed || echoPrepared.changed) {
+      await db.put('entries', echoPrepared.entry);
     }
-    return { entry: normalizedEntry, changed };
+    return { entry: echoPrepared.entry, changed: changed || echoPrepared.changed };
   }
 
   const nextImages: string[] = [];
@@ -448,12 +468,48 @@ async function uploadEntryImagesForSync(db: IDBPDatabase<DiaryDB>, entry: DiaryE
     content: rewriteInlineImageRefs(entry.content, uploadedByKey),
     images: nextImages,
   };
-  await db.put('entries', syncedEntry);
-  return { entry: syncedEntry, changed: true };
+  const echoPrepared = await uploadDailyEchoCardForSync(syncedEntry);
+  await db.put('entries', echoPrepared.entry);
+  return { entry: echoPrepared.entry, changed: true };
+}
+
+async function uploadDailyEchoCardForSync(entry: DiaryEntry): Promise<{ entry: DiaryEntry; changed: boolean }> {
+  const echo = entry.dailyEcho;
+  const localDataUrl = echo?.card?.localDataUrl;
+  if (!echo || !echo.card || !localDataUrl || !isDataImage(localDataUrl)) {
+    return { entry, changed: false };
+  }
+
+  const ext = extensionFromDataUrl(localDataUrl);
+  const file = dataUrlToFile(localDataUrl, `diary-echo-${entry.id}.${ext}`);
+  const [uploadedUrl] = await uploadImages([file]);
+  return {
+    entry: {
+      ...entry,
+      dailyEcho: {
+        ...echo,
+        card: {
+          ...echo.card,
+          imageUrl: uploadedUrl,
+          localDataUrl: undefined,
+        },
+      },
+    },
+    changed: true,
+  };
 }
 
 function toSyncPayload(entry: DiaryEntry): DiaryEntry {
   const { syncVersion: _syncVersion, userId: _userId, ...payload } = entry;
+  if (payload.dailyEcho?.card) {
+    payload.dailyEcho = {
+      ...payload.dailyEcho,
+      card: {
+        ...payload.dailyEcho.card,
+        localDataUrl: undefined,
+      },
+    };
+  }
   return payload as DiaryEntry;
 }
 

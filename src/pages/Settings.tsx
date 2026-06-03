@@ -789,6 +789,13 @@ export default function Settings() {
               </div>
               <Toggle checked={settings.autoAdjustTime} onChange={(value) => updateSetting('autoAdjustTime', value)} />
             </div>
+            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-surface-container/50">
+              <div className="flex min-w-0 flex-1 flex-col items-start">
+                <span className="text-[15px] font-medium">小象回声浮窗</span>
+                <span className="text-[11px] text-on-surface-variant/70">保存日记后，小象会在纸角轻轻出现</span>
+              </div>
+              <Toggle checked={settings.dailyEchoFloatEnabled} onChange={(value) => updateSetting('dailyEchoFloatEnabled', value)} />
+            </div>
             <div className="flex items-center justify-between gap-4 px-5 py-4">
               <div className="flex min-w-0 flex-1 flex-col items-start">
                 <span className="text-[15px] font-medium">图片插入正文</span>

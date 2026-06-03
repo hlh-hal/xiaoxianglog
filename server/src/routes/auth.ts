@@ -124,6 +124,17 @@ function parseJsonStringArray(value?: string | null) {
   }
 }
 
+function parseDailyEchoImageUrls(value?: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    const imageUrl = parsed?.card?.imageUrl;
+    return typeof imageUrl === 'string' && imageUrl.trim() ? [imageUrl] : [];
+  } catch {
+    return [];
+  }
+}
+
 function getUploadPathFromUrl(url?: string | null) {
   if (!url || /^https?:\/\//i.test(url) || url.startsWith('data:')) return null;
 
@@ -462,7 +473,7 @@ router.delete('/me', requireAuth, accountDeleteLimit, async (req: Request, res: 
       }),
       prisma.diaryEntry.findMany({
         where: { userId },
-        select: { id: true, images: true },
+        select: { id: true, images: true, dailyEcho: true },
       }),
       prisma.communityPost.findMany({
         where: { userId },
@@ -488,6 +499,7 @@ router.delete('/me', requireAuth, accountDeleteLimit, async (req: Request, res: 
     const uploadUrls = [
       user.avatarUrl,
       ...entries.flatMap(entry => parseJsonStringArray(entry.images)),
+      ...entries.flatMap(entry => parseDailyEchoImageUrls(entry.dailyEcho)),
       ...posts.flatMap(post => parseJsonStringArray(post.images)),
       ...editHistories.flatMap(history => parseJsonStringArray(history.images)),
       ...customFonts.map(font => font.fileUrl),

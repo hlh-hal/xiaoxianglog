@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { stripAllMarkdown } from '../lib/utils';
 import { Check, Share, Copy, MoreVertical, Image as ImageIcon, Undo, Redo, Highlighter, Bold, Quote, List, ListOrdered, X, ArrowLeft, Trash2, History, FileText, XCircle, ChevronRight, Plus, Star, Download, Palette, Minimize2, Maximize2 } from 'lucide-react';
-import { diaryService, DiaryEntry, DiaryTemplate, EditHistory } from '../services/diaryService';
+import { diaryService, DiaryEntry, DiaryTemplate, EditHistory, DailyEcho } from '../services/diaryService';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -22,7 +22,7 @@ import { useKeyboardInset } from '../hooks/useKeyboardInset';
 import { useAuth } from '../contexts/AuthContext';
 import { sanitizeModernColors, measureExportCard, pickExportScale, decodeErrorReason, waitForExportRenderReady, renderExportCanvas } from '../utils/exportImage';
 import { DiaryTheme, allThemes } from '../types/theme';
-import { api, getAccessToken } from '../services/apiClient';
+import { api, getAccessToken, isAuthenticated } from '../services/apiClient';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
@@ -31,6 +31,8 @@ import { AppToast } from '../components/AppToast';
 import { SafeImage } from '../components/SafeImage';
 import { settingsService } from '../services/settingsService';
 import { createClientId } from '../utils/id';
+import { generateDiaryEcho } from '../services/aiService';
+import { DailyEchoExportCard, DailyEchoFloatingCard } from '../components/DailyEchoCard';
 
 const DiaryInlineImage = TiptapNode.create({
   name: 'diaryInlineImage',
@@ -542,6 +544,94 @@ function makeEntrySignature(content: string, images: string[], backgroundId?: st
     backgroundId: backgroundId || null,
     themeId: themeId || null,
   });
+}
+
+function getLocalDateKey(date = new Date()): string {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const lines: string[] = [];
+  const paragraphs = text.split(/\n+/);
+
+  paragraphs.forEach((paragraph, index) => {
+    let line = '';
+    Array.from(paragraph).forEach(char => {
+      const next = line + char;
+      if (line && ctx.measureText(next).width > maxWidth) {
+        lines.push(line);
+        line = char;
+      } else {
+        line = next;
+      }
+    });
+    if (line) lines.push(line);
+    if (index < paragraphs.length - 1) lines.push('');
+  });
+
+  return lines;
+}
+
+function renderDailyEchoFallbackCanvas(echo: DailyEcho, date: Date) {
+  const scale = 2;
+  const width = 760;
+  const minHeight = 1060;
+  const paddingX = 72;
+  const paddingTop = 68;
+  const paddingBottom = 58;
+  const content = echo.content.trim();
+  const measureCanvas = document.createElement('canvas');
+  const measureCtx = measureCanvas.getContext('2d');
+  if (!measureCtx) throw new Error('Daily echo fallback canvas context unavailable');
+
+  const contentLength = Array.from(content).length;
+  const bodyFontSize = contentLength > 330 ? 24 : contentLength > 240 ? 26 : contentLength > 150 ? 30 : 34;
+  const bodyLineHeight = Math.round(bodyFontSize * (contentLength > 260 ? 1.76 : 1.82));
+  measureCtx.font = `${bodyFontSize}px "Microsoft YaHei", sans-serif`;
+  const lines = wrapCanvasText(measureCtx, content, width - paddingX * 2);
+  const bodyHeight = lines.length * bodyLineHeight;
+  const height = Math.max(minHeight, paddingTop + 24 + 30 + 56 + bodyHeight + 96 + paddingBottom);
+  const canvas = document.createElement('canvas');
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Daily echo fallback canvas context unavailable');
+  ctx.scale(scale, scale);
+  ctx.fillStyle = '#FFFDF7';
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = 'rgba(68,103,51,0.16)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+
+  const dateText = `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
+  ctx.fillStyle = '#446733';
+  ctx.font = '600 24px "Microsoft YaHei", sans-serif';
+  ctx.fillText('小象回声', paddingX, paddingTop + 24);
+  ctx.fillStyle = '#7D8876';
+  ctx.font = '18px "Microsoft YaHei", sans-serif';
+  ctx.fillText(dateText, paddingX, paddingTop + 54);
+
+  ctx.fillStyle = '#31402E';
+  ctx.font = `${bodyFontSize}px "Microsoft YaHei", sans-serif`;
+  let y = paddingTop + 54 + 56 + bodyFontSize;
+  lines.forEach(line => {
+    if (line) ctx.fillText(line, paddingX, y);
+    y += bodyLineHeight;
+  });
+
+  const footerY = height - paddingBottom;
+  ctx.fillStyle = '#7D8876';
+  ctx.font = '18px "Microsoft YaHei", sans-serif';
+  ctx.fillText('小象日志', paddingX, footerY);
+  ctx.fillStyle = 'rgba(68,103,51,0.35)';
+  ctx.fillRect(width - paddingX - 48, footerY - 8, 48, 2);
+
+  return canvas;
 }
 
 export default function Editor() {
@@ -1430,15 +1520,65 @@ export default function Editor() {
   const [exporting, setExporting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [dailyEcho, setDailyEcho] = useState<DailyEcho | undefined>();
+  const [isEchoGenerating, setIsEchoGenerating] = useState(false);
+  const [isEchoImageSaving, setIsEchoImageSaving] = useState(false);
+  const [dailyEchoFloatEnabled, setDailyEchoFloatEnabled] = useState(
+    () => settingsService.getSettings().dailyEchoFloatEnabled,
+  );
+  const [isEchoFloatMutedToday, setIsEchoFloatMutedToday] = useState(
+    () => localStorage.getItem('daily_echo_float_muted_date') === getLocalDateKey(),
+  );
+  const [isEchoFloatScrollHidden, setIsEchoFloatScrollHidden] = useState(false);
+  const echoFloatScrollTimerRef = useRef<number | null>(null);
+  const echoGenerationTokenRef = useRef(0);
 
   useEffect(() => {
     isSavingRef.current = isSaving;
   }, [isSaving]);
 
+  useEffect(() => {
+    setDailyEcho(existingJournal?.dailyEcho);
+  }, [
+    existingJournal?.id,
+    existingJournal?.dailyEcho?.status,
+    existingJournal?.dailyEcho?.generatedAt,
+    existingJournal?.dailyEcho?.card?.renderedAt,
+  ]);
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 2000);
   };
+
+  const hideDailyEchoFloatBriefly = useCallback(() => {
+    setIsEchoFloatScrollHidden(true);
+    if (echoFloatScrollTimerRef.current) {
+      window.clearTimeout(echoFloatScrollTimerRef.current);
+    }
+    echoFloatScrollTimerRef.current = window.setTimeout(() => {
+      setIsEchoFloatScrollHidden(false);
+      echoFloatScrollTimerRef.current = null;
+    }, 900);
+  }, []);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === 'app_settings') {
+        setDailyEchoFloatEnabled(settingsService.getSettings().dailyEchoFloatEnabled);
+      }
+      if (event.key === 'daily_echo_float_muted_date') {
+        setIsEchoFloatMutedToday(event.newValue === getLocalDateKey());
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      if (echoFloatScrollTimerRef.current) {
+        window.clearTimeout(echoFloatScrollTimerRef.current);
+      }
+    };
+  }, []);
 
   const getInlineImageToolbarPosition = useCallback((img: HTMLImageElement) => {
     const rect = img.getBoundingClientRect();
@@ -2591,12 +2731,211 @@ export default function Editor() {
     return savedEntry;
   }, [getDraftDiaryDate, isNewEntryWithoutMeaningfulContent, navigate, normalizeContentForStorage]);
 
+  const getEntryPlainText = (entry: DiaryEntry) => {
+    if (typeof document === 'undefined') {
+      return (entry.content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    const node = document.createElement('div');
+    node.innerHTML = entry.content || '';
+    return (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+  };
+
+  const persistDailyEcho = async (nextEcho: DailyEcho): Promise<DiaryEntry | undefined> => {
+    const entry = existingJournalRef.current;
+    if (!entry) return undefined;
+    const updated = await diaryService.updateEntry(entry.id, { dailyEcho: nextEcho }, {
+      saveHistory: false,
+      immediateSync: true,
+    });
+    if (updated) {
+      existingJournalRef.current = updated;
+      setExistingJournal(updated);
+      setDailyEcho(updated.dailyEcho);
+    }
+    return updated;
+  };
+
+  const startDailyEchoGeneration = async (entry: DiaryEntry, force = false) => {
+    const currentEcho = force ? dailyEcho || entry.dailyEcho : entry.dailyEcho;
+    if (!force && (currentEcho?.status === 'saved' || currentEcho?.status === 'dismissed')) return;
+    if (getEntryPlainText(entry).length < 6) return;
+
+    if (!isAuthenticated()) {
+      setDailyEcho({
+        status: 'failed',
+        content: '需要登录后才可以生成小象回声。',
+        styleId: 'gentle',
+        generatedAt: new Date().toISOString(),
+        sourceEntryUpdatedAt: entry.updatedAt,
+        regenerateCount: currentEcho?.regenerateCount || 0,
+      });
+      showToast('登录后可生成小象回声');
+      return;
+    }
+
+    const token = echoGenerationTokenRef.current + 1;
+    echoGenerationTokenRef.current = token;
+    setIsEchoGenerating(true);
+    if (force || !currentEcho || currentEcho.status === 'failed') {
+      setDailyEcho(undefined);
+    }
+
+    try {
+      const nextRegenerateCount = force ? (currentEcho?.regenerateCount || 0) + 1 : (currentEcho?.regenerateCount || 0);
+      const content = await generateDiaryEcho(entry, nextRegenerateCount);
+      if (echoGenerationTokenRef.current !== token) return;
+      setDailyEcho({
+        status: 'draft',
+        content,
+        styleId: 'gentle',
+        generatedAt: new Date().toISOString(),
+        sourceEntryUpdatedAt: entry.updatedAt,
+        regenerateCount: nextRegenerateCount,
+      });
+    } catch (error) {
+      console.warn('Failed to generate daily echo:', error);
+      if (echoGenerationTokenRef.current !== token) return;
+      setDailyEcho({
+        status: 'failed',
+        content: '',
+        styleId: 'gentle',
+        generatedAt: new Date().toISOString(),
+        sourceEntryUpdatedAt: entry.updatedAt,
+        regenerateCount: currentEcho?.regenerateCount || 0,
+      });
+    } finally {
+      if (echoGenerationTokenRef.current === token) {
+        setIsEchoGenerating(false);
+      }
+    }
+  };
+
+  const handleSaveDailyEcho = async () => {
+    if (!dailyEcho || dailyEcho.status === 'failed') return;
+    await persistDailyEcho({ ...dailyEcho, status: 'saved' });
+    showToast('小象回声已收进这篇');
+  };
+
+  const handleDismissDailyEcho = async () => {
+    const entry = existingJournalRef.current;
+    const now = new Date().toISOString();
+    const dismissedEcho: DailyEcho = {
+      status: 'dismissed',
+      content: '',
+      styleId: 'gentle',
+      generatedAt: now,
+      sourceEntryUpdatedAt: entry?.updatedAt || now,
+      regenerateCount: dailyEcho?.regenerateCount || entry?.dailyEcho?.regenerateCount || 0,
+    };
+    if (entry) {
+      await persistDailyEcho(dismissedEcho);
+    } else {
+      setDailyEcho(dismissedEcho);
+    }
+    showToast('这篇日记不会再生成小象回声');
+  };
+
+  const handleRegenerateDailyEcho = () => {
+    const entry = existingJournalRef.current;
+    if (!entry) return;
+    void startDailyEchoGeneration(entry, true);
+  };
+
+  const handleContinueDailyEchoChat = () => {
+    const entry = existingJournalRef.current;
+    if (!entry || !dailyEcho?.content) return;
+    navigate('/ai-chat', {
+      state: {
+        source: 'daily-echo',
+        entryId: entry.id,
+        entryDate: entry.diaryDate,
+        diaryText: getEntryPlainText(entry).slice(0, 1800),
+        echoText: dailyEcho.content,
+      },
+    });
+  };
+
+  const handleSaveDailyEchoImage = async () => {
+    const entry = existingJournalRef.current;
+    const echo = dailyEcho;
+    if (!entry || !echo || echo.status !== 'saved') return;
+
+    setIsEchoImageSaving(true);
+    setExporting(true);
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'fixed';
+    wrapper.style.left = '-9999px';
+    wrapper.style.top = '0';
+    wrapper.style.pointerEvents = 'none';
+    document.body.appendChild(wrapper);
+    const root = createRoot(wrapper);
+
+    try {
+      root.render(<DailyEchoExportCard echo={echo} date={new Date(entry.diaryDate)} />);
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      const el = wrapper.firstElementChild as HTMLElement | null;
+      if (!el) throw new Error('Daily echo export card is not ready');
+      const restoreColors = sanitizeModernColors(el);
+      let canvas: HTMLCanvasElement;
+      try {
+        const exportWidth = Math.ceil(el.scrollWidth || el.offsetWidth);
+        const exportHeight = Math.ceil(el.scrollHeight || el.offsetHeight);
+        try {
+          canvas = await html2canvas(el, {
+            useCORS: true,
+            allowTaint: false,
+            scale: exportHeight > 1400 || window.innerWidth < 480 ? 1.5 : 2,
+            backgroundColor: null,
+            logging: false,
+            width: exportWidth,
+            height: exportHeight,
+            windowWidth: exportWidth,
+            windowHeight: exportHeight,
+          });
+          if (canvas.width === 0 || canvas.height === 0) {
+            throw new Error(`Daily echo html2canvas returned empty canvas (${canvas.width}x${canvas.height})`);
+          }
+        } catch (renderError) {
+          console.warn('Daily echo html2canvas failed, using fallback canvas:', renderError);
+          canvas = renderDailyEchoFallbackCanvas(echo, new Date(entry.diaryDate));
+        }
+      } finally {
+        restoreColors();
+      }
+      const dataUrl = canvas.toDataURL('image/png');
+      if (!dataUrl || dataUrl === 'data:,') throw new Error('Daily echo image export failed');
+      const nextEcho: DailyEcho = {
+        ...echo,
+        status: 'saved',
+        card: {
+          ...echo.card,
+          localDataUrl: dataUrl,
+          width: canvas.width,
+          height: canvas.height,
+          renderedAt: new Date().toISOString(),
+        },
+      };
+      await persistDailyEcho(nextEcho);
+      showToast('小象回声图片已保存到图库');
+    } catch (error) {
+      console.error('Failed to save daily echo image:', error);
+      showToast('小象回声图片保存失败');
+    } finally {
+      root.unmount();
+      if (document.body.contains(wrapper)) {
+        document.body.removeChild(wrapper);
+      }
+      setExporting(false);
+      setIsEchoImageSaving(false);
+    }
+  };
+
   const handleSave = async (goBack = false) => {
     if (isSavingRef.current) return;
     isSavingRef.current = true;
     setIsSaving(true);
     try {
-      await persistCurrentEntry({
+      const savedEntry = await persistCurrentEntry({
         reason: goBack ? 'back' : 'manual',
         saveHistory: true,
         navigateToSaved: !goBack,
@@ -2607,6 +2946,9 @@ export default function Editor() {
       } else {
         setIsEditing(false);
         editor?.commands.blur();
+        if (savedEntry) {
+          void startDailyEchoGeneration(savedEntry);
+        }
       }
     } catch (error) {
       console.error("Error saving diary:", error);
@@ -2764,6 +3106,22 @@ export default function Editor() {
   const defaultDisplayImages = getDefaultDisplayImagesForContent(content, images);
   const activePreviewImages = previewImagesOverride ?? images;
   const shouldShowInlineImageToolbar = Boolean(inlineImageToolbar && isEditing && !previewHashActive);
+  const shouldHideDailyEchoFloat = !dailyEchoFloatEnabled
+    || isEchoFloatMutedToday
+    || keyboardInset > 0
+    || isEchoFloatScrollHidden
+    || showThemeBar
+    || showShare
+    || isMenuOpen
+    || isTemplateModalOpen
+    || isTemplateEditorOpen
+    || isHistoryModalOpen
+    || isAbandonConfirmOpen
+    || isRestoreConfirmOpen
+    || isBackgroundSelectorOpen
+    || previewHashActive
+    || shouldShowInlineImageToolbar
+    || exporting;
 
   const toggleInlineImageSize = () => {
     if (!inlineImageToolbar || !editor) return;
@@ -2849,11 +3207,52 @@ export default function Editor() {
       return;
     }
 
+    const inlineSrc = node.attrs.src || inlineImageToolbar.src || '';
+    const inlineKey = node.attrs.imageKey
+      || inlineImageToolbar.imageKey
+      || parseInlineImageRef(inlineSrc)
+      || inlineImageObjectUrlKeysRef.current.get(inlineSrc)
+      || (inlineSrc.startsWith('data:image/') ? createInlineImageKey(inlineSrc) : '');
+    const attachmentSrc = inlineKey
+      ? findImageByInlineKey(inlineKey)
+      : (imagesRef.current.includes(inlineSrc) ? inlineSrc : '');
+
     const tr = editor.state.tr.delete(inlineImageToolbar.pos, inlineImageToolbar.pos + node.nodeSize);
     editor.view.dispatch(tr);
+    const nextContent = editor.getHTML();
+
+    if (attachmentSrc) {
+      const remainingInlineSources = getInlineImageSources(nextContent);
+      const remainingInlineKeys = getInlineImageKeys(nextContent);
+      remainingInlineSources.forEach(src => {
+        const key = inlineImageObjectUrlKeysRef.current.get(src) || parseInlineImageRef(src) || (
+          src.startsWith('data:image/') ? createInlineImageKey(src) : ''
+        );
+        if (key) remainingInlineKeys.add(key);
+      });
+
+      const stillReferenced = inlineKey
+        ? remainingInlineKeys.has(inlineKey)
+        : remainingInlineSources.has(attachmentSrc);
+
+      if (!stillReferenced) {
+        setImagesWithRef(prev => prev.filter(src => (
+          inlineKey ? createInlineImageKey(src) !== inlineKey : src !== attachmentSrc
+        )));
+        if (inlineKey) {
+          const objectUrl = inlineImageObjectUrlsRef.current.get(inlineKey);
+          if (objectUrl) {
+            URL.revokeObjectURL(objectUrl);
+            inlineImageObjectUrlsRef.current.delete(inlineKey);
+            inlineImageObjectUrlKeysRef.current.delete(objectUrl);
+          }
+        }
+      }
+    }
+
     blurEditorForInlineImageToolbar();
     hasUnsavedChanges.current = true;
-    setContent(editor.getHTML());
+    setContent(nextContent);
     closeInlineImageToolbar();
   };
 
@@ -3092,14 +3491,17 @@ export default function Editor() {
         className={`fixed inset-x-0 top-0 bottom-0 z-10 overflow-y-auto overscroll-contain ${shouldShowInlineImageToolbar ? 'inline-image-toolbar-active' : ''}`}
         style={editorScrollStyle}
         onTouchMove={() => {
+          hideDailyEchoFloatBriefly();
           if (handleTextSelectionTouchMove()) return;
           stopInputScrollLock();
           closeInlineImageToolbar({ clearSelection: true });
         }}
         onWheel={() => {
+          hideDailyEchoFloatBriefly();
           stopInputScrollLock();
           closeInlineImageToolbar({ clearSelection: true, blur: true });
         }}
+        onScroll={hideDailyEchoFloatBriefly}
         onPointerMove={(e) => {
           if (handleTextSelectionPointerMove(e)) return;
           updateTapScrollLockMove(e);
@@ -3290,6 +3692,18 @@ export default function Editor() {
           </div>
         </div>
       </main>
+
+      <DailyEchoFloatingCard
+        echo={dailyEcho}
+        isGenerating={isEchoGenerating}
+        isSavingImage={isEchoImageSaving}
+        hidden={shouldHideDailyEchoFloat}
+        onSave={dailyEcho?.status === 'draft' ? handleSaveDailyEcho : undefined}
+        onRegenerate={existingJournal ? handleRegenerateDailyEcho : undefined}
+        onDismiss={existingJournal ? handleDismissDailyEcho : undefined}
+        onContinueChat={dailyEcho?.content ? handleContinueDailyEchoChat : undefined}
+        onSaveImage={dailyEcho?.status === 'saved' ? handleSaveDailyEchoImage : undefined}
+      />
 
       {shouldShowInlineImageToolbar && inlineImageToolbar && (
         <div

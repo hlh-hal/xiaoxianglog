@@ -18,6 +18,22 @@ function parseJsonArray(value?: string | null): string[] {
   }
 }
 
+function parseJsonObject(value?: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDailyEcho(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = JSON.stringify(value);
+  return raw.length <= 200000 ? raw : null;
+}
+
 function syncImageArray(value: unknown): string[] {
   if (Array.isArray(value) && value.some(item => typeof item === 'string' && item.trim().startsWith('data:image/'))) {
     const error = new Error('Images must be uploaded before sync');
@@ -32,6 +48,7 @@ async function formatSyncEntry(entry: any) {
     ...entry,
     tags: entry.tags ? JSON.parse(entry.tags) : [],
     images: await repairLegacyImageUrls(parseJsonArray(entry.images)),
+    dailyEcho: parseJsonObject(entry.dailyEcho),
   };
 }
 
@@ -134,6 +151,7 @@ router.post('/push', async (req: Request, res: Response) => {
               tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
               themeId: entry.themeId,
               images: nextImages.length > 0 ? JSON.stringify(nextImages) : null,
+              ...(entry.dailyEcho !== undefined && { dailyEcho: normalizeDailyEcho(entry.dailyEcho) }),
               isPinned: Boolean(entry.isPinned),
               isHidden: Boolean(entry.isHidden),
               trashReason: entry.trashReason,
@@ -156,6 +174,7 @@ router.post('/push', async (req: Request, res: Response) => {
               tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
               themeId: entry.themeId,
               images: nextImages.length > 0 ? JSON.stringify(nextImages) : null,
+              dailyEcho: normalizeDailyEcho(entry.dailyEcho),
               isPinned: Boolean(entry.isPinned),
               isHidden: Boolean(entry.isHidden),
               trashReason: entry.trashReason,
