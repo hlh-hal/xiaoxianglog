@@ -25,6 +25,7 @@
 - `npm run build`
 - Puppeteer 以移动端宽度打开 `http://localhost:3000/profile`，确认“高频关键词”存在且无控制台错误。
 - 2026-06-04 追加本地排查：用截图词样本 `AI sana codex hermes app happy prompt p0 10kg1 p1 p2 jd do taste` 验证过滤后只剩 `AI`、`sana`；混合中文生活主题后优先输出中文主题，再补少量英文。补跑 `npx tsx tests/profile-keywords.test.ts`、`npm run lint`、`npm run build`，并用 Puppeteer 访问本地 `http://localhost:3002/profile` 验证无控制台错误。
+- 2026-06-04 追加线上修复部署：执行 `cmd /c deploy.bat front`，上传 `dist/` 19 个文件，新前端入口为 `/assets/index-8TNDAu1N.js`。线上验证 `https://www.xiaoxianglog.cn/` 引用新入口，`/api/health` 正常，Puppeteer 打开 `/profile` 无控制台错误。
 - 线上部署：执行 `cmd /c deploy.bat front`，上传 `dist/` 19 个文件，新前端入口为 `/assets/index-Bc0e6dTH.js`。
 - 线上验证：`https://www.xiaoxianglog.cn/` 引用 `/assets/index-Bc0e6dTH.js`；`https://www.xiaoxianglog.cn/api/health` 返回 `build: cpamc-only-20260520`；Puppeteer 打开 `https://www.xiaoxianglog.cn/profile`，确认“高频关键词”存在且无控制台错误。
 
