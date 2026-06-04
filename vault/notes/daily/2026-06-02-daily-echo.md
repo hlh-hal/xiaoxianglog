@@ -93,3 +93,45 @@
 - 浏览器验证：点击小象回声“保存图片”后，`dailyEcho.card.localDataUrl` 成功写入，生成尺寸示例 `1137x1587`；图库页面出现带“回声”徽标的图片。截图：`artifacts/daily-echo-gallery-save-fixed.png`。
 - 验证：`npm run lint` 通过；`npm run build` 通过，仅保留既有 chunk/dynamic import 警告。
 - 已前端部署到云端，线上入口 `assets/index-DN52qlsv.js`，`/api/health` 正常返回 `build: cpamc-only-20260520`。
+
+## 2026-06-03 追加：小象回声 600 字质量修复
+- 用户继续反馈“小象回声”仍然空泛模板化，怀疑没有真正使用温柔陪伴提示词，且会出现只生成一半的问题。
+- 根因确认：`generateDiaryEcho()` 虽然已经拼接 `gentle` 温柔陪伴系统提示词，但当 AI 输出被判定不合格时，会退回本地 `buildFallbackEcho()`；该兜底只抓取一个日记片段，容易产生“抓一句细节 + 模板解释”的伪理解。后端 `/api/chat/complete` 也只返回 `content`，前端无法识别 provider 的 `finish_reason: length`。
+- 修复生成链路：`src/services/aiService.ts` 将小象回声上限改为 600 字，推荐 280-500 字，`maxTokens` 提高到 1100；移除本地伪 AI 分析兜底，改为质量校验失败后自动重试一次，两次失败则进入透明失败态，不把模板文案保存为正式回声。
+- 新增质量校验：从日记正文提取细节锚点，要求回声命中至少 2 个真实细节；拒绝“这一页被小象收到了”“这不是一句空泛的概括”等模板句；`finishReason === "length"` 或没有完整句子时直接判为不合格。
+- 后端兼容扩展：`server/src/routes/chat.ts` 的 `/api/chat/complete` 返回 `{ content, finishReason }`，旧调用仍可只读 `content`。
+- UI 承载调整：`DailyEchoCard` 展开态允许正文滚动，按钮区保持可见；失败提示改为“这次小象没有读完整，点换一句再试。”；导出卡和原生 canvas 兜底同步适配 600 字内容。
+- 新增测试：`tests/daily-echo-quality.test.ts`，覆盖细节锚点抽取、模板句拒绝、低细节输出拒绝、真实细节输出通过、provider 截断拒绝。新增脚本 `npm run test:daily-echo-quality`。
+- 验证：`npm run test:daily-echo-quality` 通过；`npm run lint` 通过；`npm run build` 通过，仅保留既有 chunk/dynamic import 警告；`cd server && npm run build` 通过。
+
+## 2026-06-03 追加：小象回声 600 字质量修复云端提交
+- 已重新执行前端和后端构建：`npm run build` 通过，`cd server && npm run build` 通过。
+- 首次执行 `deploy-upload.ps1 -Target all` 时，前端 `dist/` 和后端 `server/dist/` 已上传成功，但 FTP 中途短暂断连，导致 `package.json`、`package-lock.json` 和 3 个后端源码文件上传失败。
+- 已随后执行 `deploy-upload.ps1 -Target back` 补传，最终脚本输出 `=== All uploads complete ===`；后端 `server/dist/routes/chat.js`、源码 `server/src/routes/chat.ts`、package/schema 等均已上传到云端。
+- 线上前端验证：`http://47.122.112.242/` 当前引用 `/assets/index-Bis_WLzV.js`；该 JS 内已包含 `finishReason`、600 字 prompt、质量失败提示“这次小象没有读完整，点换一句再试。”等新逻辑。
+- 线上 API 健康检查：`http://47.122.112.242/api/health` 正常返回 `build: cpamc-only-20260520`，当前运行进程 `pid: 2724`。
+- 注意：现有 FTP 部署脚本只上传文件，不会远程重启 Node 后端。后端 `/api/chat/complete` 返回 `finishReason` 的运行时生效，需要在 BT 面板/服务器终端重启 `C:\wwwroot\xiaoxiang-server` 的 Node 项目或执行 `bt-start.bat` / `npm start`。
+## 2026-06-04 追加：小象回声专用系统提示词
+- 按用户提供的完整「小象回声系统提示词」新增 `DAILY_ECHO_SYSTEM_PROMPT`，小象回声生成不再拼接 `gentle` 温柔陪伴风格，也不再追加旧的“小象回声场景”提示。
+- `generateDiaryEcho()` 现在直接使用 `DAILY_ECHO_SYSTEM_PROMPT` 作为 system message；`buildDailyEchoUserPrompt()` 保留日期、生成次数、细节锚点、日记正文、600 字硬上限，并按 40-80 / 100-180 / 200-350 字区间引导模型自动选择长度。
+- 修正小象回声质量保护里的中文识别：中文句末标点可被识别，空泛模板句可被拒绝，中文日记锚点可从人物、事件、AI/agent 等真实细节中提取。
+- 更新 `tests/daily-echo-quality.test.ts`，覆盖专用 system prompt、user prompt 600 字硬上限、锚点提取、空泛拒绝、低细节拒绝、截断拒绝。
+- 验证：`npm run test:daily-echo-quality` 通过；`npm run lint` 通过；`npm run build` 通过，仅保留既有 chunk/dynamic import 警告；`cd server && npm run build` 通过。
+- 云端部署：执行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy-upload.ps1 -Target front` 成功，线上首页已引用 `/assets/index-FFg3zf9d.js`；远端 JS 与本地 `dist/assets/index-FFg3zf9d.js` 的 SHA256 一致（`8e1fb85c03c9cd64e51f79c83756c497633003990adcc1ade4c7455f1df02973`），`/api/health` 返回 `build: cpamc-only-20260520`、`pid: 852`。
+## 2026-06-04 追加：修复短日记“小象没有读完整”误杀
+- 用户截图反馈一句话日记“阿萨DAS大王你到家说声”会进入失败态，显示“这次小象没有读完整，点换一句再试。”根因不是 UI，而是 `generateDiaryEcho()` 两次生成后没有通过前端质量闸，尤其短日记被按长日记标准要求命中至少 2 个细节锚点，容易被误判 `not-grounded`；短句缺少句号也可能被误判 `incomplete`。
+- 修复 `src/services/aiService.ts`：新增短日记阈值 `DAILY_ECHO_SHORT_DIARY_CHARS = 80`，短日记只要求命中 1 个真实锚点；非截断、非明显半句的短输出如果只是缺少句末标点，会自动补句号通过；API 请求失败会在函数内重试一次。
+- 新增 `buildShortDiaryEchoFallback()`：仅对 6-80 字短日记启用，基于用户原文生成一条具体短回声，避免正常短日记直接展示失败卡。到家/平安类日记会回应“惦记、到家说声”这类真实含义，不输出空泛模板。
+- 更新 `tests/daily-echo-quality.test.ts`，新增截图样本覆盖：短日记 1 个锚点可通过、短日记 fallback 仍能通过质量校验。
+- 验证：`npm run test:daily-echo-quality` 通过；`npm run lint` 通过；`npm run build` 通过，仅保留既有 chunk/dynamic import 警告。
+## 2026-06-04 追加：本地替换小象回声系统提示词（未部署）
+- 按用户新提供的原文替换 `src/services/aiService.ts` 中生效的 `DAILY_ECHO_SYSTEM_PROMPT`：角色改为“用户日志分析助手 / 用户可信赖的成长伙伴”，核心强调日志分析、心理支持、成长洞察、温暖清晰的镜子。
+- 新 prompt 保留用户原文里的角色定位、Step1-Step4 工作流程、洞察草稿、用户可见回声、三段式回应原则、长度匹配规则和示例。旧版长 prompt 已移出运行时代码，只保留为临时注释对照；生成链路仍只读取新的 `DAILY_ECHO_SYSTEM_PROMPT`。
+- 更新 `tests/daily-echo-quality.test.ts` 的系统提示词断言，改为检查“用户日志分析助手”“用户可信赖的成长伙伴”“一面温暖而清晰的镜子”“洞察草稿”“用户可见回声”等新 prompt 关键句。
+- 本地验证：`npm run test:daily-echo-quality` 通过；`npm run lint` 通过；`npm run build` 通过，仅保留既有 chunk/dynamic import 警告。
+- 状态：本次按用户要求只做本地测试，未执行 `deploy-upload.ps1`，未上传云端服务器。
+## 2026-06-04 追加：本地调紧小象回声卡片排版（未部署）
+- 按用户截图反馈，展开态小象回声卡正文过大、行距过松，导致常规分析需要滑动才能读完。已调整 `src/components/DailyEchoCard.tsx` 的展开卡密度：卡片内边距从 `px-5 py-4` 收紧到 `px-4 py-3.5`，标题区字号和图标略小，正文从 `text-[15px] leading-8` 改为 `text-[13px] leading-6`，正文可用高度从 `46vh` 提高到 `58vh`，按钮字号/内边距同步收紧。
+- 目标：配合当前小象回声 prompt 的 20-50 / 80-120 字输出区间，让常规回声无需滚动即可完整阅读；超长内容仍保留正文区域滚动兜底，避免按钮被挤出屏幕。
+- 本地验证：`npm run lint` 通过；`npm run build` 通过，仅保留既有 chunk/dynamic import 警告。
+- 状态：本次只做本地测试，未上传云端服务器。

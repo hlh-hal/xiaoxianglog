@@ -589,8 +589,8 @@ function renderDailyEchoFallbackCanvas(echo: DailyEcho, date: Date) {
   if (!measureCtx) throw new Error('Daily echo fallback canvas context unavailable');
 
   const contentLength = Array.from(content).length;
-  const bodyFontSize = contentLength > 330 ? 24 : contentLength > 240 ? 26 : contentLength > 150 ? 30 : 34;
-  const bodyLineHeight = Math.round(bodyFontSize * (contentLength > 260 ? 1.76 : 1.82));
+  const bodyFontSize = contentLength > 520 ? 21 : contentLength > 420 ? 22 : contentLength > 330 ? 24 : contentLength > 240 ? 26 : contentLength > 150 ? 30 : 34;
+  const bodyLineHeight = Math.round(bodyFontSize * (contentLength > 420 ? 1.68 : contentLength > 260 ? 1.76 : 1.82));
   measureCtx.font = `${bodyFontSize}px "Microsoft YaHei", sans-serif`;
   const lines = wrapCanvasText(measureCtx, content, width - paddingX * 2);
   const bodyHeight = lines.length * bodyLineHeight;

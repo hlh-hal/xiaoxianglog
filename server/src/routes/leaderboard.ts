@@ -10,6 +10,44 @@ import { paramString } from '../utils/request.js';
 const router = Router();
 router.use(requireAuth);
 
+const LEADERBOARD_TIME_ZONE = 'Asia/Shanghai';
+const SHANGHAI_UTC_OFFSET_MS = 8 * 60 * 60 * 1000;
+let prunedLeaderboardMonthStartMs: number | null = null;
+
+function getShanghaiYearMonth(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: LEADERBOARD_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(date);
+  const year = Number(parts.find(part => part.type === 'year')?.value);
+  const month = Number(parts.find(part => part.type === 'month')?.value);
+
+  return { year, month };
+}
+
+export function getLeaderboardMonthKey(date = new Date()) {
+  const { year, month } = getShanghaiYearMonth(date);
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+export function getLeaderboardMonthStart(date = new Date()) {
+  const { year, month } = getShanghaiYearMonth(date);
+  return new Date(Date.UTC(year, month - 1, 1) - SHANGHAI_UTC_OFFSET_MS);
+}
+
+async function pruneExpiredLeaderboardLikes(monthStart = getLeaderboardMonthStart()) {
+  const monthStartMs = monthStart.getTime();
+  if (prunedLeaderboardMonthStartMs === monthStartMs) return;
+
+  await prisma.leaderboardLike.deleteMany({
+    where: {
+      createdAt: { lt: monthStart },
+    },
+  });
+  prunedLeaderboardMonthStartMs = monthStartMs;
+}
+
 function diaryDayKey(diaryDate: string) {
   const rawDate = String(diaryDate || '').trim();
   if (!rawDate) return null;
@@ -37,6 +75,8 @@ async function createLeaderboardLikeNotification(userId: string, fromUserId: str
 router.get('/me/received-likes', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
+    const monthStart = getLeaderboardMonthStart();
+    await pruneExpiredLeaderboardLikes(monthStart);
 
     const [communityPostLikes, comments, commentLikeRows, leaderboardLikes] = await Promise.all([
       prisma.postLike.count({
@@ -61,7 +101,10 @@ router.get('/me/received-likes', async (req: Request, res: Response) => {
         },
       }),
       prisma.leaderboardLike.count({
-        where: { userId },
+        where: {
+          userId,
+          createdAt: { gte: monthStart },
+        },
       }),
     ]);
 
@@ -87,7 +130,9 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
     const now = new Date();
-    const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const currentYearMonth = getLeaderboardMonthKey(now);
+    const monthStart = getLeaderboardMonthStart(now);
+    await pruneExpiredLeaderboardLikes(monthStart);
 
     // 获取好友列表
     const friendships = await prisma.friendship.findMany({
@@ -138,7 +183,10 @@ router.get('/', async (req: Request, res: Response) => {
     const likeCounts = await Promise.all(
       allUserIds.map(async (uid) => {
         const likes = await prisma.leaderboardLike.findMany({
-          where: { userId: uid },
+          where: {
+            userId: uid,
+            createdAt: { gte: monthStart },
+          },
           include: { fromUser: { select: { id: true, nickname: true } } },
           orderBy: { createdAt: 'desc' }
         });
@@ -181,6 +229,8 @@ router.post('/:id/like', async (req: Request, res: Response) => {
     const targetUserId = paramString(req, 'id');
     const fromUserId = req.user!.userId;
     const action = typeof req.body?.action === 'string' ? req.body.action : 'toggle';
+    const monthStart = getLeaderboardMonthStart();
+    await pruneExpiredLeaderboardLikes(monthStart);
 
     if (!targetUserId) {
       res.status(400).json({ error: '缺少目标用户' });

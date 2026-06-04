@@ -6,7 +6,8 @@
 import { Capacitor } from '@capacitor/core';
 
 const DEFAULT_NATIVE_API_BASE = 'https://www.xiaoxianglog.cn/api';
-const configuredApiBase = import.meta.env.VITE_API_BASE_URL || '';
+const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+const configuredApiBase = viteEnv?.VITE_API_BASE_URL || '';
 const API_BASE = (
   configuredApiBase
   || (Capacitor.isNativePlatform() ? DEFAULT_NATIVE_API_BASE : '/api')

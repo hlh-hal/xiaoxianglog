@@ -466,7 +466,11 @@ router.post('/complete', chatRateLimit, async (req: Request, res: Response) => {
     }
 
     const data = await response.json();
-    res.json({ content: data.choices?.[0]?.message?.content || '' });
+    const choice = data.choices?.[0];
+    res.json({
+      content: choice?.message?.content || '',
+      finishReason: choice?.finish_reason || null,
+    });
   } catch (err: any) {
     console.error(
       `[ai] complete_exception requestedModel=${primary.requestedModel} provider=${primary.name} targetModel=${primary.model} elapsedMs=${Date.now() - startedAt}`,

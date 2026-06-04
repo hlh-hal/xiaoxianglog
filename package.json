@@ -16,6 +16,7 @@
     "test:editor-exit-save": "tsx tests/editor-exit-save.test.ts",
     "test:exploration": "tsx tests/exports/exploration.test.ts",
     "test:export-mojibake": "tsx tests/exports/mojibake.test.ts",
+    "test:daily-echo-quality": "tsx tests/daily-echo-quality.test.ts",
     "test:preservation": "tsx tests/exports/preservation.test.ts",
     "test:preservation:verify": "tsx tests/exports/preservation.verify.test.ts"
   },

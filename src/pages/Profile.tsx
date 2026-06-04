@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { diaryService, DiaryEntry } from '../services/diaryService';
-import { stripMarkdown, extractKeywords } from '../utils/textUtils';
+import { stripMarkdown, extractRecentDiaryKeywords } from '../utils/textUtils';
 import { api } from '../services/apiClient';
 import { UserAvatar } from '../components/UserAvatar';
 
@@ -183,23 +183,7 @@ export default function Profile() {
   }, [loading, user?.userId]);
 
   const keywords = useMemo(() => {
-    const tagCounts: Record<string, number> = {};
-
-    entries.forEach((entry) => {
-      entry.tags?.forEach((tag) => {
-        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-      });
-    });
-
-    const allText = entries.map((entry) => entry.content || '').join('\n\n');
-    extractKeywords(allText).forEach(({ text, value }) => {
-      tagCounts[text] = (tagCounts[text] || 0) + value;
-    });
-
-    return Object.entries(tagCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 12)
-      .map(([tag]) => tag);
+    return extractRecentDiaryKeywords(entries, { days: 90, limit: 12 });
   }, [entries]);
 
   const monthlyData = useMemo(() => {
@@ -348,11 +332,11 @@ export default function Profile() {
 
         <section className="space-y-4">
           <SectionTitle title="高频关键词" />
-          <div className="bg-surface-container-lowest/40 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.04)] p-6 rounded-2xl flex flex-wrap gap-x-4 gap-y-3 justify-center items-center min-h-[92px]">
+          <div className="bg-surface-container-lowest/40 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.04)] px-5 py-5 rounded-2xl grid grid-cols-4 gap-x-2 gap-y-3 place-items-center min-h-[76px]">
             {keywords.length > 0 ? keywords.map((tag, index) => (
-              <span key={tag} className={keywordStyles[index % keywordStyles.length]}>{tag}</span>
+              <span key={tag} className={`${keywordStyles[index % keywordStyles.length]} block max-w-full truncate text-center`}>{tag}</span>
             )) : (
-              <span className="text-outline/50 text-sm">多写点日记，这里会生成你的专属关键词</span>
+              <span className="col-span-4 text-outline/50 text-sm">多写点日记，这里会生成你的专属关键词</span>
             )}
           </div>
         </section>
@@ -561,10 +545,10 @@ function SectionTitle({ title }: { title: string }) {
 }
 
 const keywordStyles = [
-  'text-primary font-bold text-2xl',
-  'text-outline font-medium text-lg',
-  'text-primary font-extrabold text-3xl',
-  'text-outline/60 font-normal text-base',
-  'text-primary/80 font-semibold text-xl',
+  'text-primary font-bold text-xl',
+  'text-outline font-medium text-base',
+  'text-primary font-extrabold text-2xl',
+  'text-outline/60 font-normal text-sm',
+  'text-primary/80 font-semibold text-lg',
   'text-outline/50 font-light text-[13px]',
 ];

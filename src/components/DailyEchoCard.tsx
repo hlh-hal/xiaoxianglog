@@ -24,7 +24,7 @@ const DAILY_ECHO_MASCOT_SRC = '/icons/xiaoxiang-echo-mascot-float.png';
 
 function getEchoTitle(echo?: DailyEcho, isGenerating = false) {
   if (isGenerating) return '小象正在轻轻读完这一页...';
-  if (echo?.status === 'failed') return '日记已经保存好了，小象回声稍后可以再试。';
+  if (echo?.status === 'failed') return '这次小象没有读完整，点换一句再试。';
   const content = echo?.content?.trim();
   if (!content) return '小象听见了。';
   const firstSentence = content.match(/^(.+?[。！？!?])/u)?.[1] || content.split(/\n+/)[0] || content;
@@ -77,11 +77,11 @@ function DailyEchoPanel({
   const content = getCompleteEchoText(echo?.content);
 
   return (
-    <div className="rounded-[18px] border border-[#446733]/15 bg-[#FFFDF7]/95 px-5 py-4 shadow-[0_10px_30px_rgba(68,103,51,0.10)] backdrop-blur-sm">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-[13px] font-medium text-[#446733]">
-          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#446733]/10">
-            <Sparkles className="h-3.5 w-3.5" />
+    <div className="flex max-h-[min(78vh,680px)] flex-col overflow-hidden rounded-[18px] border border-[#446733]/15 bg-[#FFFDF7]/95 px-4 py-3.5 shadow-[0_10px_30px_rgba(68,103,51,0.10)] backdrop-blur-sm">
+      <div className="mb-2.5 flex shrink-0 items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[12px] font-medium text-[#446733]">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#446733]/10">
+            <Sparkles className="h-3 w-3" />
           </span>
           <span>小象回声</span>
         </div>
@@ -93,27 +93,27 @@ function DailyEchoPanel({
       </div>
 
       {isGenerating ? (
-        <div className="flex items-center gap-3 py-2 text-[14px] leading-7 text-[#5F6B57]">
+        <div className="flex items-center gap-3 py-2 text-[13px] leading-6 text-[#5F6B57]">
           <span className="h-4 w-4 rounded-full border-2 border-[#446733]/30 border-t-[#446733] animate-spin" />
           <span>小象正在轻轻读完这一页...</span>
         </div>
       ) : isFailed ? (
-        <p className="text-[14px] leading-7 text-[#5F6B57]">
-          {content || '日记已经保存好了，小象回声稍后可以再试。'}
+        <p className="text-[13px] leading-6 text-[#5F6B57]">
+          {content || '这次小象没有读完整，点换一句再试。'}
         </p>
       ) : (
-        <p className="whitespace-pre-wrap text-[15px] leading-8 text-[#3F4A3A]">
+        <p className="min-h-0 max-h-[58vh] overflow-y-auto whitespace-pre-wrap pr-1 text-[13px] leading-6 text-[#3F4A3A] [scrollbar-width:thin]">
           {content}
         </p>
       )}
 
       {!isGenerating && (
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className="mt-3 flex shrink-0 flex-wrap items-center gap-2">
           {!isSaved && !isFailed && onSave && (
             <button
               type="button"
               onClick={onSave}
-              className="rounded-full bg-[#446733] px-4 py-2 text-[13px] font-medium text-white active:scale-95"
+              className="rounded-full bg-[#446733] px-3.5 py-1.5 text-[12px] font-medium text-white active:scale-95"
             >
               收进这篇
             </button>
@@ -123,7 +123,7 @@ function DailyEchoPanel({
               type="button"
               onClick={onSaveImage}
               disabled={isSavingImage}
-              className="inline-flex items-center gap-1.5 rounded-full bg-[#446733] px-4 py-2 text-[13px] font-medium text-white active:scale-95 disabled:opacity-60"
+              className="inline-flex items-center gap-1.5 rounded-full bg-[#446733] px-3.5 py-1.5 text-[12px] font-medium text-white active:scale-95 disabled:opacity-60"
             >
               <Download className="h-3.5 w-3.5" />
               {isSavingImage ? '保存中' : '保存图片'}
@@ -133,7 +133,7 @@ function DailyEchoPanel({
             <button
               type="button"
               onClick={onRegenerate}
-              className="inline-flex items-center gap-1.5 rounded-full bg-[#446733]/8 px-3.5 py-2 text-[13px] font-medium text-[#446733] active:scale-95"
+              className="inline-flex items-center gap-1.5 rounded-full bg-[#446733]/8 px-3 py-1.5 text-[12px] font-medium text-[#446733] active:scale-95"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               换一句
@@ -143,7 +143,7 @@ function DailyEchoPanel({
             <button
               type="button"
               onClick={onContinueChat}
-              className="inline-flex items-center gap-1.5 rounded-full bg-[#446733]/8 px-3.5 py-2 text-[13px] font-medium text-[#446733] active:scale-95"
+              className="inline-flex items-center gap-1.5 rounded-full bg-[#446733]/8 px-3 py-1.5 text-[12px] font-medium text-[#446733] active:scale-95"
             >
               <MessageCircle className="h-3.5 w-3.5" />
               继续聊聊
@@ -153,7 +153,7 @@ function DailyEchoPanel({
             <button
               type="button"
               onClick={onDismiss}
-              className="ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-2 text-[12px] text-[#7D8876] active:scale-95"
+              className="ml-auto inline-flex items-center gap-1 rounded-full px-2 py-1.5 text-[11px] text-[#7D8876] active:scale-95"
             >
               <X className="h-3.5 w-3.5" />
               不再显示
@@ -267,8 +267,8 @@ export function DailyEchoExportCard({ echo, date }: { echo: DailyEcho; date: Dat
   const dateText = `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
   const content = echo.content.trim();
   const contentLength = Array.from(content).length;
-  const bodyFontSize = contentLength > 330 ? 24 : contentLength > 240 ? 26 : contentLength > 150 ? 30 : 34;
-  const bodyLineHeight = contentLength > 260 ? 1.76 : 1.82;
+  const bodyFontSize = contentLength > 520 ? 21 : contentLength > 420 ? 22 : contentLength > 330 ? 24 : contentLength > 240 ? 26 : contentLength > 150 ? 30 : 34;
+  const bodyLineHeight = contentLength > 420 ? 1.68 : contentLength > 260 ? 1.76 : 1.82;
 
   return (
     <div
