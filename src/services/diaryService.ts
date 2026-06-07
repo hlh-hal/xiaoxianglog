@@ -7,6 +7,7 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import { api, isAuthenticated, uploadImages } from './apiClient';
 import { localVaultService, VaultSyncResult } from './localVaultService';
 import { createClientId } from '../utils/id';
+import { compareDiaryDateDesc, getDiaryDateKey } from '../utils/diaryDate';
 
 /** 过滤掉 images 数组中的空字符串和无效值 */
 function filterValidImages(images?: string[] | null): string[] {
@@ -84,6 +85,7 @@ export interface DiaryEntry {
   backgroundId?: string;
   themeId?: string | null;
   dailyEcho?: DailyEcho;
+  activeWritingSeconds?: number;
   syncVersion?: number;
   vaultPath?: string;
   vaultTrashPath?: string;
@@ -313,6 +315,25 @@ function isDataImage(value: string): boolean {
   return value.trim().startsWith('data:image/');
 }
 
+function stripLocalOnlySyncAssets(entry: DiaryEntry): DiaryEntry {
+  const nextEntry: DiaryEntry = {
+    ...entry,
+    images: filterValidImages(entry.images).filter(image => !isDataImage(image)),
+  };
+
+  if (nextEntry.dailyEcho?.card?.localDataUrl) {
+    nextEntry.dailyEcho = {
+      ...nextEntry.dailyEcho,
+      card: {
+        ...nextEntry.dailyEcho.card,
+        localDataUrl: undefined,
+      },
+    };
+  }
+
+  return nextEntry;
+}
+
 const INLINE_IMAGE_REF_PREFIX = 'diary-image-ref:';
 
 function createInlineImageKey(src: string): string {
@@ -501,7 +522,10 @@ async function uploadDailyEchoCardForSync(entry: DiaryEntry): Promise<{ entry: D
 
 function toSyncPayload(entry: DiaryEntry): DiaryEntry {
   const { syncVersion: _syncVersion, userId: _userId, ...payload } = entry;
-  if (payload.dailyEcho?.card) {
+  payload.diaryDate = getDiaryDateKey(payload.diaryDate, new Date());
+  if (payload.dailyEcho == null) {
+    delete (payload as Partial<DiaryEntry>).dailyEcho;
+  } else if (payload.dailyEcho.card) {
     payload.dailyEcho = {
       ...payload.dailyEcho,
       card: {
@@ -725,7 +749,19 @@ export const diaryService = {
           localEntriesChanged = true;
         }
 
-        const prepared = await uploadEntryImagesForSync(db, ownedEntry);
+        let prepared: { entry: DiaryEntry; changed: boolean };
+        try {
+          prepared = await uploadEntryImagesForSync(db, ownedEntry);
+        } catch (error) {
+          console.warn('Upload local diary images before sync failed; syncing text without local-only images:', error);
+          const fallbackEntry = stripLocalOnlySyncAssets(ownedEntry);
+          if (!areImagesEqual(fallbackEntry.images, ownedEntry.images) || fallbackEntry.dailyEcho !== ownedEntry.dailyEcho) {
+            await db.put('entries', fallbackEntry);
+            activeEntriesCache = null;
+            localEntriesChanged = true;
+          }
+          prepared = { entry: fallbackEntry, changed: fallbackEntry !== ownedEntry };
+        }
         if (prepared.changed) {
           activeEntriesCache = null;
           localEntriesChanged = true;
@@ -734,16 +770,39 @@ export const diaryService = {
       }
 
       let latestPushServerTime = '';
+      let skippedPushCount = 0;
       for (let index = 0; index < toPush.length; index += SYNC_BATCH_SIZE) {
         const batch = toPush.slice(index, index + SYNC_BATCH_SIZE);
-        const pushResult = await api.post<{ serverTime: string }>('/sync/push', { entries: batch });
+        let pushResult: { serverTime: string; results?: { id: string; status: string; reason?: string }[] };
+        try {
+          pushResult = await api.post<{ serverTime: string; results?: { id: string; status: string; reason?: string }[] }>('/sync/push', { entries: batch });
+        } catch (error) {
+          const firstIds = batch
+            .map(entry => entry.id)
+            .filter(Boolean)
+            .slice(0, 5)
+            .join(',');
+          throw new Error(`同步推送失败 batch=${Math.floor(index / SYNC_BATCH_SIZE) + 1} size=${batch.length} ids=${firstIds}: ${getErrorMessage(error)}`);
+        }
+
+        const skipped = (pushResult.results || []).filter(result => result.status === 'skipped');
+        if (skipped.length > 0) {
+          const skippedIds = skipped.map(result => result.id).filter(Boolean).slice(0, 5).join(',');
+          skippedPushCount += skipped.length;
+          console.warn(`同步推送跳过 ${skipped.length} 条异常日记，ids=${skippedIds}`);
+        }
+
         if (pushResult.serverTime) {
           latestPushServerTime = pushResult.serverTime;
         }
       }
 
       if (latestPushServerTime) {
-        localStorage.setItem(lastPushKey, latestPushServerTime);
+        if (skippedPushCount === 0) {
+          localStorage.setItem(lastPushKey, latestPushServerTime);
+        } else {
+          setSyncError(userId, `同步跳过 ${skippedPushCount} 条异常日记，稍后会继续重试`);
+        }
 
         const repullSince = pullData.serverTime || lastSync;
         const repullUrl = repullSince ? `/sync/pull?since=${encodeURIComponent(repullSince)}` : '/sync/pull';
@@ -752,7 +811,9 @@ export const diaryService = {
         localStorage.setItem(lastSyncKey, repullData.serverTime || latestPushServerTime);
       }
 
-      clearSyncError(userId);
+      if (skippedPushCount === 0) {
+        clearSyncError(userId);
+      }
       emitDiarySyncEvent(localEntriesChanged, { ok: true });
     })();
 
@@ -785,7 +846,7 @@ export const diaryService = {
     const result = entries.filter((e: DiaryEntry) => isEntryForCurrentUser(e) && !e.isHidden).sort((a: DiaryEntry, b: DiaryEntry) => {
       if (a.isPinned && !b.isPinned) return -1;
       if (!a.isPinned && b.isPinned) return 1;
-      return new Date(b.diaryDate).getTime() - new Date(a.diaryDate).getTime();
+      return compareDiaryDateDesc(a.diaryDate, b.diaryDate);
     });
     // 过滤掉 images 中的空字符串/无效值，防止首页渲染空图片容器
     result.forEach(e => { e.images = filterValidImages(e.images); });
@@ -809,7 +870,7 @@ export const diaryService = {
     const db = await initDB();
     const entries = await db.getAllFromIndex('entries', 'by-status', 'active');
     const lk = keyword.toLowerCase();
-    return entries.filter((e: DiaryEntry) => isEntryForCurrentUser(e) && !e.isHidden && ((e.title && e.title.toLowerCase().includes(lk)) || (e.content && e.content.toLowerCase().includes(lk)) || (e.blocks && e.blocks.some((b: any) => (b.title && b.title.toLowerCase().includes(lk)) || (b.content && b.content.toLowerCase().includes(lk)))))).sort((a: DiaryEntry, b: DiaryEntry) => new Date(b.diaryDate).getTime() - new Date(a.diaryDate).getTime());
+    return entries.filter((e: DiaryEntry) => isEntryForCurrentUser(e) && !e.isHidden && ((e.title && e.title.toLowerCase().includes(lk)) || (e.content && e.content.toLowerCase().includes(lk)) || (e.blocks && e.blocks.some((b: any) => (b.title && b.title.toLowerCase().includes(lk)) || (b.content && b.content.toLowerCase().includes(lk)))))).sort((a: DiaryEntry, b: DiaryEntry) => compareDiaryDateDesc(a.diaryDate, b.diaryDate));
   },
 
   async getEntryById(id: string): Promise<DiaryEntry | undefined> {

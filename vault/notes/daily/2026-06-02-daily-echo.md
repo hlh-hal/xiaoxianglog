@@ -121,8 +121,8 @@
 ## 2026-06-04 追加：修复短日记“小象没有读完整”误杀
 - 用户截图反馈一句话日记“阿萨DAS大王你到家说声”会进入失败态，显示“这次小象没有读完整，点换一句再试。”根因不是 UI，而是 `generateDiaryEcho()` 两次生成后没有通过前端质量闸，尤其短日记被按长日记标准要求命中至少 2 个细节锚点，容易被误判 `not-grounded`；短句缺少句号也可能被误判 `incomplete`。
 - 修复 `src/services/aiService.ts`：新增短日记阈值 `DAILY_ECHO_SHORT_DIARY_CHARS = 80`，短日记只要求命中 1 个真实锚点；非截断、非明显半句的短输出如果只是缺少句末标点，会自动补句号通过；API 请求失败会在函数内重试一次。
-- 新增 `buildShortDiaryEchoFallback()`：仅对 6-80 字短日记启用，基于用户原文生成一条具体短回声，避免正常短日记直接展示失败卡。到家/平安类日记会回应“惦记、到家说声”这类真实含义，不输出空泛模板。
-- 更新 `tests/daily-echo-quality.test.ts`，新增截图样本覆盖：短日记 1 个锚点可通过、短日记 fallback 仍能通过质量校验。
+- 注意：本段记录中的短日记本地 fallback 方案已在 2026-06-04 后续修复中废弃并删除；当前小象回声不再使用本地内容兜底。
+- 更新 `tests/daily-echo-quality.test.ts`，新增截图样本覆盖：短日记 1 个锚点可通过；后续修复已改为自然短片段锚点通过，不再测试本地 fallback。
 - 验证：`npm run test:daily-echo-quality` 通过；`npm run lint` 通过；`npm run build` 通过，仅保留既有 chunk/dynamic import 警告。
 ## 2026-06-04 追加：本地替换小象回声系统提示词（未部署）
 - 按用户新提供的原文替换 `src/services/aiService.ts` 中生效的 `DAILY_ECHO_SYSTEM_PROMPT`：角色改为“用户日志分析助手 / 用户可信赖的成长伙伴”，核心强调日志分析、心理支持、成长洞察、温暖清晰的镜子。
@@ -135,3 +135,52 @@
 - 目标：配合当前小象回声 prompt 的 20-50 / 80-120 字输出区间，让常规回声无需滚动即可完整阅读；超长内容仍保留正文区域滚动兜底，避免按钮被挤出屏幕。
 - 本地验证：`npm run lint` 通过；`npm run build` 通过，仅保留既有 chunk/dynamic import 警告。
 - 状态：本次只做本地测试，未上传云端服务器。
+
+## 2026-06-04 追加：修复首次生成显示“没有读完整”（未部署）
+- 用户明确要求不要再做具体回声兜底，本次排查确认问题不应通过本地伪回声解决。根因有三层：一是新系统提示词要求内部生成“洞察草稿 + 用户可见回声”，模型可能把两层都返回，而旧 `normalizeEchoText()` 没有提取“用户可见回声”段，容易被质量校验误杀；二是短日志锚点过长时，模型自然回应“到家/说声/平安”也可能被判 `not-grounded`；三是代码里仍残留 `buildGroundedDiaryEchoFallback()`，4 次重试后会走本地兜底，违背当前产品边界。
+- 修复 `src/services/aiService.ts`：system prompt 和 user prompt 明确最终只输出用户可见回声；`normalizeEchoText()` 支持从模型返回的“用户可见回声：”后提取真正展示文本；短日志增加 2-8 字自然片段锚点，如“到家”“说声”等；完全删除小象回声本地内容兜底函数和主流程兜底调用。
+- 更新 `tests/daily-echo-quality.test.ts`：新增短日志自然片段可通过、短日志无具体细节仍拒绝、模型返回“洞察草稿 + 用户可见回声”时只展示用户可见回声且不泄漏内部字段。
+- 验证：`npm run test:daily-echo-quality` 通过；确认 `src/services/aiService.ts` 中无 `buildShortDiaryEchoFallback` / `buildGroundedDiaryEchoFallback`；`npm run lint` 通过；`npm run build` 通过，仅保留既有 chunk/dynamic import 警告。
+- 浏览器验收：Puppeteer 在移动端 390x844 视口中输入日记并点击保存，拦截 `/api/chat/complete` 模拟一次返回“洞察草稿 + 用户可见回声”的旧问题形态；结果只调用 1 次 `/api/chat/complete`，展开卡显示具体回声，提到“蒸馏毛老师 skill / 王者三连赢 / 校园跑 / 大模型原理 / 知识库文档”，未显示“这次小象没有读完整”，也未泄漏“洞察草稿 / 今日主线 / 核心矛盾 / 人格特质 / 成长方向”。成功截图：`artifacts/daily-echo-first-generate-success.png`。
+- 状态：本次按用户要求完成本地修复和测试，尚未上传云端服务器。
+
+## 2026-06-04 追加：小象回声首次生成修复云端上传
+- 按用户要求将“小象回声首次生成显示没有读完整”修复上传云端。执行 `npm run build` 通过，生成线上前端入口 `assets/index-C6mbzRCl.js` 和样式 `assets/index-DuoN5iOD.css`。
+- 执行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy-upload.ps1 -Target front` 成功，FTP 输出 19/19 个前端文件全部 `OK`，包含 `index.html`、`sw.js`、`index-C6mbzRCl.js`、`index-DuoN5iOD.css` 以及小象图标资源。
+- 线上验证：`curl -k -L http://47.122.112.242/` 已引用 `/assets/index-C6mbzRCl.js`；`curl -k -L http://47.122.112.242/api/health` 返回 `build: cpamc-only-20260520`、`pid: 852`；远端 `/assets/index-C6mbzRCl.js` SHA256 与本地 `dist/assets/index-C6mbzRCl.js` 一致（`82F12EFBAC6B0ACA7C6CB4BCD7E1C074E18489586E555C305E2915F4E8C0C6AB`）。
+- 远端 JS 抽查包含“用户可见回声”提取、短日志自然锚点、`not-grounded` 质量校验、`Daily echo did not pass quality check` 失败路径；未发现 `buildShortDiaryEchoFallback` / `buildGroundedDiaryEchoFallback` 内容兜底函数名。
+- 本次只上传前端；后端未改动、未重启。
+
+## 2026-06-05 追加：复测小象回声“AI 调用失败”截图问题
+- 用户截图中 DevTools 显示的是 `POST /api/sync/push 500`，不是小象回声的 AI 接口。小象回声真正调用链路是保存日记后请求 `/api/chat/complete`，若 AI 返回内容没有通过前端质量闸，才会进入“这次小象没有读完整，点换一句再试。”失败态。
+- 本次本地模拟复测先复现了质量闸失败：`/api/chat/complete` 返回 200，但模拟回声没有命中足够多日记原文锚点，4 次重试后被 `validateDailyEchoContent()` 判为 `not-grounded`，UI 进入失败态。结论：失败根因不一定是“AI 没调到”，也可能是“AI 回了但不够贴近日记，被质量闸拦下”。
+- 保留验证脚本 `scripts/verify-daily-echo-ai-success.mjs`：清空测试浏览器数据、模拟登录、拦截 `/api/chat/complete` 返回“洞察草稿 + 用户可见回声”的旧问题形态，同时让 `/api/sync/push` 返回 200 避免同步噪音干扰；保存日记后点击右下角小象展开卡片，并断言没有失败文案、没有泄漏内部字段。
+- 成功验证：`node scripts/verify-daily-echo-ai-success.mjs` 通过，`chatCompleteCalls: 1`、`syncPushCalls: 3`、`failedTextVisible: false`、`leakedDraft: false`、`echoVisible: true`。成功截图：`artifacts/daily-echo-ai-success-2026-06-05.png`。
+- 回归验证：`npm run test:daily-echo-quality`、`npm run lint`、`npm run build` 均通过；构建仅保留既有 chunk size / dynamic import 警告。
+
+## 2026-06-05 追加：小象回声复测包云端上传
+- 按用户要求上传云端服务器。本次只上传前端 `dist/`，未改动后端、未重启 Node 服务。
+- 执行 `npm run build` 通过，生成前端入口 `assets/index-CItWjyJE.js` 和样式 `assets/index-B_SFzSaw.css`，仅保留既有 chunk size / dynamic import 警告。
+- 执行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy-upload.ps1 -Target front` 时外层命令超时，但 FTP 子进程继续完成；随后确认线上首页已引用新入口。
+- 线上验证：`https://www.xiaoxianglog.cn/` 引用 `assets/index-CItWjyJE.js` 与 `assets/index-B_SFzSaw.css`；远端 JS SHA256 与本地一致 `30B148EBC0ACDF74892E2BDFE7242EE6531ECB726A857D40F53AB28CEC1BC01A`，远端 CSS SHA256 与本地一致 `F8EF1D94D452FCC37BBC6B64EBB7F6C01DC07D6D3D7D978B39F4211492E5690D`。
+- 线上健康检查：`https://www.xiaoxianglog.cn/api/health` 返回 `build: cpamc-only-20260520`、`pid: 852`。
+
+## 2026-06-05 追加：修复 `not-grounded` 误杀并部署
+- 用户再次反馈截图同款长日志仍显示“这次小象没有读完整”。复盘确认根因不是 AI 接口未调用，而是 AI 返回自然改写内容后，被前端质量闸判为 `not-grounded`。旧锚点提取会把换行、模板字段、列表序号和下一段内容粘成超长锚点，例如“减少无意义的词出现 我中午想午睡”“二是长了也不乐意看 2”，导致自然回应无法命中。
+- 修复 `src/services/aiService.ts`：中文锚点按模板字段、换行、列表序号和中文标点分段；过滤“无”“感谢”等弱锚点；长句拆成 2-12 字真实短语锚点；优先捕捉“小象回声提示词”“用户洞察”“表面回应”“一周日志”“太散”“高频关键词”“纯词频”“提炼意义”“室友调低声音”“黑眼圈”“提前写完日志”等真实细节。质量闸仍保留 `not-grounded`，但以短语锚点计分，普通日记至少命中 2 个、短日记至少命中 1 个，允许自然改写。
+- 更新 `tests/daily-echo-quality.test.ts`：加入用户截图里的完整日记样本；断言锚点不再跨段粘连；断言自然改写版回声通过质量闸；保留空泛模板拒绝、短日记、内部草稿提取、截断拒绝等用例。
+- 新增/更新浏览器验收脚本 `scripts/verify-daily-echo-ai-success.mjs`，支持 `ECHO_VERIFY_BASE_URL`，可在本地和线上入口下拦截 `/api/chat/complete` 返回“洞察草稿 + 用户可见回声”的旧问题形态，并断言只展示用户可见回声、不出现失败文案、不泄漏内部字段。
+- 回归验证：`npm run test:daily-echo-quality` 通过；`npm run lint` 通过；`npm run build` 通过，仅保留既有 chunk size / dynamic import 警告。浏览器模拟本地入口通过，成功截图 `artifacts/daily-echo-ai-success-2026-06-05.png`。
+- 云端部署：执行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy-upload.ps1 -Target front` 上传前端；FTP 数据通道不稳定，首轮 `index.html`、`manifest.webmanifest` 和 `themes/red_tree2.jpg` 曾失败，随后单独补传 `index.html` 与 `manifest.webmanifest` 成功。`themes/red_tree2.jpg` 是既有主题资源，与本次小象回声修复无关。
+- 线上验证：`https://www.xiaoxianglog.cn/` 已引用 `assets/index-DcJCLvVd.js` 与 `assets/index-B_SFzSaw.css`；远端 JS SHA256 与本地一致 `9966D527BDBEB5006919CB9EAD52A4625879782D5A3EB69BEB650751CD619A17`，远端 CSS SHA256 与本地一致 `F8EF1D94D452FCC37BBC6B64EBB7F6C01DC07D6D3D7D978B39F4211492E5690D`；`https://www.xiaoxianglog.cn/api/health` 返回 `build: cpamc-only-20260520`、`pid: 5704`。
+- 线上浏览器模拟验收：`ECHO_VERIFY_BASE_URL=https://www.xiaoxianglog.cn node scripts/verify-daily-echo-ai-success.mjs` 通过，`chatCompleteCalls: 1`、`syncPushCalls: 2`、`failedTextVisible: false`、`leakedDraft: false`、`echoVisible: true`。成功截图：`artifacts/daily-echo-ai-success-online-2026-06-05.png`。
+
+## 2026-06-05 追加：写完反馈卡与书写统计部署
+- 按用户方案新增小象回声写完反馈卡：用户手动保存有文字日记后，右下角小象位置保持不变，吐出“今天的你，值得被看见”卡片，显示“今天你写了 X 字，用了 Y 分钟——这是你连续记录的第 Z 天”，按钮为“获取今日回声”和“合上日记本”。
+- 统计逻辑只在前端本地计算，不改后端、Prisma schema 或 `DailyEcho` 数据结构。新增 `src/utils/dailyEchoCompletionStats.ts`：字数排除模板字段标题并去掉空白/标点；书写时长按实际输入活跃时间累计，每次输入之间最多累计 30 秒，失焦/切后台暂停；连续天数按本地 active 日记的 `diaryDate` 去重向前计算。
+- `src/pages/Editor.tsx` 保存流程已接入：手动保存成功后生成完成卡统计，同时调用现有 `startDailyEchoGeneration(savedEntry)`；同版本 draft/saved/dismissed 回声会复用或尊重不再显示，不做本地伪回声兜底。“合上日记本”会返回首页。
+- `src/components/DailyEchoCard.tsx` 扩展右下角浮窗模式：完成卡和现有小象回声面板共用同一只小象与隐藏条件；点击“获取今日回声”展开现有回声面板，生成中显示等待态，生成后显示 AI 回声。
+- 新增 `tests/daily-echo-completion-stats.test.ts` 和 `npm run test:daily-echo-completion`，覆盖模板标题不计字数、标点空白不计字数、30 秒活跃窗口、失焦/切后台暂停、连续天数按日期去重。
+- 验证：`npm run test:daily-echo-completion`、`npm run test:daily-echo-quality`、`npm run lint`、`npm run build` 均通过；构建仍仅保留既有 dynamic import / chunk size 警告。
+- 浏览器验收：更新 `scripts/verify-daily-echo-ai-success.mjs`，保存后先断言完成卡与统计文案出现，再点击“获取今日回声”展开回声；本地与线上入口均通过，`chatCompleteCalls: 1`、`failedTextVisible: false`、`leakedDraft: false`。截图：`artifacts/daily-echo-completion-card-2026-06-05.png`、`artifacts/daily-echo-completion-card-online-2026-06-05.png`、`artifacts/daily-echo-ai-success-online-2026-06-05.png`。
+- 云端部署：执行 `deploy-upload.ps1 -Target front` 成功，19/19 前端文件 OK。线上首页已引用 `assets/index-COiLd1Gx.js` 与 `assets/index-CXoCXaQO.css`；远端 JS SHA256 与本地一致 `6839C6497E5BFE8700C07B9793B732433DC16EB63D283E51BE429A374C46B115`，远端 CSS SHA256 与本地一致 `EE0D2D00AF08503920F7123AE9D5AF25D3FE2CF03E9F20CF6062DA209DFFA32C`；`/api/health` 返回 `build: cpamc-only-20260520`、`pid: 7128`。

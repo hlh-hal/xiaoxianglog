@@ -5,6 +5,7 @@ import { diaryService, DiaryEntry } from '../services/diaryService';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { stripAllMarkdown } from '../lib/utils';
+import { parseDiaryDateKey } from '../utils/diaryDate';
 
 export default function Trash() {
   const navigate = useNavigate();
@@ -96,7 +97,7 @@ export default function Trash() {
               {items.map((item) => {
                 const isDeleted = item.trashReason === 'deleted';
                 const statusText = isDeleted ? '已删除' : '放弃编辑';
-                const dateText = item.diaryDate ? format(new Date(item.diaryDate), 'yyyy年MM月dd日', { locale: zhCN }) : '未知日期';
+                const dateText = item.diaryDate ? format(parseDiaryDateKey(item.diaryDate), 'yyyy年MM月dd日', { locale: zhCN }) : '未知日期';
                 
                 return (
                   <div 

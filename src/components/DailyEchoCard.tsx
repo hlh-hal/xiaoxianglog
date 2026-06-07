@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Download, MessageCircle, RefreshCw, Sparkles, X } from 'lucide-react';
+import { BookOpen, Download, MessageCircle, RefreshCw, X } from 'lucide-react';
 import type { DailyEcho } from '../services/diaryService';
+import type { DailyEchoCompletionStats } from '../utils/dailyEchoCompletionStats';
+import { parseDailyEchoContent } from '../utils/dailyEchoQuote';
 
 type DailyEchoActions = {
   isSavingImage?: boolean;
@@ -18,6 +20,8 @@ type DailyEchoCardProps = DailyEchoActions & {
 
 type DailyEchoFloatingCardProps = DailyEchoCardProps & {
   hidden?: boolean;
+  completionStats?: DailyEchoCompletionStats | null;
+  onCloseDiary?: () => void;
 };
 
 const DAILY_ECHO_MASCOT_SRC = '/icons/xiaoxiang-echo-mascot-float.png';
@@ -27,6 +31,8 @@ function getEchoTitle(echo?: DailyEcho, isGenerating = false) {
   if (echo?.status === 'failed') return '这次小象没有读完整，点换一句再试。';
   const content = echo?.content?.trim();
   if (!content) return '小象听见了。';
+  const quote = parseDailyEchoContent(content).quote;
+  if (quote) return quote;
   const firstSentence = content.match(/^(.+?[。！？!?])/u)?.[1] || content.split(/\n+/)[0] || content;
   const chars = Array.from(firstSentence.trim());
   if (chars.length > 24) return '小象听见了。';
@@ -74,19 +80,20 @@ function DailyEchoPanel({
 }: DailyEchoCardProps) {
   const isSaved = echo?.status === 'saved';
   const isFailed = echo?.status === 'failed';
-  const content = getCompleteEchoText(echo?.content);
+  const parsedEcho = parseDailyEchoContent(echo?.content || '');
+  const quote = parsedEcho.quote;
+  const content = getCompleteEchoText(parsedEcho.body);
 
   return (
     <div className="flex max-h-[min(78vh,680px)] flex-col overflow-hidden rounded-[18px] border border-[#446733]/15 bg-[#FFFDF7]/95 px-4 py-3.5 shadow-[0_10px_30px_rgba(68,103,51,0.10)] backdrop-blur-sm">
-      <div className="mb-2.5 flex shrink-0 items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-[12px] font-medium text-[#446733]">
-          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#446733]/10">
-            <Sparkles className="h-3 w-3" />
-          </span>
-          <span>小象回声</span>
+      <div className="mb-3 shrink-0">
+        <div className="rounded-[14px] bg-[#446733]/8 px-4 py-3 text-center">
+          <p data-testid="daily-echo-quote" className="font-serif text-[17px] font-semibold leading-7 text-[#31402E]">
+            {isGenerating ? '小象正在为今天提炼一句回声' : quote}
+          </p>
         </div>
         {isSaved && (
-          <span className="rounded-full bg-[#446733]/8 px-2.5 py-1 text-[11px] text-[#446733]">
+          <span className="mt-2 inline-flex rounded-full bg-[#446733]/8 px-2.5 py-1 text-[11px] text-[#446733]">
             已收进这篇
           </span>
         )}
@@ -165,6 +172,51 @@ function DailyEchoPanel({
   );
 }
 
+function DailyEchoCompletionPanel({
+  stats,
+  onOpenEcho,
+  onCloseDiary,
+}: {
+  stats: DailyEchoCompletionStats;
+  onOpenEcho?: () => void;
+  onCloseDiary?: () => void;
+}) {
+  return (
+    <div
+      data-testid="daily-echo-completion-card"
+      className="mb-3 w-[min(318px,calc(100vw-108px))] rounded-[18px] border border-[#446733]/14 bg-[#FFFDF7] px-5 py-4 text-left text-[#31402E] shadow-[0_14px_34px_rgba(68,103,51,0.16)] animate-in fade-in slide-in-from-right-2 duration-300"
+    >
+      <div className="mb-3 flex justify-center text-[#446733]">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#446733]/10">
+          <BookOpen className="h-5 w-5" />
+        </span>
+      </div>
+      <p className="text-center text-[18px] font-semibold leading-7 text-[#31402E]">
+        今天的你，值得被看见
+      </p>
+      <p className="mt-3 text-center text-[13px] leading-6 text-[#6C7766]">
+        今天你写了{stats.wordCount.toLocaleString('zh-CN')}字，用了{stats.activeWritingMinutes}分钟——这是你连续记录的第{stats.streakDays}天
+      </p>
+      <div className="mt-4 flex items-center justify-center gap-2">
+        <button
+          type="button"
+          onClick={onOpenEcho}
+          className="rounded-full bg-[#446733] px-3.5 py-2 text-[12px] font-medium text-white active:scale-95"
+        >
+          获取今日回声
+        </button>
+        <button
+          type="button"
+          onClick={onCloseDiary}
+          className="rounded-full bg-[#446733]/8 px-3.5 py-2 text-[12px] font-medium text-[#446733] active:scale-95"
+        >
+          合上日记本
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function DailyEchoCard(props: DailyEchoCardProps) {
   if (!props.isGenerating && (!props.echo || props.echo.status === 'dismissed')) return null;
 
@@ -183,13 +235,24 @@ export function DailyEchoFloatingCard({
   echo,
   isGenerating = false,
   hidden = false,
+  completionStats,
+  onCloseDiary,
   ...actions
 }: DailyEchoFloatingCardProps) {
-  const [mode, setMode] = useState<'peek' | 'docked' | 'expanded'>('docked');
+  const [mode, setMode] = useState<'completion' | 'peek' | 'docked' | 'expanded'>('docked');
   const title = useMemo(() => getEchoTitle(echo, isGenerating), [echo, isGenerating]);
   const signature = `${echo?.status || 'none'}:${echo?.generatedAt || ''}:${echo?.content || ''}:${isGenerating ? 'generating' : 'idle'}`;
+  const completionSignature = completionStats
+    ? `${completionStats.wordCount}:${completionStats.activeWritingMinutes}:${completionStats.streakDays}`
+    : '';
 
   useEffect(() => {
+    if (hidden || !completionStats) return;
+    setMode('completion');
+  }, [hidden, completionSignature, completionStats]);
+
+  useEffect(() => {
+    if (completionStats) return;
     if (hidden || (!isGenerating && (!echo || echo.status === 'dismissed'))) return;
     setMode('peek');
     if (echo?.status === 'failed') return;
@@ -197,16 +260,17 @@ export function DailyEchoFloatingCard({
       setMode(current => (current === 'peek' ? 'docked' : current));
     }, 3200);
     return () => window.clearTimeout(timer);
-  }, [hidden, signature, echo?.status, isGenerating]);
+  }, [hidden, signature, echo?.status, isGenerating, completionStats]);
 
   useEffect(() => {
     if (hidden) setMode('docked');
   }, [hidden]);
 
-  if (hidden || (!isGenerating && (!echo || echo.status === 'dismissed'))) return null;
+  if (hidden || (!completionStats && !isGenerating && (!echo || echo.status === 'dismissed'))) return null;
 
   const isExpanded = mode === 'expanded';
   const isPeek = mode === 'peek';
+  const isCompletion = mode !== 'expanded' && completionStats;
 
   return (
     <div
@@ -232,7 +296,15 @@ export function DailyEchoFloatingCard({
           <DailyEchoPanel echo={echo} isGenerating={isGenerating} {...actions} />
         </div>
       ) : (
-        <div className={`flex items-end justify-end gap-2 ${isPeek ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-95'}`}>
+        <div className={`flex items-end justify-end gap-2 ${isPeek || isCompletion ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-95'}`}>
+          {isCompletion && (
+            <DailyEchoCompletionPanel
+              stats={completionStats}
+              onOpenEcho={() => setMode('expanded')}
+              onCloseDiary={onCloseDiary}
+            />
+          )}
+
           {isPeek && (
             <button
               type="button"
@@ -240,7 +312,6 @@ export function DailyEchoFloatingCard({
               onClick={() => setMode('expanded')}
               className="mb-3 max-w-[230px] rounded-[18px] border border-[#446733]/14 bg-[#FFFDF7]/95 px-4 py-3 text-left text-[13px] leading-6 text-[#3F4A3A] shadow-[0_10px_26px_rgba(68,103,51,0.12)] backdrop-blur-sm animate-in fade-in slide-in-from-right-2 duration-300"
             >
-              <span className="mb-1 block text-[11px] font-medium text-[#446733]">小象回声</span>
               {title}
             </button>
           )}
@@ -265,7 +336,9 @@ export function DailyEchoFloatingCard({
 
 export function DailyEchoExportCard({ echo, date }: { echo: DailyEcho; date: Date }) {
   const dateText = `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
-  const content = echo.content.trim();
+  const parsedEcho = parseDailyEchoContent(echo.content);
+  const quote = parsedEcho.quote;
+  const content = parsedEcho.body.trim();
   const contentLength = Array.from(content).length;
   const bodyFontSize = contentLength > 520 ? 21 : contentLength > 420 ? 22 : contentLength > 330 ? 24 : contentLength > 240 ? 26 : contentLength > 150 ? 30 : 34;
   const bodyLineHeight = contentLength > 420 ? 1.68 : contentLength > 260 ? 1.76 : 1.82;
@@ -290,10 +363,11 @@ export function DailyEchoExportCard({ echo, date }: { echo: DailyEcho; date: Dat
       }}
     >
       <div>
-        <div style={{ fontSize: 24, color: '#446733', marginBottom: 12, fontWeight: 600 }}>
-          小象回声
+        <div style={{ fontSize: 34, lineHeight: 1.45, color: '#31402E', marginBottom: 18, fontWeight: 700, letterSpacing: 0 }}>
+          {quote}
         </div>
-        <div style={{ fontSize: 18, color: '#7D8876', marginBottom: 56 }}>
+        <div style={{ width: 56, height: 2, background: '#446733', opacity: 0.35, marginBottom: 22 }} />
+        <div style={{ fontSize: 18, color: '#7D8876', marginBottom: 48 }}>
           {dateText}
         </div>
         <div

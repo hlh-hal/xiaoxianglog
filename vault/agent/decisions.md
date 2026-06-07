@@ -1,5 +1,9 @@
 # 决策记录
 
+## 2026-06-07
+
+- `DiaryEntry.diaryDate` 的长期契约是无时区的日记归属日 `YYYY-MM-DD`，不是创建时间戳。新建、导入、本地日志同步、前端同步 payload 和服务端写入都必须保存日期字符串；展示、排序、统计不能直接 `new Date('YYYY-MM-DD')`，应走 `src/utils/diaryDate.ts`。实际创建/修改时间继续使用 `createdAt` / `updatedAt`。
+
 ## 2026-05-31
 
 - PWA 编辑器数据安全规则：只要新日志已有有效文字或图片，就必须先作为正式 active 日记持续保存到 IndexedDB；`visibilitychange`、`pagehide`、`freeze`、组件卸载这类不能弹确认框的生命周期事件必须强制 flush 正式日记，而不是只写编辑记录。

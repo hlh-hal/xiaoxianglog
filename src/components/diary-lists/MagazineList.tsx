@@ -5,6 +5,7 @@ import { zhCN } from 'date-fns/locale';
 import { Check, Pin } from 'lucide-react';
 import { stripAllMarkdown } from '../../lib/utils';
 import { SafeImage } from '../SafeImage';
+import { parseDiaryDateKey } from '../../utils/diaryDate';
 
 function excerpt(raw: string, max = 60): string {
   const plain = stripAllMarkdown(raw);
@@ -38,7 +39,7 @@ export function MagazineList({ journals, isMultiSelectMode, selectedJournals, ha
         return (
           <article 
             key={journal.id} 
-            data-date={format(new Date(journal.diaryDate), 'yyyy-MM-dd')}
+            data-date={format(parseDiaryDateKey(journal.diaryDate), 'yyyy-MM-dd')}
             className={`relative group cursor-pointer select-none rounded-[24px] overflow-hidden shadow-[0_4px_20px_rgba(0,0,0,0.04)] transition-all duration-500 ${isMultiSelectMode && selectedJournals.has(journal.id) ? 'ring-2 ring-primary' : 'hover:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.08)]'}`}
             style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
             onPointerDown={(e) => handlePointerDown(e, journal)}
@@ -67,7 +68,7 @@ export function MagazineList({ journals, isMultiSelectMode, selectedJournals, ha
                 <div className="absolute bottom-0 left-0 w-full p-6 text-white">
                   <div className="flex items-center gap-3 mb-4">
                     <h3 className="font-headline text-[22px] font-bold text-white leading-tight">
-                      {format(new Date(journal.diaryDate), 'MM月dd日', { locale: zhCN })}
+                      {format(parseDiaryDateKey(journal.diaryDate), 'MM月dd日', { locale: zhCN })}
                     </h3>
                     {journal.isPinned && <Pin size={16} className="text-white" />}
                   </div>
@@ -80,7 +81,7 @@ export function MagazineList({ journals, isMultiSelectMode, selectedJournals, ha
               <div className="bg-surface-container-lowest p-8">
                 <div className="flex items-center gap-3 mb-5">
                   <h3 className="font-headline text-[22px] font-bold text-on-surface leading-tight">
-                    {format(new Date(journal.diaryDate), 'MM月dd日', { locale: zhCN })}
+                    {format(parseDiaryDateKey(journal.diaryDate), 'MM月dd日', { locale: zhCN })}
                   </h3>
                   {journal.isPinned && <Pin size={16} className="text-primary" />}
                 </div>

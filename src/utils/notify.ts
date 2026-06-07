@@ -211,7 +211,7 @@ async function getReadyServiceWorkerRegistration(): Promise<ServiceWorkerRegistr
     let registration = await navigator.serviceWorker.getRegistration();
 
     if (!registration) {
-      registration = await navigator.serviceWorker.register('/sw.js');
+      registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
     }
 
     registration.update().catch(error => console.warn('Failed to update service worker', error));

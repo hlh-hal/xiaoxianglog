@@ -4,6 +4,7 @@ import { htmlToMarkdown } from './htmlToMarkdown';
 import { downloadTextFile } from './exportFile';
 import { inferDateWithAI, parseWholeMarkdownWithAI } from './inferDateWithAI';
 import { localVaultService } from '../services/localVaultService';
+import { compareDiaryDateDesc, parseDiaryDateKey, toDiaryDateKey } from './diaryDate';
 
 export interface ParsedEntry {
   title: string;
@@ -22,14 +23,14 @@ export const exportDiariesToMarkdown = async (): Promise<number> => {
   }
 
   const sortedEntries = [...entries].sort(
-    (a, b) => new Date(b.diaryDate).getTime() - new Date(a.diaryDate).getTime(),
+    (a, b) => compareDiaryDateDesc(a.diaryDate, b.diaryDate),
   );
 
   const today = format(new Date(), 'yyyy-MM-dd');
   let mdContent = '';
 
   sortedEntries.forEach((entry) => {
-    const dateStr = format(new Date(entry.diaryDate), 'yyyy-MM-dd');
+    const dateStr = format(parseDiaryDateKey(entry.diaryDate), 'yyyy-MM-dd');
     mdContent += `**${dateStr}**\n\n`;
 
     if (entry.blocks && entry.blocks.length > 0) {
@@ -280,16 +281,13 @@ export const saveParsedEntries = async (
       successCount++;
     }
 
-    let diaryDate = new Date(entry.date);
-    if (Number.isNaN(diaryDate.getTime())) {
-      diaryDate = new Date();
-    }
+    const diaryDate = parseDiaryDateKey(entry.date);
 
     await diaryService.createEntry({
       title: entry.title,
       content: entry.content,
       images: [],
-      diaryDate: diaryDate.toISOString(),
+      diaryDate: toDiaryDateKey(diaryDate),
     });
   }
 

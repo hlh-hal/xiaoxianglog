@@ -33,6 +33,17 @@ import { settingsService } from '../services/settingsService';
 import { createClientId } from '../utils/id';
 import { generateDiaryEcho } from '../services/aiService';
 import { DailyEchoExportCard, DailyEchoFloatingCard } from '../components/DailyEchoCard';
+import {
+  type DailyEchoCompletionStats,
+  buildDailyEchoCompletionStats,
+  countDiaryTextCharacters,
+  createWritingActivityState,
+  getActiveWritingSeconds,
+  pauseWritingActivity,
+  recordWritingInput,
+} from '../utils/dailyEchoCompletionStats';
+import { parseDailyEchoContent } from '../utils/dailyEchoQuote';
+import { createAdjustedDiaryDateKey, parseDiaryDateKey } from '../utils/diaryDate';
 
 const DiaryInlineImage = TiptapNode.create({
   name: 'diaryInlineImage',
@@ -244,7 +255,7 @@ type TextSelectionScrollGuard = {
 };
 
 export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: DiaryEntry | { diaryDate: number }, theme: DiaryTheme, htmlContent: string, images: string[] }) => {
-  const date = new Date(entry.diaryDate);
+  const date = parseDiaryDateKey(entry.diaryDate);
   const day = date.getDate();
   const yearMonth = `${date.getFullYear()}.${String(date.getMonth()+1).padStart(2,'0')}`;
   const weekDay = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][date.getDay()];
@@ -583,7 +594,9 @@ function renderDailyEchoFallbackCanvas(echo: DailyEcho, date: Date) {
   const paddingX = 72;
   const paddingTop = 68;
   const paddingBottom = 58;
-  const content = echo.content.trim();
+  const parsedEcho = parseDailyEchoContent(echo.content);
+  const quote = parsedEcho.quote;
+  const content = parsedEcho.body.trim();
   const measureCanvas = document.createElement('canvas');
   const measureCtx = measureCanvas.getContext('2d');
   if (!measureCtx) throw new Error('Daily echo fallback canvas context unavailable');
@@ -591,10 +604,14 @@ function renderDailyEchoFallbackCanvas(echo: DailyEcho, date: Date) {
   const contentLength = Array.from(content).length;
   const bodyFontSize = contentLength > 520 ? 21 : contentLength > 420 ? 22 : contentLength > 330 ? 24 : contentLength > 240 ? 26 : contentLength > 150 ? 30 : 34;
   const bodyLineHeight = Math.round(bodyFontSize * (contentLength > 420 ? 1.68 : contentLength > 260 ? 1.76 : 1.82));
+  measureCtx.font = '700 34px "Microsoft YaHei", sans-serif';
+  const quoteLines = wrapCanvasText(measureCtx, quote, width - paddingX * 2);
+  const quoteLineHeight = 49;
   measureCtx.font = `${bodyFontSize}px "Microsoft YaHei", sans-serif`;
   const lines = wrapCanvasText(measureCtx, content, width - paddingX * 2);
   const bodyHeight = lines.length * bodyLineHeight;
-  const height = Math.max(minHeight, paddingTop + 24 + 30 + 56 + bodyHeight + 96 + paddingBottom);
+  const quoteHeight = quoteLines.length * quoteLineHeight;
+  const height = Math.max(minHeight, paddingTop + quoteHeight + 18 + 2 + 22 + 18 + 48 + bodyHeight + 96 + paddingBottom);
   const canvas = document.createElement('canvas');
   canvas.width = width * scale;
   canvas.height = height * scale;
@@ -609,16 +626,22 @@ function renderDailyEchoFallbackCanvas(echo: DailyEcho, date: Date) {
   ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
 
   const dateText = `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
-  ctx.fillStyle = '#446733';
-  ctx.font = '600 24px "Microsoft YaHei", sans-serif';
-  ctx.fillText('小象回声', paddingX, paddingTop + 24);
+  ctx.fillStyle = '#31402E';
+  ctx.font = '700 34px "Microsoft YaHei", sans-serif';
+  let y = paddingTop + 34;
+  quoteLines.forEach(line => {
+    if (line) ctx.fillText(line, paddingX, y);
+    y += quoteLineHeight;
+  });
+  ctx.fillStyle = 'rgba(68,103,51,0.35)';
+  ctx.fillRect(paddingX, y - 14, 56, 2);
   ctx.fillStyle = '#7D8876';
   ctx.font = '18px "Microsoft YaHei", sans-serif';
-  ctx.fillText(dateText, paddingX, paddingTop + 54);
+  ctx.fillText(dateText, paddingX, y + 20);
 
   ctx.fillStyle = '#31402E';
   ctx.font = `${bodyFontSize}px "Microsoft YaHei", sans-serif`;
-  let y = paddingTop + 54 + 56 + bodyFontSize;
+  y += 20 + 48 + bodyFontSize;
   lines.forEach(line => {
     if (line) ctx.fillText(line, paddingX, y);
     y += bodyLineHeight;
@@ -871,15 +894,14 @@ export default function Editor() {
       return existingJournalRef.current.diaryDate;
     }
     if (!draftDiaryDateRef.current) {
-      const diaryDate = new Date();
+      const now = new Date();
+      let autoAdjustTime = false;
       try {
-        if (settingsService.getSettings().autoAdjustTime && diaryDate.getHours() < 12) {
-          diaryDate.setDate(diaryDate.getDate() - 1);
-        }
+        autoAdjustTime = settingsService.getSettings().autoAdjustTime;
       } catch (error) {
         console.warn('Failed to read diary time settings:', error);
       }
-      draftDiaryDateRef.current = diaryDate.toISOString();
+      draftDiaryDateRef.current = createAdjustedDiaryDateKey(now, autoAdjustTime);
     }
     return draftDiaryDateRef.current;
   }, []);
@@ -1523,6 +1545,7 @@ export default function Editor() {
   const [dailyEcho, setDailyEcho] = useState<DailyEcho | undefined>();
   const [isEchoGenerating, setIsEchoGenerating] = useState(false);
   const [isEchoImageSaving, setIsEchoImageSaving] = useState(false);
+  const [dailyEchoCompletionStats, setDailyEchoCompletionStats] = useState<DailyEchoCompletionStats | null>(null);
   const [dailyEchoFloatEnabled, setDailyEchoFloatEnabled] = useState(
     () => settingsService.getSettings().dailyEchoFloatEnabled,
   );
@@ -1532,6 +1555,10 @@ export default function Editor() {
   const [isEchoFloatScrollHidden, setIsEchoFloatScrollHidden] = useState(false);
   const echoFloatScrollTimerRef = useRef<number | null>(null);
   const echoGenerationTokenRef = useRef(0);
+  const writingActivityRef = useRef(createWritingActivityState());
+  const hasWritingActivitySinceManualSaveRef = useRef(false);
+  const lastManualSaveSignatureRef = useRef('');
+  const lastManualSaveWritingSecondsRef = useRef(0);
 
   useEffect(() => {
     isSavingRef.current = isSaving;
@@ -1561,6 +1588,30 @@ export default function Editor() {
       echoFloatScrollTimerRef.current = null;
     }, 900);
   }, []);
+
+  const recordWritingActivity = useCallback(() => {
+    writingActivityRef.current = recordWritingInput(writingActivityRef.current);
+    hasWritingActivitySinceManualSaveRef.current = true;
+    setDailyEchoCompletionStats(null);
+  }, []);
+
+  const pauseCurrentWritingActivity = useCallback(() => {
+    writingActivityRef.current = pauseWritingActivity(writingActivityRef.current);
+  }, []);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        pauseCurrentWritingActivity();
+      }
+    };
+    window.addEventListener('pagehide', pauseCurrentWritingActivity);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', pauseCurrentWritingActivity);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [pauseCurrentWritingActivity]);
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
@@ -2151,6 +2202,7 @@ export default function Editor() {
     onUpdate: ({ editor }) => {
       setContent(editor.getHTML());
       hasUnsavedChanges.current = true;
+      recordWritingActivity();
       closeInlineImageToolbar();
       lockScrollForEditorInput();
     },
@@ -2181,6 +2233,7 @@ export default function Editor() {
     },
     onBlur: () => {
       setIsFocused(false);
+      pauseCurrentWritingActivity();
       if (keepInlineImageToolbarOnBlurRef.current) {
         keepInlineImageToolbarOnBlurRef.current = false;
         return;
@@ -2315,6 +2368,8 @@ export default function Editor() {
         const data = await diaryService.getEntryById(id);
         if (data) {
           existingJournalRef.current = data;
+          writingActivityRef.current = createWritingActivityState((data.activeWritingSeconds || 0) * 1_000);
+          hasWritingActivitySinceManualSaveRef.current = false;
           activeEntryIdRef.current = data.id;
           draftDiaryDateRef.current = data.diaryDate;
           setExistingJournal(data);
@@ -2336,6 +2391,8 @@ export default function Editor() {
             data.backgroundId,
             data.themeId,
           );
+          lastManualSaveSignatureRef.current = lastPersistedSignatureRef.current;
+          lastManualSaveWritingSecondsRef.current = data.activeWritingSeconds || 0;
           hasUnsavedChanges.current = false;
           autosaveHistoryBaselineSavedRef.current = false;
           backgroundIdRef.current = data.backgroundId;
@@ -2360,6 +2417,10 @@ export default function Editor() {
       if (existingJournalRef.current) return;
       // New diary, load preferred template
       const initNewDiary = async () => {
+        writingActivityRef.current = createWritingActivityState();
+        hasWritingActivitySinceManualSaveRef.current = false;
+        lastManualSaveSignatureRef.current = '';
+        lastManualSaveWritingSecondsRef.current = 0;
         draftDiaryDateRef.current = draftDiaryDateRef.current || getDraftDiaryDate();
         const lastThemeId = localStorage.getItem('lastUsedDiaryThemeId');
         const defaultTheme = allThemes.find(t => t.id === lastThemeId) || allThemes.find(t => t.id === 'warm-white');
@@ -2649,6 +2710,12 @@ export default function Editor() {
     const currentThemeId = selectedThemeRef.current?.id;
     const existingEntry = existingJournalRef.current;
     const signature = makeEntrySignature(currentContent, currentImages, currentBackgroundId, currentThemeId);
+    const finalizedWritingActivity = pauseWritingActivity(writingActivityRef.current);
+    writingActivityRef.current = finalizedWritingActivity;
+    const activeWritingSeconds = Math.max(
+      existingEntry?.activeWritingSeconds || 0,
+      getActiveWritingSeconds(finalizedWritingActivity),
+    );
 
     if (!hasUnsavedChanges.current && existingEntry && signature === lastPersistedSignatureRef.current) {
       return existingEntry;
@@ -2669,6 +2736,7 @@ export default function Editor() {
         images: currentImages,
         backgroundId: currentBackgroundId,
         themeId: currentThemeId,
+        activeWritingSeconds,
       }, {
         saveHistory: shouldSaveHistory,
         immediateSync: reason !== 'autosave',
@@ -2683,6 +2751,7 @@ export default function Editor() {
         diaryDate: getDraftDiaryDate(),
         backgroundId: currentBackgroundId,
         themeId: currentThemeId,
+        activeWritingSeconds,
       }, {
         saveHistory: shouldSaveHistory,
         immediateSync: reason !== 'autosave',
@@ -2706,6 +2775,7 @@ export default function Editor() {
     );
 
     existingJournalRef.current = savedEntry;
+    writingActivityRef.current = createWritingActivityState((savedEntry.activeWritingSeconds || activeWritingSeconds) * 1_000);
     activeEntryIdRef.current = savedEntry.id;
     draftDiaryDateRef.current = savedEntry.diaryDate;
     lastPersistedSignatureRef.current = signature;
@@ -2758,6 +2828,10 @@ export default function Editor() {
   const startDailyEchoGeneration = async (entry: DiaryEntry, force = false) => {
     const currentEcho = force ? dailyEcho || entry.dailyEcho : entry.dailyEcho;
     if (!force && (currentEcho?.status === 'saved' || currentEcho?.status === 'dismissed')) return;
+    if (!force && currentEcho?.status === 'draft' && currentEcho.content && currentEcho.sourceEntryUpdatedAt === entry.updatedAt) {
+      setDailyEcho(currentEcho);
+      return;
+    }
     if (getEntryPlainText(entry).length < 6) return;
 
     if (!isAuthenticated()) {
@@ -2855,6 +2929,11 @@ export default function Editor() {
     });
   };
 
+  const handleCloseDailyEchoNotebook = () => {
+    setDailyEchoCompletionStats(null);
+    navigate('/');
+  };
+
   const handleSaveDailyEchoImage = async () => {
     const entry = existingJournalRef.current;
     const echo = dailyEcho;
@@ -2871,7 +2950,7 @@ export default function Editor() {
     const root = createRoot(wrapper);
 
     try {
-      root.render(<DailyEchoExportCard echo={echo} date={new Date(entry.diaryDate)} />);
+      root.render(<DailyEchoExportCard echo={echo} date={parseDiaryDateKey(entry.diaryDate)} />);
       await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       const el = wrapper.firstElementChild as HTMLElement | null;
       if (!el) throw new Error('Daily echo export card is not ready');
@@ -2897,7 +2976,7 @@ export default function Editor() {
           }
         } catch (renderError) {
           console.warn('Daily echo html2canvas failed, using fallback canvas:', renderError);
-          canvas = renderDailyEchoFallbackCanvas(echo, new Date(entry.diaryDate));
+          canvas = renderDailyEchoFallbackCanvas(echo, parseDiaryDateKey(entry.diaryDate));
         }
       } finally {
         restoreColors();
@@ -2932,6 +3011,16 @@ export default function Editor() {
 
   const handleSave = async (goBack = false) => {
     if (isSavingRef.current) return;
+    const currentSignatureBeforeSave = makeEntrySignature(
+      normalizeContentForStorage(editorInstanceRef.current?.getHTML() || contentRef.current),
+      imagesRef.current.filter((img: string) => typeof img === 'string' && img.trim() !== ''),
+      backgroundIdRef.current,
+      selectedThemeRef.current?.id,
+    );
+    const pendingWritingSecondsBeforeSave = getActiveWritingSeconds(writingActivityRef.current);
+    const hadManualWritingActivity = hasWritingActivitySinceManualSaveRef.current
+      || pendingWritingSecondsBeforeSave > lastManualSaveWritingSecondsRef.current
+      || currentSignatureBeforeSave !== lastManualSaveSignatureRef.current;
     isSavingRef.current = true;
     setIsSaving(true);
     try {
@@ -2947,6 +3036,31 @@ export default function Editor() {
         setIsEditing(false);
         editor?.commands.blur();
         if (savedEntry) {
+          const savedSignature = makeEntrySignature(
+            savedEntry.content,
+            savedEntry.images || [],
+            savedEntry.backgroundId,
+            savedEntry.themeId,
+          );
+          const savedWritingSeconds = savedEntry.activeWritingSeconds || 0;
+          const shouldShowCompletionFeedback = hadManualWritingActivity
+            || savedWritingSeconds > lastManualSaveWritingSecondsRef.current
+            || savedSignature !== lastManualSaveSignatureRef.current;
+
+          if (shouldShowCompletionFeedback && countDiaryTextCharacters(savedEntry.content) > 0) {
+            writingActivityRef.current = pauseWritingActivity(writingActivityRef.current);
+            const activeEntries = await diaryService.getActiveEntries();
+            const stats = buildDailyEchoCompletionStats(savedEntry, activeEntries, writingActivityRef.current);
+            setDailyEchoCompletionStats({
+              ...stats,
+              activeWritingMinutes: Math.max(1, stats.activeWritingMinutes),
+            });
+            hasWritingActivitySinceManualSaveRef.current = false;
+          } else {
+            setDailyEchoCompletionStats(null);
+          }
+          lastManualSaveSignatureRef.current = savedSignature;
+          lastManualSaveWritingSecondsRef.current = savedWritingSeconds;
           void startDailyEchoGeneration(savedEntry);
         }
       }
@@ -3043,8 +3157,8 @@ export default function Editor() {
   }, [persistCurrentEntry]);
 
   const displayDate = existingJournal
-    ? new Date(existingJournal.diaryDate)
-    : new Date(draftDiaryDateRef.current || Date.now());
+    ? parseDiaryDateKey(existingJournal.diaryDate)
+    : parseDiaryDateKey(draftDiaryDateRef.current || Date.now());
   
   const bgStyle = bgConfig.type === 'color' 
     ? { backgroundColor: bgConfig.value }
@@ -3106,10 +3220,8 @@ export default function Editor() {
   const defaultDisplayImages = getDefaultDisplayImagesForContent(content, images);
   const activePreviewImages = previewImagesOverride ?? images;
   const shouldShowInlineImageToolbar = Boolean(inlineImageToolbar && isEditing && !previewHashActive);
-  const shouldHideDailyEchoFloat = !dailyEchoFloatEnabled
+  const shouldHideDailyEchoForBlockingOverlay = !dailyEchoFloatEnabled
     || isEchoFloatMutedToday
-    || keyboardInset > 0
-    || isEchoFloatScrollHidden
     || showThemeBar
     || showShare
     || isMenuOpen
@@ -3122,6 +3234,12 @@ export default function Editor() {
     || previewHashActive
     || shouldShowInlineImageToolbar
     || exporting;
+  const shouldHideDailyEchoFloat = shouldHideDailyEchoForBlockingOverlay
+    || keyboardInset > 0
+    || isEchoFloatScrollHidden;
+  const shouldHideDailyEchoCard = dailyEchoCompletionStats
+    ? shouldHideDailyEchoForBlockingOverlay
+    : shouldHideDailyEchoFloat;
 
   const toggleInlineImageSize = () => {
     if (!inlineImageToolbar || !editor) return;
@@ -3697,12 +3815,14 @@ export default function Editor() {
         echo={dailyEcho}
         isGenerating={isEchoGenerating}
         isSavingImage={isEchoImageSaving}
-        hidden={shouldHideDailyEchoFloat}
+        completionStats={dailyEchoCompletionStats}
+        hidden={shouldHideDailyEchoCard}
         onSave={dailyEcho?.status === 'draft' ? handleSaveDailyEcho : undefined}
         onRegenerate={existingJournal ? handleRegenerateDailyEcho : undefined}
         onDismiss={existingJournal ? handleDismissDailyEcho : undefined}
         onContinueChat={dailyEcho?.content ? handleContinueDailyEchoChat : undefined}
         onSaveImage={dailyEcho?.status === 'saved' ? handleSaveDailyEchoImage : undefined}
+        onCloseDiary={handleCloseDailyEchoNotebook}
       />
 
       {shouldShowInlineImageToolbar && inlineImageToolbar && (

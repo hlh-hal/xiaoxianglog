@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { DiaryEntry, EntryStatus } from './diaryService';
 import { htmlToMarkdown } from '../utils/htmlToMarkdown';
+import { parseDiaryDateKey, toDiaryDateKey } from '../utils/diaryDate';
 
 export type VaultProvider = 'android-documents' | 'web-directory' | 'unsupported';
 export type VaultCapabilityMode = 'directory-sync' | 'archive-download' | 'unsupported';
@@ -277,11 +278,7 @@ function cleanSegments(path: string, allowEmpty = false): string[] {
 }
 
 function formatEntryDate(entry: Pick<DiaryEntry, 'diaryDate'>): string {
-  const date = new Date(entry.diaryDate);
-  if (Number.isNaN(date.getTime())) {
-    return format(new Date(), 'yyyy-MM-dd');
-  }
-  return format(date, 'yyyy-MM-dd');
+  return format(parseDiaryDateKey(entry.diaryDate), 'yyyy-MM-dd');
 }
 
 function stripMarkdownForTitle(markdown: string): string {
@@ -1663,7 +1660,7 @@ export const localVaultService = {
         id,
         title,
         content: body,
-        diaryDate: new Date(date).toISOString(),
+        diaryDate: toDiaryDateKey(parseDiaryDateKey(date)),
         vaultPath: file.path,
         updatedAt: file.lastModified ? new Date(file.lastModified).toISOString() : undefined,
       });

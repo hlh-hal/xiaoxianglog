@@ -5,6 +5,7 @@ import { zhCN } from 'date-fns/locale';
 import { Check, Pin } from 'lucide-react';
 import { stripAllMarkdown } from '../../lib/utils';
 import { SafeImage } from '../SafeImage';
+import { parseDiaryDateKey } from '../../utils/diaryDate';
 
 function excerpt(raw: string, max = 60): string {
   const plain = stripAllMarkdown(raw);
@@ -29,7 +30,7 @@ export function TimelineList({ journals, isMultiSelectMode, selectedJournals, ha
       {journals.map((journal) => (
         <article 
           key={journal.id} 
-          data-date={format(new Date(journal.diaryDate), 'yyyy-MM-dd')}
+          data-date={format(parseDiaryDateKey(journal.diaryDate), 'yyyy-MM-dd')}
           className="relative pl-10 group mb-8 cursor-pointer select-none"
           style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
           onPointerDown={(e) => handlePointerDown(e, journal)}
@@ -53,7 +54,7 @@ export function TimelineList({ journals, isMultiSelectMode, selectedJournals, ha
             <header className="sticky top-16 left-0 w-full z-30 flex items-center justify-between py-2 bg-surface/80 backdrop-blur-md">
               <div className="flex items-center gap-2">
                 <time className="font-label text-xs font-semibold text-outline tracking-wider uppercase">
-                  {format(new Date(journal.diaryDate), 'MM月dd日 · EEEE', { locale: zhCN })}
+                  {format(parseDiaryDateKey(journal.diaryDate), 'MM月dd日 · EEEE', { locale: zhCN })}
                 </time>
                 {journal.isPinned && <Pin size={12} className="text-primary" />}
               </div>

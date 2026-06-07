@@ -5,6 +5,7 @@ import { zhCN } from 'date-fns/locale';
 import { Check, Pin } from 'lucide-react';
 import { stripAllMarkdown } from '../../lib/utils';
 import { SafeImage } from '../SafeImage';
+import { parseDiaryDateKey } from '../../utils/diaryDate';
 
 function excerpt(raw: string, max = 60): string {
   const plain = stripAllMarkdown(raw);
@@ -26,7 +27,7 @@ export function CardFlowList({ journals, isMultiSelectMode, selectedJournals, ha
       {journals.map((journal) => (
         <article 
           key={journal.id} 
-          data-date={format(new Date(journal.diaryDate), 'yyyy-MM-dd')}
+          data-date={format(parseDiaryDateKey(journal.diaryDate), 'yyyy-MM-dd')}
           className="relative group cursor-pointer select-none"
           style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
           onPointerDown={(e) => handlePointerDown(e, journal)}
@@ -39,7 +40,7 @@ export function CardFlowList({ journals, isMultiSelectMode, selectedJournals, ha
             <div className="flex items-center justify-between mb-4">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-surface-container-high text-on-surface-variant text-xs font-medium">
                 <time>
-                  {format(new Date(journal.diaryDate), 'MM月dd日 EEEE', { locale: zhCN })}
+                  {format(parseDiaryDateKey(journal.diaryDate), 'MM月dd日 EEEE', { locale: zhCN })}
                 </time>
                 {journal.isPinned && <Pin size={12} className="text-primary" />}
               </div>

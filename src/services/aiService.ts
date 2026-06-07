@@ -2,6 +2,8 @@
 
 import { diaryService, ChatMessage, DiaryEntry } from './diaryService';
 import { api, apiStreamRequest } from './apiClient';
+import { parseDailyEchoContent, serializeDailyEchoContent } from '../utils/dailyEchoQuote';
+import { compareDiaryDateDesc, getDiaryDateKey, toDiaryDateKey } from '../utils/diaryDate';
 
 export interface AIStyle {
   id: string;
@@ -208,9 +210,11 @@ export const DAILY_ECHO_SYSTEM_PROMPT = `你是一位用户日志分析助手，
      - 需求匹配原则：满足用户心理需求，提供成长启发
 
 4. **输出要求**
-   - 生成两层内容：
-     1. **洞察草稿**（内部使用）：结构化总结用户日志的核心主题和成长线索
-     2. **用户可见回声**：温暖、深入、可读性高的文本，能让用户感受到被理解、被看见，并获得成长启发
+   - 内部先生成两层内容，但最终只输出“今日回声”和“用户可见回声”：
+     1. **洞察草稿**（内部使用，不要输出给用户）：结构化总结用户日志的核心主题和成长线索
+     2. **用户可见回声**（主要正文）：温暖、深入、可读性高的文本，能让用户感受到被理解、被看见，并获得成长启发
+     3. **今日回声**（分享金句）：12-24 字，像日记本扉页上的一行字，温柔、有洞察、贴近日记真实细节
+   - 禁止把“洞察草稿”“今日主线”“核心矛盾”“人格特质”“成长方向”等字段名输出到用户可见回声里。
 
 5. **示例**
    - 日志原文：
@@ -929,16 +933,137 @@ function normalizeAnchor(value: string) {
   return value
     .replace(/\s+/g, '')
     .replace(/[，。！？、；：,.!?;:"'“”‘’（）()【】\[\]《》<>]/g, '')
-    .replace(/[，。！？、；：,.!?;:"'“”‘’（）()【】\[\]《》<>]/g, '')
+    .replace(/[的地得]/g, '')
     .toLowerCase();
 }
 
+const DAILY_ECHO_SECTION_LABELS = [
+  '开心的事',
+  '充实的事',
+  '感谢的人',
+  '今日思考',
+  '今天思考',
+  '改进的事',
+  '不好的事',
+  '小象回声',
+];
+
+const DAILY_ECHO_WEAK_ANCHORS = new Set([
+  '无',
+  '感谢',
+  '谢谢',
+  '今天',
+  '上午',
+  '中午',
+  '下午',
+  '晚上',
+  '早上',
+  '一点',
+  '两个',
+  '一到两点',
+]);
+
+const DAILY_ECHO_PHRASE_PATTERNS = [
+  /[\u4e00-\u9fffA-Za-z0-9_-]{0,4}小象回声(?:提示词)?/g,
+  /用户[的地得]?洞察/g,
+  /事件[的地得]?表面回应|表面回应/g,
+  /一周[的地得]?日志|日志[的地得]?分析/g,
+  /高频[的地得]?关键词|关键词[的地得]?优化/g,
+  /纯词频|提炼意义|无意义[的地得]?词/g,
+  /室友[^\s，。！？、；：,.!?;:"'“”‘’（）()【】\[\]《》<>]{0,4}调低[^\s，。！？、；：,.!?;:"'“”‘’（）()【】\[\]《》<>]{0,3}声音|调低[^\s，。！？、；：,.!?;:"'“”‘’（）()【】\[\]《》<>]{0,3}声音|午睡/g,
+  /黑眼圈|熬夜[^\s，。！？、；：,.!?;:"'“”‘’（）()【】\[\]《》<>]{0,3}写日志|提前[^\s，。！？、；：,.!?;:"'“”‘’（）()【】\[\]《》<>]{0,3}写完[^\s，。！？、；：,.!?;:"'“”‘’（）()【】\[\]《》<>]{0,3}日志/g,
+  /老师|学生|高中|写照/g,
+  /太散|太长|冗余|不乐意看|聚焦一到两点|深入谈谈/g,
+];
+
+function cleanDiaryAnchorCandidate(value: string) {
+  const labelPattern = DAILY_ECHO_SECTION_LABELS.join('|');
+  return value
+    .replace(new RegExp(`^\\s*(?:${labelPattern})\\s*[：:]?\\s*`), '')
+    .replace(/^\s*(?:\d+|[一二三四五六七八九十]+)[、.．，,]\s*/, '')
+    .replace(/^[“”"'‘’「」『』\s]+|[“”"'‘’「」『』\s]+$/g, '')
+    .replace(/^(上午|下午|晚上|早上|中午|今天|昨日|昨天)/, '')
+    .trim();
+}
+
+function shouldKeepDiaryAnchor(value: string) {
+  const compact = normalizeAnchor(value);
+  if (compact.length < 2 || compact.length > 18) return false;
+  if (/^\d+$/.test(compact)) return false;
+  if (DAILY_ECHO_WEAK_ANCHORS.has(compact)) return false;
+  return !DAILY_ECHO_SECTION_LABELS.some(label => compact === normalizeAnchor(label));
+}
+
+function addDiaryAnchor(anchors: Set<string>, value: string) {
+  const anchor = cleanDiaryAnchorCandidate(value);
+  if (shouldKeepDiaryAnchor(anchor)) {
+    anchors.add(anchor);
+  }
+}
+
+function splitDiaryAnchorFragments(sourceText: string) {
+  const labelPattern = DAILY_ECHO_SECTION_LABELS.join('|');
+  return stripMarkdown(sourceText)
+    .replace(/\r\n/g, '\n')
+    .split(/\n+/)
+    .flatMap(line => line
+      .replace(new RegExp(`^\\s*(?:${labelPattern})\\s*[：:]?\\s*`), '')
+      .replace(/(^|\s)(?:\d+|[一二三四五六七八九十]+)[、.．，,]\s*/g, '\n')
+      .split(/\n+/))
+    .flatMap(line => line.split(/[。！？!?；;，,、]/))
+    .map(fragment => fragment.trim())
+    .filter(Boolean);
+}
+
+function addDiaryAnchorPhrases(anchors: Set<string>, fragment: string) {
+  const cleaned = cleanDiaryAnchorCandidate(fragment);
+  if (!cleaned) return;
+
+  const latinTokens = cleaned.match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) || [];
+  latinTokens.forEach(token => addDiaryAnchor(anchors, token));
+
+  DAILY_ECHO_PHRASE_PATTERNS.forEach(pattern => {
+    const matches = cleaned.match(pattern) || [];
+    matches.forEach(match => addDiaryAnchor(anchors, match));
+  });
+
+  if (Array.from(cleaned).length <= 12) {
+    addDiaryAnchor(anchors, cleaned);
+    return;
+  }
+
+  cleaned
+    .split(/的人|方向是|未来的方向|可能是|结合|但是|不过|然后|所以|如果|会不会|一是|二是|从|到|减少|出现|看来|不能|因为|进行|转向|提炼|和|与|把|在|给|让/)
+    .map(part => part.trim())
+    .filter(part => {
+      const length = Array.from(part).length;
+      return length >= 2 && length <= 12;
+    })
+    .forEach(part => addDiaryAnchor(anchors, part));
+}
+
+function addShortDiaryAnchors(sourceText: string, anchors: Set<string>) {
+  const compactText = stripMarkdown(sourceText).replace(/\s+/g, '');
+  if (!compactText || Array.from(compactText).length > DAILY_ECHO_SHORT_DIARY_CHARS) return;
+
+  const meaningfulFragments = compactText.match(/[\u4e00-\u9fffA-Za-z0-9_-]{2,8}/g) || [];
+  meaningfulFragments.forEach(fragment => {
+    if (normalizeAnchor(fragment).length >= 2) {
+      anchors.add(fragment);
+    }
+  });
+
+  const commonShortSignals = compactText.match(/到家|回家|平安|说声|报平安|体育课|校园跑|撸铁|王者|聊天|夸夸|护腰|护腕/g) || [];
+  commonShortSignals.forEach(fragment => anchors.add(fragment));
+}
+
 function normalizeEchoText(value: string) {
-  const cleaned = stripMarkdown(value)
+  const rawVisibleText = parseDailyEchoContent(value).body;
+  const cleaned = stripMarkdown(rawVisibleText)
     .replace(/^小象回声[:：\s]*/i, '')
     .replace(/^(分析如下|回应如下|我会这样回应)[:：\s]*/i, '')
-    .replace(/^小象回声[:：\s]*/i, '')
-    .replace(/^(分析如下|回应如下|我会这样回应)[:：\s]*/i, '')
+    .replace(/^今日回声[:：\s]*[^\n]+/i, '')
+    .replace(/^用户可见回声[:：\s]*/i, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
@@ -971,95 +1096,18 @@ function normalizeEchoText(value: string) {
 export function extractDiaryEchoAnchors(diaryText: string) {
   const sourceText = stripMarkdown(diaryText);
   if (/[\u4e00-\u9fff]/.test(sourceText)) {
-    const normalizedChinese = sourceText
-      .replace(/开心的事|充实的事|感谢的人|今日思考|今天思考|改进的事|不好的事|小象回声/g, ' ')
-      .replace(/[：:]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
     const chineseAnchors = new Set<string>();
-    const addChineseAnchor = (value: string) => {
-      const anchor = value
-        .replace(/^\d+[、.．\s]*/, '')
-        .replace(/^(上午|下午|晚上|早上|今天|昨日|昨天)/, '')
-        .trim();
-      const compact = normalizeAnchor(anchor);
-      if (compact.length >= 2 && compact.length <= 18) {
-        chineseAnchors.add(anchor);
-      }
-    };
+    splitDiaryAnchorFragments(sourceText).forEach(fragment => addDiaryAnchorPhrases(chineseAnchors, fragment));
 
-    normalizedChinese
-      .split(/[。！？!?；;\n]/)
-      .flatMap(fragment => fragment.split(/[，,、]/))
-      .forEach(fragment => {
-        const cleaned = fragment.trim();
-        if (!cleaned) return;
-
-        const latinTokens = cleaned.match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) || [];
-        latinTokens.forEach(addChineseAnchor);
-
-        if (Array.from(cleaned).length <= 18) {
-          addChineseAnchor(cleaned);
-          return;
-        }
-
-        cleaned
-          .split(/的人|和|与|把|在|给|说|因为|但是|不过|然后|所以|如果|结果/)
-          .map(part => part.trim())
-          .filter(part => {
-            const length = Array.from(part).length;
-            return length >= 2 && length <= 12;
-          })
-          .forEach(addChineseAnchor);
-      });
-
-    return Array.from(chineseAnchors).slice(0, 16);
+    addShortDiaryAnchors(sourceText, chineseAnchors);
+    return Array.from(chineseAnchors).slice(0, 32);
   }
 
-  const normalized = stripMarkdown(diaryText)
-    .replace(/开心的事|充实的事|感谢的人|今日思考|今天思考|改进的事|小象回声/g, ' ')
-    .replace(/[：:]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
   const anchors = new Set<string>();
-  const addAnchor = (value: string) => {
-    const anchor = value
-      .replace(/^\d+[、,.，\s]*/, '')
-      .replace(/^(上午|下午|晚上|早上|今天|昨日|昨天)/, '')
-      .trim();
-    const compact = normalizeAnchor(anchor);
-    if (compact.length >= 2 && compact.length <= 18) {
-      anchors.add(anchor);
-    }
-  };
+  splitDiaryAnchorFragments(diaryText).forEach(fragment => addDiaryAnchorPhrases(anchors, fragment));
 
-  normalized
-    .split(/[。！？!?；;\n]/)
-    .flatMap(fragment => fragment.split(/[，,、]/))
-    .forEach(fragment => {
-      const cleaned = fragment.trim();
-      if (!cleaned) return;
-
-      const latinTokens = cleaned.match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) || [];
-      latinTokens.forEach(addAnchor);
-
-      if (Array.from(cleaned).length <= 18) {
-        addAnchor(cleaned);
-        return;
-      }
-
-      cleaned
-        .split(/的|了|和|与|把|在|给|让|因为|但是|不过|然后|所以/)
-        .map(part => part.trim())
-        .filter(part => {
-          const length = Array.from(part).length;
-          return length >= 2 && length <= 12;
-        })
-        .forEach(addAnchor);
-    });
-
-  return Array.from(anchors).slice(0, 16);
+  addShortDiaryAnchors(diaryText, anchors);
+  return Array.from(anchors).slice(0, 32);
 }
 
 export function countDailyEchoAnchorHits(content: string, anchors: string[]) {
@@ -1070,6 +1118,7 @@ export function countDailyEchoAnchorHits(content: string, anchors: string[]) {
 export function validateDailyEchoContent(value: string, diaryText: string, finishReason?: string | null) {
   if (finishReason === 'length') return { content: '', reason: 'truncated' };
 
+  const parsed = parseDailyEchoContent(value);
   const content = normalizeEchoText(value);
   if (!content) return { content: '', reason: 'incomplete' };
   if (isVagueEchoContent(content)) return { content: '', reason: 'vague' };
@@ -1083,20 +1132,7 @@ export function validateDailyEchoContent(value: string, diaryText: string, finis
     }
   }
 
-  return { content, reason: '' };
-}
-
-export function buildShortDiaryEchoFallback(diaryText: string) {
-  const text = stripMarkdown(diaryText).replace(/\s+/g, ' ').trim();
-  const chars = Array.from(text);
-  if (chars.length < 6 || chars.length > DAILY_ECHO_SHORT_DIARY_CHARS) return '';
-
-  const snippet = chars.length > 32 ? `${chars.slice(0, 32).join('')}...` : text;
-  if (/到家|回家|平安|说声|报个|报平安/.test(text)) {
-    return `小象听见你写下「${snippet}」。这句话很短，但里面有一份具体的惦记：你想确认对方平安到家。有些在意不用写很多，留一句“到家说声”就已经很温柔。`;
-  }
-
-  return `小象听见你写下「${snippet}」。这句话虽然很短，但它依然是今天真实的一点心绪。能把这一刻留住，也是在认真接住自己的生活。`;
+  return { content: serializeDailyEchoContent(parsed.quote, content), reason: '' };
 }
 
 export function buildDailyEchoUserPrompt(diaryText: string, diaryDate: string, regenerateCount: number, retryReason = '') {
@@ -1112,7 +1148,12 @@ export function buildDailyEchoUserPrompt(diaryText: string, diaryDate: string, r
 输出长度：根据日记内容自动选择，简短回声 40-80 字，标准回声 100-180 字，深度回声 200-350 字；硬上限是 ${DAILY_ECHO_MAX_CHARS} 字，绝对不要超过。每句话必须完整结束。
 必须回应整篇日记，不是摘要，也不是建议清单。如果日记内容足够，请自然点到至少 3 个真实细节，可以来自人物、事件、行动、困扰、收获或反思；如果日记很短，也要贴住已有细节。
 优先参考这些细节锚点：${anchors.length ? anchors.join('、') : '日记里的具体人物、事件、行动和感受'}。
-禁止输出标题、列表、Markdown、引号包装、字段名。
+最终只输出两段，严格使用这个格式：
+今日回声：一句 12-24 字的温柔洞察，像日记本扉页上的一行字，必须贴近日记真实细节，不要口号，不要引号。
+
+用户可见回声：正文
+不要输出洞察草稿，不要输出“今日主线 / 核心矛盾 / 人格特质 / 成长方向”等内部字段。
+禁止输出列表、Markdown、引号包装，除“今日回声 / 用户可见回声”外不要输出其他字段名。
 禁止使用空泛句式，比如“这一页被小象收到了”“愿意写下来就是温柔整理”“这不是一句空泛的概括”。${retryInstruction}
 
 日记内容：
@@ -1121,19 +1162,19 @@ ${diaryText || '这篇日记内容很短。'}`;
 
 export async function generateDiaryEcho(entry: DiaryEntry, regenerateCount = 0): Promise<string> {
   const diaryText = stripHtml(entry.content || '').slice(0, 2200);
-  const diaryDate = entry.diaryDate ? entry.diaryDate.split('T')[0] : new Date().toISOString().split('T')[0];
+  const diaryDate = entry.diaryDate ? getDiaryDateKey(entry.diaryDate) : toDiaryDateKey();
   const systemPrompt = DAILY_ECHO_SYSTEM_PROMPT;
 
   let rejectedReason = '';
   let lastRequestError: unknown;
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     const userPrompt = buildDailyEchoUserPrompt(diaryText, diaryDate, regenerateCount, rejectedReason);
     let result: DailyEchoCompletionResult;
     try {
       result = await api.post<DailyEchoCompletionResult>('/chat/complete', {
         modelId: import.meta.env.VITE_AI_MODEL || 'xiaomi-mimo',
-        temperature: attempt === 0 ? 0.62 : 0.52,
+        temperature: attempt === 0 ? 0.62 : 0.42,
         maxTokens: DAILY_ECHO_MAX_TOKENS,
         messages: [
           { role: 'system', content: systemPrompt },
@@ -1151,9 +1192,6 @@ export async function generateDiaryEcho(entry: DiaryEntry, regenerateCount = 0):
     rejectedReason = validation.reason || 'unknown';
   }
 
-  const shortFallback = buildShortDiaryEchoFallback(diaryText);
-  if (shortFallback) return shortFallback;
-
   if (lastRequestError) throw lastRequestError;
   throw new Error(`Daily echo did not pass quality check: ${rejectedReason || 'unknown'}`);
 }
@@ -1165,9 +1203,7 @@ export async function sendMessage(
   modelId?: string
 ): Promise<void> {
   const entries = await diaryService.getActiveEntries();
-  const sorted = [...entries].sort(
-    (a, b) => new Date(b.diaryDate).getTime() - new Date(a.diaryDate).getTime()
-  );
+  const sorted = [...entries].sort((a, b) => compareDiaryDateDesc(a.diaryDate, b.diaryDate));
 
   let diaryContext = '';
   let charCount = 0;
@@ -1177,7 +1213,7 @@ export async function sendMessage(
     diaryContext = '用户暂无日记。';
   } else {
     for (const entry of sorted) {
-      const text = `【${entry.diaryDate.split('T')[0]}】\n${stripMarkdown(entry.content || '').slice(0, 400)}\n\n`;
+      const text = `【${getDiaryDateKey(entry.diaryDate)}】\n${stripMarkdown(entry.content || '').slice(0, 400)}\n\n`;
       if (charCount + text.length > maxContextChars) break;
       diaryContext += text;
       charCount += text.length;

@@ -17,6 +17,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { UserAvatar } from './UserAvatar';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 import { AppToast } from './AppToast';
+import { parseDiaryDateKey } from '../utils/diaryDate';
 
 export type ListStyle = 'timeline' | 'card_flow' | 'briefing' | 'magazine';
 
@@ -186,7 +187,7 @@ export default function Layout() {
   useEffect(() => {
     if (isCalendarOpen) {
       diaryService.getActiveEntries().then(data => {
-        const dates = new Set(data.map(j => format(new Date(j.diaryDate), 'yyyy-MM-dd')));
+        const dates = new Set(data.map(j => format(parseDiaryDateKey(j.diaryDate), 'yyyy-MM-dd')));
         setJournalDates(dates);
       });
     }

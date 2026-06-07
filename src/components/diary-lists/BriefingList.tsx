@@ -5,6 +5,7 @@ import { zhCN } from 'date-fns/locale';
 import { Check, Pin } from 'lucide-react';
 import { stripAllMarkdown } from '../../lib/utils';
 import { SafeImage } from '../SafeImage';
+import { parseDiaryDateKey } from '../../utils/diaryDate';
 
 function excerpt(raw: string, max = 60): string {
   const plain = stripAllMarkdown(raw);
@@ -24,7 +25,7 @@ export function BriefingList({ journals, isMultiSelectMode, selectedJournals, ha
   return (
     <div className="flex flex-col">
       {journals.map((journal, index) => {
-        const date = new Date(journal.diaryDate);
+        const date = parseDiaryDateKey(journal.diaryDate);
         const day = format(date, 'd');
         const monthDay = format(date, 'MM月dd日 EEEE', { locale: zhCN });
         

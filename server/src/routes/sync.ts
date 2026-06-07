@@ -8,6 +8,9 @@ import { areStringArraysEqual, parseStoredStringArray, saveEditHistorySnapshot }
 const router = Router();
 router.use(requireAuth);
 
+type SyncResultStatus = 'created' | 'updated' | 'conflict' | 'skipped';
+type SyncResult = { id: string; status: SyncResultStatus; reason?: string };
+
 function parseJsonArray(value?: string | null): string[] {
   if (!value) return [];
   try {
@@ -34,13 +37,128 @@ function normalizeDailyEcho(value: unknown): string | null {
   return raw.length <= 200000 ? raw : null;
 }
 
+function normalizeActiveWritingSeconds(value: unknown, fallback = 0): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.floor(numeric));
+}
+
 function syncImageArray(value: unknown): string[] {
-  if (Array.isArray(value) && value.some(item => typeof item === 'string' && item.trim().startsWith('data:image/'))) {
-    const error = new Error('Images must be uploaded before sync');
-    (error as any).status = 400;
-    throw error;
+  return stringArray(value, 20, 4096)
+    .filter(item => !item.trim().startsWith('data:image/'));
+}
+
+function toLocalDateKey(date = new Date()): string {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function normalizeDiaryDate(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw.slice(0, 10);
+
+  const parsed = raw ? new Date(raw) : new Date();
+  if (!Number.isNaN(parsed.getTime())) {
+    return toLocalDateKey(parsed);
   }
-  return stringArray(value, 20, 4096);
+
+  return toLocalDateKey();
+}
+
+function normalizeStatus(value: unknown): 'active' | 'draft' | 'trashed' {
+  return value === 'draft' || value === 'trashed' ? value : 'active';
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function dateOrNull(value: unknown): Date | null {
+  if (!value) return null;
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function normalizeTrashReason(value: unknown): 'deleted' | 'abandoned' | null {
+  return value === 'deleted' || value === 'abandoned' ? value : null;
+}
+
+function isDuplicateIdError(error: any): boolean {
+  return error?.code === 'P2002'
+    && (
+      !error?.meta?.target
+      || (Array.isArray(error.meta.target) && error.meta.target.includes('id'))
+    );
+}
+
+function isUnknownPrismaArgument(error: any, field: string): boolean {
+  const message = String(error?.message || error || '');
+  return message.includes(`Unknown argument \`${field}\``);
+}
+
+function omitWriteField<T extends Record<string, unknown>>(data: T, field: string): T {
+  const next = { ...data };
+  delete next[field];
+  return next;
+}
+
+function omitUnknownWriteFields<T extends Record<string, unknown>>(data: T, error: any): T | null {
+  const compatFields = ['dailyEcho', 'activeWritingSeconds'];
+  const hasCompatUnknown = compatFields.some(field => isUnknownPrismaArgument(error, field));
+  if (!hasCompatUnknown) return null;
+
+  let next = { ...data };
+  let changed = false;
+  for (const field of compatFields) {
+    if (Object.prototype.hasOwnProperty.call(next, field)) {
+      delete next[field];
+      changed = true;
+    }
+  }
+  return changed ? next as T : null;
+}
+
+async function createDiaryEntryCompat(data: Record<string, unknown>) {
+  try {
+    return await prisma.diaryEntry.create({ data: data as any });
+  } catch (err: any) {
+    const retryData = omitUnknownWriteFields(data, err);
+    if (!retryData) {
+      throw err;
+    }
+
+    return prisma.diaryEntry.create({ data: retryData as any });
+  }
+}
+
+async function updateDiaryEntryCompat(where: { id: string }, data: Record<string, unknown>) {
+  try {
+    return await prisma.diaryEntry.update({ where, data: data as any });
+  } catch (err: any) {
+    const retryData = omitUnknownWriteFields(data, err);
+    if (!retryData) {
+      throw err;
+    }
+
+    return prisma.diaryEntry.update({ where, data: retryData as any });
+  }
+}
+
+async function saveSyncHistorySnapshot(params: {
+  entryId: string;
+  userId: string;
+  content?: string | null;
+  images?: string[] | null;
+}) {
+  try {
+    await saveEditHistorySnapshot(params);
+  } catch (err) {
+    console.warn('保存同步历史快照失败，已跳过:', err);
+  }
 }
 
 async function formatSyncEntry(entry: any) {
@@ -104,34 +222,38 @@ router.post('/push', async (req: Request, res: Response) => {
       return;
     }
 
-    const results: { id: string; status: 'created' | 'updated' | 'conflict' }[] = [];
+    const results: SyncResult[] = [];
 
     for (const entry of entries) {
       const id = String(entry.id || '');
-      if (!id) continue;
-      const nextImages = syncImageArray(entry.images);
+      if (!id) {
+        results.push({ id: '', status: 'skipped', reason: 'missing_id' });
+        continue;
+      }
 
       try {
-        const existing = await prisma.diaryEntry.findUnique({
-          where: { id },
-        });
+        const nextImages = syncImageArray(entry.images);
+        const nextContent = String(entry.content || '').slice(0, 200000);
+        const nextDiaryDate = normalizeDiaryDate(entry.diaryDate);
+        const nextStatus = normalizeStatus(entry.status);
+        const nextTags = Array.isArray(entry.tags) ? JSON.stringify(stringArray(entry.tags)) : null;
+        const nextImagesValue = nextImages.length > 0 ? JSON.stringify(nextImages) : null;
+        const nextTrashedAt = dateOrNull(entry.trashedAt);
+        const nextActiveWritingSeconds = normalizeActiveWritingSeconds(entry.activeWritingSeconds);
 
-        if (existing) {
+        const updateExisting = async (existing: any): Promise<SyncResult> => {
           if (existing.userId !== userId) {
-            results.push({ id, status: 'conflict' });
-            continue;
+            return { id, status: 'conflict', reason: 'owner_mismatch' };
           }
 
           if (entry.syncVersion !== undefined && existing.syncVersion > Number(entry.syncVersion)) {
-            results.push({ id, status: 'conflict' });
-            continue;
+            return { id, status: 'conflict', reason: 'stale_version' };
           }
 
-          const nextContent = String(entry.content || '').slice(0, 200000);
           const contentChanged = nextContent !== existing.content;
           const imagesChanged = !areStringArraysEqual(nextImages, parseStoredStringArray(existing.images));
           if (contentChanged || imagesChanged) {
-            await saveEditHistorySnapshot({
+            await saveSyncHistorySnapshot({
               entryId: existing.id,
               userId,
               content: existing.content,
@@ -139,49 +261,77 @@ router.post('/push', async (req: Request, res: Response) => {
             });
           }
 
-          await prisma.diaryEntry.update({
-            where: { id: existing.id },
-            data: {
-              title: entry.title,
-              content: nextContent,
-              diaryDate: entry.diaryDate,
-              status: entry.status,
-              mood: entry.mood,
-              weather: entry.weather,
-              tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
-              themeId: entry.themeId,
-              images: nextImages.length > 0 ? JSON.stringify(nextImages) : null,
-              ...(entry.dailyEcho !== undefined && { dailyEcho: normalizeDailyEcho(entry.dailyEcho) }),
-              isPinned: Boolean(entry.isPinned),
-              isHidden: Boolean(entry.isHidden),
-              trashReason: entry.trashReason,
-              trashedAt: entry.trashedAt ? new Date(entry.trashedAt) : null,
-              syncVersion: { increment: 1 },
-            },
-          });
-          results.push({ id, status: 'updated' });
+          const updateData = {
+            ...(entry.title !== undefined && { title: nullableString(entry.title) }),
+            content: nextContent,
+            diaryDate: nextDiaryDate,
+            status: nextStatus,
+            ...(entry.mood !== undefined && { mood: nullableString(entry.mood) }),
+            ...(entry.weather !== undefined && { weather: nullableString(entry.weather) }),
+            ...(entry.tags !== undefined && { tags: nextTags }),
+            ...(entry.themeId !== undefined && { themeId: nullableString(entry.themeId) }),
+            images: nextImagesValue,
+            ...(entry.dailyEcho !== undefined && { dailyEcho: normalizeDailyEcho(entry.dailyEcho) }),
+            activeWritingSeconds: Math.max(
+              nextActiveWritingSeconds,
+              normalizeActiveWritingSeconds(existing.activeWritingSeconds),
+            ),
+            isPinned: Boolean(entry.isPinned),
+            isHidden: Boolean(entry.isHidden),
+            trashReason: normalizeTrashReason(entry.trashReason),
+            trashedAt: nextTrashedAt,
+            syncVersion: { increment: 1 },
+          };
+
+          await updateDiaryEntryCompat({ id: existing.id }, updateData);
+
+          return { id, status: 'updated' };
+        };
+
+        const existing = await prisma.diaryEntry.findUnique({
+          where: { id },
+        });
+
+        if (existing) {
+          results.push(await updateExisting(existing));
         } else {
-          const created = await prisma.diaryEntry.create({
-            data: {
+          let created: any;
+          try {
+            const createData = {
               id,
               userId,
-              title: entry.title,
-              content: String(entry.content || '').slice(0, 200000),
-              diaryDate: entry.diaryDate || new Date().toISOString().split('T')[0],
-              status: entry.status || 'active',
-              mood: entry.mood,
-              weather: entry.weather,
-              tags: entry.tags ? JSON.stringify(stringArray(entry.tags)) : null,
-              themeId: entry.themeId,
-              images: nextImages.length > 0 ? JSON.stringify(nextImages) : null,
+              title: nullableString(entry.title),
+              content: nextContent,
+              diaryDate: nextDiaryDate,
+              status: nextStatus,
+              mood: nullableString(entry.mood),
+              weather: nullableString(entry.weather),
+              tags: nextTags,
+              themeId: nullableString(entry.themeId),
+              images: nextImagesValue,
               dailyEcho: normalizeDailyEcho(entry.dailyEcho),
+              activeWritingSeconds: nextActiveWritingSeconds,
               isPinned: Boolean(entry.isPinned),
               isHidden: Boolean(entry.isHidden),
-              trashReason: entry.trashReason,
-              trashedAt: entry.trashedAt ? new Date(entry.trashedAt) : null,
-            },
-          });
-          await saveEditHistorySnapshot({
+              trashReason: normalizeTrashReason(entry.trashReason),
+              trashedAt: nextTrashedAt,
+            };
+
+            created = await createDiaryEntryCompat(createData);
+          } catch (err: any) {
+            if (!isDuplicateIdError(err)) throw err;
+
+            const racedEntry = await prisma.diaryEntry.findUnique({ where: { id } });
+            if (!racedEntry) {
+              results.push({ id, status: 'skipped', reason: 'duplicate_unresolved' });
+              continue;
+            }
+
+            results.push(await updateExisting(racedEntry));
+            continue;
+          }
+
+          await saveSyncHistorySnapshot({
             entryId: created.id,
             userId,
             content: created.content,
@@ -190,8 +340,18 @@ router.post('/push', async (req: Request, res: Response) => {
           results.push({ id, status: 'created' });
         }
       } catch (err: any) {
-        if (err?.code === 'P2002') {
-          results.push({ id, status: 'conflict' });
+        if (err?.status === 400) {
+          results.push({ id, status: 'skipped', reason: 'invalid_entry' });
+          continue;
+        }
+
+        if (isDuplicateIdError(err)) {
+          const existing = await prisma.diaryEntry.findUnique({ where: { id } });
+          results.push({
+            id,
+            status: existing?.userId === userId ? 'conflict' : 'skipped',
+            reason: 'duplicate_retry_failed',
+          });
           continue;
         }
 

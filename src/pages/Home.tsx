@@ -9,6 +9,7 @@ import { CardFlowList } from '../components/diary-lists/CardFlowList';
 import { BriefingList } from '../components/diary-lists/BriefingList';
 import { MagazineList } from '../components/diary-lists/MagazineList';
 import { AppToast } from '../components/AppToast';
+import { parseDiaryDateKey } from '../utils/diaryDate';
 
 export type HomeOutletContext = {
   selectedDate: Date | null;
@@ -116,12 +117,12 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
       
       if (!element) {
         // If exact date not found, find the closest previous date
-        const closestJournal = journals.find(j => new Date(j.diaryDate).getTime() <= selectedDate.getTime());
+        const closestJournal = journals.find(j => parseDiaryDateKey(j.diaryDate).getTime() <= selectedDate.getTime());
         if (closestJournal) {
-          element = document.querySelector(`[data-date="${format(new Date(closestJournal.diaryDate), 'yyyy-MM-dd')}"]`);
+          element = document.querySelector(`[data-date="${format(parseDiaryDateKey(closestJournal.diaryDate), 'yyyy-MM-dd')}"]`);
         } else {
           // If no previous date, scroll to the oldest available one (last in array)
-          element = document.querySelector(`[data-date="${format(new Date(journals[journals.length - 1].diaryDate), 'yyyy-MM-dd')}"]`);
+          element = document.querySelector(`[data-date="${format(parseDiaryDateKey(journals[journals.length - 1].diaryDate), 'yyyy-MM-dd')}"]`);
         }
       }
 

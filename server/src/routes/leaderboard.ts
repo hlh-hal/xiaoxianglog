@@ -55,6 +55,36 @@ function diaryDayKey(diaryDate: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : null;
 }
 
+export function getLeaderboardMonthEntriesWhere(allUserIds: string[], currentYearMonth: string) {
+  return {
+    userId: { in: allUserIds },
+    status: 'active',
+    diaryDate: { startsWith: currentYearMonth },
+  } as const;
+}
+
+export function countDiaryDaysByUser(
+  entries: Array<{ userId: string; diaryDate: string }>,
+  allUserIds: string[]
+) {
+  const countMap = new Map<string, number>();
+  const daysByUser = new Map<string, Set<string>>();
+
+  entries.forEach(entry => {
+    const dayKey = diaryDayKey(entry.diaryDate);
+    if (!dayKey) return;
+    const days = daysByUser.get(entry.userId) || new Set<string>();
+    days.add(dayKey);
+    daysByUser.set(entry.userId, days);
+  });
+
+  allUserIds.forEach(uid => {
+    countMap.set(uid, daysByUser.get(uid)?.size || 0);
+  });
+
+  return countMap;
+}
+
 async function createLeaderboardLikeNotification(userId: string, fromUserId: string) {
   if (userId === fromUserId) return;
 
@@ -156,28 +186,11 @@ router.get('/', async (req: Request, res: Response) => {
     });
 
     const monthEntries = await prisma.diaryEntry.findMany({
-      where: {
-        userId: { in: allUserIds },
-        status: 'active',
-        isHidden: false,
-        diaryDate: { startsWith: currentYearMonth },
-      },
+      // Count private diary days as aggregate metadata only; never select diary content here.
+      where: getLeaderboardMonthEntriesWhere(allUserIds, currentYearMonth),
       select: { userId: true, diaryDate: true },
     });
-    const countMap = new Map<string, number>();
-    const daysByUser = new Map<string, Set<string>>();
-
-    monthEntries.forEach(entry => {
-      const dayKey = diaryDayKey(entry.diaryDate);
-      if (!dayKey) return;
-      const days = daysByUser.get(entry.userId) || new Set<string>();
-      days.add(dayKey);
-      daysByUser.set(entry.userId, days);
-    });
-
-    allUserIds.forEach(uid => {
-      countMap.set(uid, daysByUser.get(uid)?.size || 0);
-    });
+    const countMap = countDiaryDaysByUser(monthEntries, allUserIds);
 
     // 统计每个用户获得的点赞数
     const likeCounts = await Promise.all(

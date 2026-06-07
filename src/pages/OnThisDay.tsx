@@ -8,6 +8,7 @@ import { format, subYears, subMonths, subDays, isSameDay } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { useTheme } from '../contexts/ThemeContext';
 import { SafeImage } from '../components/SafeImage';
+import { compareDiaryDateDesc, parseDiaryDateKey, toDiaryDateKey } from '../utils/diaryDate';
 
 type ReviewMode = 'years_1' | 'months_6' | 'days_100' | 'custom';
 type Season = 'spring' | 'summer' | 'autumn' | 'winter';
@@ -107,7 +108,7 @@ const SEASON_PARTICLE_CONFIG = {
 };
 
 function getSeason(dateStr: string): Season {
-  const month = new Date(dateStr).getMonth() + 1;
+  const month = parseDiaryDateKey(dateStr).getMonth() + 1;
   if (month >= 3 && month <= 5) return 'spring';
   if (month >= 6 && month <= 8) return 'summer';
   if (month >= 9 && month <= 11) return 'autumn';
@@ -236,11 +237,11 @@ export default function OnThisDay() {
 
   const displayEntries = useMemo(() => {
     const matched = allEntries.filter(entry => {
-      const d = new Date(entry.diaryDate);
+      const d = parseDiaryDateKey(entry.diaryDate);
       return isSameDay(d, displayDate);
     });
 
-    matched.sort((a, b) => new Date(b.diaryDate).getTime() - new Date(a.diaryDate).getTime());
+    matched.sort((a, b) => compareDiaryDateDesc(a.diaryDate, b.diaryDate));
     return matched;
   }, [allEntries, reviewMode, displayDate]);
 
@@ -271,7 +272,7 @@ export default function OnThisDay() {
   };
 
   const currentEntry = displayEntries[currentEntryIndex];
-  const currentSeason = currentEntry ? getSeason(currentEntry.diaryDate) : getSeason(displayDate.toISOString());
+  const currentSeason = currentEntry ? getSeason(currentEntry.diaryDate) : getSeason(toDiaryDateKey(displayDate));
 
   const toggleAnimation = () => {
     if (isAnimActive) {
@@ -361,7 +362,8 @@ export default function OnThisDay() {
     }
     const imageUrl = urls.length > 0 ? urls[0] : null;
     
-    const dateStr = format(new Date(currentEntry.diaryDate), 'yyyy年MM月dd日 EEEE', { locale: zhCN });
+    const currentEntryDate = parseDiaryDateKey(currentEntry.diaryDate);
+    const dateStr = format(currentEntryDate, 'yyyy年MM月dd日 EEEE', { locale: zhCN });
     const excerpt = getExcerpt(fullContent, 300, true);
 
     return (
@@ -537,7 +539,7 @@ export default function OnThisDay() {
                 <ChevronLeft className="w-5 h-5" />
               </button>
               <span className={`transition-opacity duration-300 ${isFading ? 'opacity-0' : 'opacity-100'}`}>
-                {new Date(currentEntry.diaryDate).getFullYear()}年 · 第{currentEntryIndex + 1}篇/共{displayEntries.length}篇
+                {parseDiaryDateKey(currentEntry.diaryDate).getFullYear()}年 · 第{currentEntryIndex + 1}篇/共{displayEntries.length}篇
               </span>
               <button onClick={handleNext} className="p-2 hover:bg-surface-container-high rounded-full transition-colors">
                 <ChevronRight className="w-5 h-5" />

@@ -4,6 +4,7 @@ import { Search as SearchIcon, X, ChevronLeft } from 'lucide-react';
 import { diaryService, DiaryEntry } from '../services/diaryService';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
+import { parseDiaryDateKey } from '../utils/diaryDate';
 
 function cleanText(raw: string): string {
   if (!raw) return '';
@@ -68,7 +69,7 @@ export default function Search() {
   const groupedResults = useMemo(() => {
     const groups: { [key: string]: DiaryEntry[] } = {};
     results.forEach(entry => {
-      const monthKey = format(new Date(entry.diaryDate), 'yyyy年M月');
+      const monthKey = format(parseDiaryDateKey(entry.diaryDate), 'yyyy年M月');
       if (!groups[monthKey]) {
         groups[monthKey] = [];
       }
@@ -173,7 +174,7 @@ export default function Search() {
                 </div>
                 <div className="flex flex-col gap-2.5">
                   {entries.map(entry => {
-                    const date = new Date(entry.diaryDate);
+                    const date = parseDiaryDateKey(entry.diaryDate);
                     
                     let fullContent = '';
                     if (entry.blocks && entry.blocks.length > 0) {

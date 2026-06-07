@@ -4,9 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { diaryService, DiaryEntry } from '../services/diaryService';
-import { stripMarkdown, extractRecentDiaryKeywords } from '../utils/textUtils';
+import { stripMarkdown, extractRecentDiaryKeywords, getKeywordSourceText } from '../utils/textUtils';
 import { api } from '../services/apiClient';
 import { UserAvatar } from '../components/UserAvatar';
+import { getDiaryDateKey, parseDiaryDateKey } from '../utils/diaryDate';
 
 type ProfileStats = {
   totalEntries: number;
@@ -38,15 +39,7 @@ let cachedEntries: DiaryEntry[] = [];
 let cachedStats: ProfileStats = emptyStats;
 
 const getDiaryDayKey = (diaryDate: string) => {
-  const date = new Date(diaryDate);
-  if (!Number.isNaN(date.getTime())) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
-  const datePart = String(diaryDate || '').split('T')[0]?.slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : null;
+  return getDiaryDateKey(diaryDate) || null;
 };
 
 export default function Profile() {
@@ -115,11 +108,11 @@ export default function Profile() {
       const monthEntryDays = new Set<string>();
 
       activeEntries.forEach((entry) => {
-        const text = stripMarkdown(entry.content || '');
+        const text = stripMarkdown(getKeywordSourceText(entry));
         totalWords += text.replace(/\s/g, '').length;
         totalPhotos += entry.images?.length || 0;
 
-        const entryDate = new Date(entry.diaryDate);
+        const entryDate = parseDiaryDateKey(entry.diaryDate);
         if (entryDate.getFullYear() === currentYear && entryDate.getMonth() === currentMonth) {
           const dayKey = getDiaryDayKey(entry.diaryDate);
           if (dayKey) monthEntryDays.add(dayKey);
@@ -190,7 +183,7 @@ export default function Profile() {
     const currentYear = new Date().getFullYear();
     const counts = new Array(12).fill(0);
     entries.forEach((entry) => {
-      const date = new Date(entry.diaryDate);
+      const date = parseDiaryDateKey(entry.diaryDate);
       if (date.getFullYear() === currentYear) counts[date.getMonth()] += 1;
     });
     return counts;
@@ -214,7 +207,7 @@ export default function Profile() {
 
     last7Days.forEach((date, i) => {
       const dayEntries = entries.filter(e => {
-        const ed = new Date(e.diaryDate);
+        const ed = parseDiaryDateKey(e.diaryDate);
         return ed.getDate() === date.getDate() && ed.getMonth() === date.getMonth() && ed.getFullYear() === date.getFullYear();
       });
 
@@ -270,6 +263,10 @@ export default function Profile() {
     ? `${(stats.totalWords / 1000).toFixed(1)}k`
     : String(stats.totalWords);
   const rankText = stats.leaderboardRank ? `第 ${stats.leaderboardRank} 名` : '未上榜';
+  const isCompactKeywordCloud = keywords.length > 0 && keywords.length <= 3;
+  const keywordCloudClassName = isCompactKeywordCloud
+    ? 'min-h-[76px] justify-center gap-x-7 gap-y-3 px-6 py-5'
+    : 'min-h-[108px] content-center justify-center gap-x-4 gap-y-4 px-6 py-5';
 
   return (
     <div className="app-reading-container bg-surface text-on-surface pb-4 pt-[calc(var(--app-total-header-height)+16px)]">
@@ -332,11 +329,11 @@ export default function Profile() {
 
         <section className="space-y-4">
           <SectionTitle title="高频关键词" />
-          <div className="bg-surface-container-lowest/40 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.04)] px-5 py-5 rounded-2xl grid grid-cols-4 gap-x-2 gap-y-3 place-items-center min-h-[76px]">
+          <div className={`bg-surface-container-lowest/40 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.04)] rounded-2xl flex flex-wrap items-center overflow-hidden ${keywordCloudClassName}`}>
             {keywords.length > 0 ? keywords.map((tag, index) => (
-              <span key={tag} className={`${keywordStyles[index % keywordStyles.length]} block max-w-full truncate text-center`}>{tag}</span>
+              <span key={tag} className={`${keywordStyles[index % keywordStyles.length]} ${keywordOffsets[index % keywordOffsets.length]} inline-block max-w-[7.5rem] truncate text-center leading-none transition-transform duration-300`}>{tag}</span>
             )) : (
-              <span className="col-span-4 text-outline/50 text-sm">多写点日记，这里会生成你的专属关键词</span>
+              <span className="w-full text-center text-outline/50 text-sm">多写点日记，这里会生成你的专属关键词</span>
             )}
           </div>
         </section>
@@ -545,10 +542,27 @@ function SectionTitle({ title }: { title: string }) {
 }
 
 const keywordStyles = [
-  'text-primary font-bold text-xl',
-  'text-outline font-medium text-base',
-  'text-primary font-extrabold text-2xl',
-  'text-outline/60 font-normal text-sm',
-  'text-primary/80 font-semibold text-lg',
-  'text-outline/50 font-light text-[13px]',
+  'text-primary font-extrabold text-[24px]',
+  'text-outline/75 font-medium text-[16px]',
+  'text-primary/95 font-black text-[28px]',
+  'text-outline/45 font-normal text-[14px]',
+  'text-primary/80 font-bold text-[20px]',
+  'text-outline/55 font-light text-[14px]',
+  'text-primary/90 font-extrabold text-[22px]',
+  'text-outline/50 font-normal text-[14px]',
+];
+
+const keywordOffsets = [
+  '-translate-y-1',
+  'translate-y-0',
+  '-translate-y-1.5',
+  'translate-y-1',
+  'translate-y-1.5',
+  '-translate-y-0.5',
+  'translate-y-1',
+  '-translate-y-1',
+  'translate-y-0.5',
+  '-translate-y-1',
+  'translate-y-1.5',
+  '-translate-y-0.5',
 ];

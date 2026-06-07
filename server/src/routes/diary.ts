@@ -49,6 +49,33 @@ function normalizeDailyEcho(value: unknown): string | null {
   return raw.length <= 200000 ? raw : null;
 }
 
+function normalizeActiveWritingSeconds(value: unknown, fallback = 0): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.floor(numeric));
+}
+
+function toLocalDateKey(date = new Date()): string {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function normalizeDiaryDate(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw.slice(0, 10);
+
+  const parsed = raw ? new Date(raw) : new Date();
+  if (!Number.isNaN(parsed.getTime())) {
+    return toLocalDateKey(parsed);
+  }
+
+  return toLocalDateKey();
+}
+
 function dailyEchoImageUrls(value?: string | null): string[] {
   const parsed = parseJsonObject(value);
   const imageUrl = (parsed?.card as any)?.imageUrl;
@@ -124,7 +151,7 @@ router.get('/entries/:id', async (req: Request, res: Response) => {
 router.post('/entries', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { id, title, content, diaryDate, status, mood, weather, tags, themeId, images, dailyEcho, isPinned, isHidden } = req.body;
+    const { id, title, content, diaryDate, status, mood, weather, tags, themeId, images, dailyEcho, activeWritingSeconds, isPinned, isHidden } = req.body;
 
     const entry = await prisma.diaryEntry.create({
       data: {
@@ -132,7 +159,7 @@ router.post('/entries', async (req: Request, res: Response) => {
         userId,
         title,
         content: content || '',
-        diaryDate: diaryDate || new Date().toISOString().split('T')[0],
+        diaryDate: normalizeDiaryDate(diaryDate),
         status: status || 'active',
         mood,
         weather,
@@ -140,6 +167,7 @@ router.post('/entries', async (req: Request, res: Response) => {
         themeId,
         images: images ? JSON.stringify(stringArray(images, 20, 2000)) : null,
         dailyEcho: normalizeDailyEcho(dailyEcho),
+        activeWritingSeconds: normalizeActiveWritingSeconds(activeWritingSeconds),
         isPinned: isPinned || false,
         isHidden: isHidden || false,
       },
@@ -164,7 +192,7 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
     const entryId = paramString(req, 'id');
-    const { title, content, diaryDate, status, mood, weather, tags, themeId, images, dailyEcho, isPinned, isHidden, syncVersion } = req.body;
+    const { title, content, diaryDate, status, mood, weather, tags, themeId, images, dailyEcho, activeWritingSeconds, isPinned, isHidden, syncVersion } = req.body;
     const existingForHistory = await prisma.diaryEntry.findFirst({
       where: { id: entryId, userId },
     });
@@ -197,7 +225,7 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
       data: {
         ...(title !== undefined && { title }),
         ...(content !== undefined && { content }),
-        ...(diaryDate !== undefined && { diaryDate }),
+        ...(diaryDate !== undefined && { diaryDate: normalizeDiaryDate(diaryDate) }),
         ...(status !== undefined && { status }),
         ...(mood !== undefined && { mood }),
         ...(weather !== undefined && { weather }),
@@ -205,6 +233,12 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
         ...(themeId !== undefined && { themeId }),
         ...(images !== undefined && { images: JSON.stringify(stringArray(images, 20, 2000)) }),
         ...(dailyEcho !== undefined && { dailyEcho: normalizeDailyEcho(dailyEcho) }),
+        ...(activeWritingSeconds !== undefined && {
+          activeWritingSeconds: Math.max(
+            normalizeActiveWritingSeconds(activeWritingSeconds),
+            normalizeActiveWritingSeconds(existingForHistory.activeWritingSeconds),
+          ),
+        }),
         ...(isPinned !== undefined && { isPinned }),
         ...(isHidden !== undefined && { isHidden }),
         syncVersion: { increment: 1 },

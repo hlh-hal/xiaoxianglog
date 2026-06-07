@@ -6,6 +6,7 @@ import { extractImages } from '../utils/imageUtils';
 import { getExcerpt } from '../utils/textUtils';
 import { format, isValid } from 'date-fns';
 import { SafeImage } from '../components/SafeImage';
+import { parseDiaryDateKey, toDiaryDateKey } from '../utils/diaryDate';
 
 const FOOTER_TEXTS = [
   '随 机 回 顾 时 光',
@@ -15,7 +16,7 @@ const FOOTER_TEXTS = [
 
 function getRelativeTime(dateStr: string | number | Date): string {
   try {
-    const time = new Date(dateStr).getTime();
+    const time = parseDiaryDateKey(dateStr).getTime();
     if (isNaN(time)) return '未知时间';
     const diff = Date.now() - time;
     const days = Math.floor(diff / 86400000);
@@ -31,7 +32,7 @@ function getRelativeTime(dateStr: string | number | Date): string {
 
 function getSafeDateStr(dateStr: string | number | Date): string {
   try {
-    const date = new Date(dateStr);
+    const date = parseDiaryDateKey(dateStr);
     if (isValid(date)) {
       return format(date, 'yyyy / MM / dd');
     }
@@ -43,7 +44,7 @@ function getTodayStr(): string {
   try {
     return format(new Date(), 'yyyy-MM-dd');
   } catch (e) {
-    return new Date().toISOString().split('T')[0];
+    return toDiaryDateKey();
   }
 }
 

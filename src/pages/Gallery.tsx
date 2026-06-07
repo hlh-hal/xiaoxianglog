@@ -8,6 +8,7 @@ import { zhCN } from 'date-fns/locale';
 import ImageViewer from '../components/ImageViewer';
 import { SafeImage } from '../components/SafeImage';
 import { motion, AnimatePresence } from 'motion/react';
+import { parseDiaryDateKey } from '../utils/diaryDate';
 
 interface GalleryImage {
   url: string;
@@ -94,8 +95,9 @@ export default function Gallery() {
           });
         }
 
-        const dateStr = format(new Date(entry.diaryDate), 'yyyy-MM-dd');
-        const entryTitle = entry.title || format(new Date(entry.diaryDate), 'yyyy年MM月dd日');
+        const entryDate = parseDiaryDateKey(entry.diaryDate);
+        const dateStr = format(entryDate, 'yyyy-MM-dd');
+        const entryTitle = entry.title || format(entryDate, 'yyyy年MM月dd日');
         
         urls.forEach(url => {
           allImages.push({
@@ -122,7 +124,7 @@ export default function Gallery() {
       });
       
       // Sort by date descending
-      allImages.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      allImages.sort((a, b) => b.date.localeCompare(a.date));
       
       cachedGalleryImages = allImages;
       cachedEntriesRef = entries;
@@ -138,7 +140,7 @@ export default function Gallery() {
     const groups: { [key: string]: MonthGroup } = {};
     
     images.forEach(img => {
-      const date = new Date(img.date);
+      const date = parseDiaryDateKey(img.date);
       const monthKey = format(date, 'yyyy-MM');
       const monthLabel = format(date, 'yyyy年M月');
       const dayLabel = format(date, 'M月d日');

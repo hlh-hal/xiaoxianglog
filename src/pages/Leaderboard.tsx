@@ -7,6 +7,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { api } from '../services/apiClient';
 import { AppToast } from '../components/AppToast';
 import { UserAvatar } from '../components/UserAvatar';
+import { getDiaryDateKey, parseDiaryDateKey } from '../utils/diaryDate';
 
 interface LeaderboardUser {
   id: string;
@@ -40,15 +41,7 @@ const setFriendStatus = (userId: string, status: string) => {
 };
 
 const getDiaryDayKey = (diaryDate: string) => {
-  const date = new Date(diaryDate);
-  if (!Number.isNaN(date.getTime())) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
-  const datePart = String(diaryDate || '').split('T')[0]?.slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : null;
+  return getDiaryDateKey(diaryDate) || null;
 };
 
 const highlightKeyword = (text: string, keyword: string): React.ReactNode => {
@@ -201,7 +194,7 @@ export default function Leaderboard() {
         const localEntries = await diaryService.getActiveEntries();
         const localMonthDays = new Set<string>();
         localEntries.forEach(entry => {
-          const entryDate = new Date(entry.diaryDate);
+          const entryDate = parseDiaryDateKey(entry.diaryDate);
           if (entryDate.getFullYear() === currentYear && entryDate.getMonth() === currentMonth) {
             const dayKey = getDiaryDayKey(entry.diaryDate);
             if (dayKey) localMonthDays.add(dayKey);
@@ -211,7 +204,7 @@ export default function Leaderboard() {
 
         const normalizedUsers = (allUsers.length > 0
           ? allUsers.map(item => item.isCurrentUser
-              ? { ...item, monthCount: localMonthCount, avatar: user?.avatarUrl || item.avatar }
+              ? { ...item, avatar: user?.avatarUrl || item.avatar }
               : item
             )
           : [{
