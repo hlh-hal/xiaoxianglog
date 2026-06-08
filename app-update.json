@@ -1,16 +1,16 @@
 {
-  "versionName": "1.0.2",
-  "versionCode": 3,
+  "versionName": "1.0.3",
+  "versionCode": 4,
   "releasedAt": "2026-06-08",
   "apkUrl": "https://github.com/hlh-hal/xiaoxianglog/releases/latest/download/xiaoxiang-log-latest.apk",
   "changes": [
-    "Android 安装包更新为正式小象日志图标，安装页和桌面图标不再显示默认图标。",
-    "登录后社区、头像、图库等图片地址会自动解析到线上 HTTPS 地址。",
-    "继续使用 www.xiaoxianglog.cn 作为 Android 端线上服务域名。"
+    "Android 每日写日记提醒现在只保留一条系统通知。",
+    "Android 端会自动关闭旧版本遗留的服务端每日 Web Push，避免同一时间重复提醒。",
+    "点赞、评论、好友申请等互动通知不受影响。"
   ],
   "fixes": [
-    "修复 APK 内相对图片路径被 WebView 解析到本地域名，导致图片无法显示的问题。",
-    "修复 Android 原生应用名配置中的乱码隐患。",
+    "修复 Android 原生定时提醒和前端每日提醒兜底同时触发，导致一次弹出两条提醒的问题。",
+    "修复 Android 设置页开启每日提醒时误走 PWA Push 订阅流程的问题。",
     "递增 Android versionCode，确保已安装旧版的用户可以覆盖更新。"
   ]
 }
