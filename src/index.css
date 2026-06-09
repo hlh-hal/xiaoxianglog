@@ -101,6 +101,11 @@ html {
   padding-inline: 1rem;
 }
 
+.settings-content-container {
+  max-width: min(var(--app-content-max-width), calc(100vw - 1rem));
+  padding-inline: 0.5rem;
+}
+
 .app-main-topbar {
   padding-inline: 16px;
 }
@@ -118,6 +123,11 @@ html {
   }
 
   .app-content-container {
+    max-width: min(var(--app-content-max-width), calc(100vw - var(--app-sidebar-width) - 4rem));
+    padding-inline: 1.5rem;
+  }
+
+  .settings-content-container {
     max-width: min(var(--app-content-max-width), calc(100vw - var(--app-sidebar-width) - 4rem));
     padding-inline: 1.5rem;
   }

@@ -7,6 +7,7 @@
 - [ ] 2026-05-27 PWA 通知补修已上传云端：线上首页引用 `assets/index-BRuGXoKy.js`，后端 dist/src/schema/package 已上传且未覆盖 `.env`。下一步在宝塔重启 `C:\wwwroot\xiaoxiang-server` Node 项目，确认线上 `.env` 有 VAPID 三项配置，再用真机 Chrome PWA 验证后台/锁屏系统通知。
 - [ ] 确认当前工作区多处未提交改动是否需要整理提交，尤其是 `AGENTS.md`/`vault/`、旧 `agent.md` 删除、本地日志同步、PWA、通知、排行榜和 nginx 配置。
 - [ ] 确认是否把 `vault/` 放在当前代码仓库内长期维护，还是迁移到 Obsidian/云盘同步目录后在 `AGENTS.md` 改成绝对路径。
+- [ ] 2026-06-07 安全债：`deploy-upload.ps1` 仍有内置 FTP 登录信息兜底值。后续应迁移为必须通过环境变量/密钥管理注入，并轮换旧凭据；处理时不要把真实凭据写入 `vault/` 或日志。
 
 ## 阻塞项
 

@@ -55,6 +55,17 @@ test('caps active writing time at 30 seconds and ignores inactive gaps', () => {
   assert.equal(getActiveWritingMinutes(activity, 82_000), 1);
 });
 
+test('completion minutes use the edit session span instead of only active keystrokes', () => {
+  let activity = createWritingActivityState();
+  activity = recordWritingInput(activity, 0);
+  activity = recordWritingInput(activity, 6 * 60_000);
+  activity = recordWritingInput(activity, 12 * 60_000);
+
+  assert.equal(activity.elapsedMs, 60_000);
+  assert.equal(getActiveWritingSeconds(activity, 12 * 60_000), 60);
+  assert.equal(getActiveWritingMinutes(activity, 12 * 60_000), 12);
+});
+
 test('pause stops background or blur time from accumulating', () => {
   let activity = createWritingActivityState();
   activity = recordWritingInput(activity, 1_000);

@@ -4,12 +4,13 @@ import {
   Menu, Search, MoreVertical, BookOpen, Compass, User, 
   Image as ImageIcon, Footprints, History, Moon, Sun, Cloud, 
   Trash2, Settings, HelpCircle, Plus, ChevronLeft, ChevronRight,
-  Check, X, Download, RefreshCw
+  Check, X, Download, RefreshCw, Sparkles
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, isToday, addMonths, subMonths, format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
+import { Capacitor } from '@capacitor/core';
 import { diaryService } from '../services/diaryService';
 import { getDailyQuote } from '../utils/quotes';
 import { useTheme } from '../contexts/ThemeContext';
@@ -18,10 +19,30 @@ import { UserAvatar } from './UserAvatar';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 import { AppToast } from './AppToast';
 import { parseDiaryDateKey } from '../utils/diaryDate';
+import { currentVersion, latestRelease as bundledRelease, type AppRelease } from '../config/appRelease';
+import {
+  getConfiguredDownloadUrl,
+  getLatestRelease,
+  markUpdateNoticePrompted,
+  shouldAutoOpenUpdateNotice,
+  shouldShowUpdateEntry,
+  skipRelease,
+} from '../services/updateNoticeService';
 
 export type ListStyle = 'timeline' | 'card_flow' | 'briefing' | 'magazine';
 
+function shouldEnableApkUpdateNotice(): boolean {
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') return false;
+  if (typeof window === 'undefined') return false;
+
+  const hostname = window.location.hostname.toLowerCase();
+  if (hostname === 'xiaoxianglog.cn' || hostname.endsWith('.xiaoxianglog.cn')) return false;
+
+  return true;
+}
+
 export default function Layout() {
+  const shouldShowApkUpdateNotice = shouldEnableApkUpdateNotice();
   const { isDark, toggleTheme } = useTheme();
   const { user } = useAuth();
   const pwaInstall = usePwaInstall();
@@ -47,6 +68,9 @@ export default function Layout() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isStyleSheetOpen, setIsStyleSheetOpen] = useState(false);
   const [isInstallSheetOpen, setIsInstallSheetOpen] = useState(false);
+  const [isUpdateNoticeOpen, setIsUpdateNoticeOpen] = useState(false);
+  const [releaseInfo, setReleaseInfo] = useState<AppRelease>(bundledRelease);
+  const [showUpdateEntry, setShowUpdateEntry] = useState(() => shouldShowApkUpdateNotice && shouldShowUpdateEntry(bundledRelease));
   const [installMessage, setInstallMessage] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [listStyle, setListStyle] = useState<ListStyle>(() => {
@@ -216,6 +240,60 @@ export default function Layout() {
   const showToast = (message: string) => {
     setToastMessage(message);
     window.setTimeout(() => setToastMessage(null), 2000);
+  };
+
+  useEffect(() => {
+    if (!shouldShowApkUpdateNotice) {
+      setIsUpdateNoticeOpen(false);
+      setShowUpdateEntry(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    getLatestRelease().then(release => {
+      if (cancelled) return;
+
+      setReleaseInfo(release);
+      setShowUpdateEntry(shouldShowUpdateEntry(release));
+
+      if (location.pathname === '/' && shouldAutoOpenUpdateNotice(release)) {
+        setIsUpdateNoticeOpen(true);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldShowApkUpdateNotice, location.pathname]);
+
+  const openUpdateNotice = () => {
+    setIsUpdateNoticeOpen(true);
+  };
+
+  const closeUpdateNotice = () => {
+    markUpdateNoticePrompted(releaseInfo.version);
+    setIsUpdateNoticeOpen(false);
+    setShowUpdateEntry(shouldShowApkUpdateNotice && shouldShowUpdateEntry(releaseInfo));
+  };
+
+  const handleSkipRelease = () => {
+    skipRelease(releaseInfo.version);
+    setIsUpdateNoticeOpen(false);
+    setShowUpdateEntry(shouldShowApkUpdateNotice && shouldShowUpdateEntry(releaseInfo));
+  };
+
+  const handleDownloadUpdate = () => {
+    const url = getConfiguredDownloadUrl(releaseInfo);
+    if (!url) {
+      showToast('新版下载地址还没配置好，稍后再来看看。');
+      return;
+    }
+
+    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!opened) {
+      window.location.href = url;
+    }
   };
 
   const handleCloudManageClick = () => {
@@ -458,6 +536,25 @@ export default function Layout() {
             </AnimatePresence>
           </div>
         </header>
+      )}
+
+      {shouldShowApkUpdateNotice && location.pathname === '/' && showUpdateEntry && (
+        <div className="app-main-topbar sticky top-[var(--app-total-header-height)] z-30 bg-surface/85 pb-2 backdrop-blur-md">
+          <button
+            type="button"
+            onClick={openUpdateNotice}
+            className="flex min-h-12 w-full items-center gap-3 rounded-2xl border border-primary/15 bg-surface-container-lowest/90 px-4 py-3 text-left shadow-[0_8px_24px_rgba(68,103,51,0.08)] active:scale-[0.99] transition-transform"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary-container text-primary">
+              <Sparkles className="h-5 w-5" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-semibold text-on-surface">发现新版本 {releaseInfo.version}</span>
+              <span className="block truncate text-xs leading-5 text-on-surface-variant">查看更新内容和修复说明</span>
+            </span>
+            <span className="shrink-0 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-white">更新</span>
+          </button>
+        </div>
       )}
 
       {/* Calendar Overlay */}
@@ -857,6 +954,113 @@ export default function Layout() {
                     重新检测安装状态
                   </button>
                 </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Update Notice Modal */}
+      <AnimatePresence>
+        {shouldShowApkUpdateNotice && isUpdateNoticeOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] flex items-end justify-center bg-black/40 px-3 pb-0 pt-[calc(var(--app-safe-top)+12px)] backdrop-blur-sm sm:items-center sm:p-6"
+            onClick={closeUpdateNotice}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 24 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 24 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className="flex max-h-[min(86vh,720px)] w-full max-w-[560px] flex-col overflow-hidden rounded-t-3xl bg-surface shadow-2xl sm:rounded-3xl"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 border-b border-outline-variant/15 px-5 py-4 sm:px-6">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary text-white shadow-[0_8px_20px_rgba(68,103,51,0.22)]">
+                  <Sparkles className="h-6 w-6" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h2 className="font-headline text-xl font-semibold text-on-surface">发现新版本</h2>
+                  <p className="mt-0.5 text-sm text-on-surface-variant">小象日志 {releaseInfo.version}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeUpdateNotice}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-surface-container"
+                  aria-label="关闭更新公告"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-5 py-5 sm:px-6">
+                <div className="space-y-4">
+                  <div>
+                    <div className="text-base font-semibold text-primary">v{releaseInfo.version}</div>
+                    <p className="mt-2 text-sm leading-6 text-on-surface-variant">
+                      当前版本 v{currentVersion}，新版本已准备好。发布日期：{releaseInfo.releasedAt}
+                    </p>
+                  </div>
+
+                  <div className="flex items-start gap-3 rounded-2xl bg-primary-container/50 px-4 py-3 text-primary">
+                    <Check className="mt-0.5 h-5 w-5 shrink-0" />
+                    <p className="text-sm font-medium leading-6">v{releaseInfo.version} 已可下载，安装后即可体验新版。</p>
+                  </div>
+
+                  <div className="h-px bg-outline-variant/20"></div>
+
+                  <section>
+                    <h3 className="text-base font-semibold text-on-surface">更新内容</h3>
+                    <div className="mt-3 space-y-3">
+                      {releaseInfo.highlights.map(item => (
+                        <div key={item} className="flex gap-3 text-sm leading-6 text-on-surface">
+                          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary"></span>
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section>
+                    <h3 className="text-base font-semibold text-on-surface">修复内容</h3>
+                    <div className="mt-3 space-y-3">
+                      {releaseInfo.fixes.map(item => (
+                        <div key={item} className="flex gap-3 text-sm leading-6 text-on-surface">
+                          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-outline"></span>
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 border-t border-outline-variant/15 bg-surface-container-low/80 px-5 py-4 sm:grid-cols-[1fr_1.15fr_1.35fr] sm:px-6">
+                <button
+                  type="button"
+                  onClick={closeUpdateNotice}
+                  className="rounded-2xl bg-surface-container-lowest px-4 py-3 text-sm font-medium text-on-surface shadow-sm active:scale-[0.98] transition-transform"
+                >
+                  稍后
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSkipRelease}
+                  className="rounded-2xl border border-outline-variant/30 bg-surface-container px-4 py-3 text-sm font-medium text-on-surface-variant active:scale-[0.98] transition-transform"
+                >
+                  跳过此版本
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadUpdate}
+                  className="flex items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-medium text-white shadow-[0_10px_24px_rgba(68,103,51,0.22)] active:scale-[0.98] transition-transform"
+                >
+                  <Download className="h-4 w-4" />
+                  下载新版
+                </button>
               </div>
             </motion.div>
           </motion.div>

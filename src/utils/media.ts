@@ -1,3 +1,5 @@
+import { assetUrl } from '../services/apiClient';
+
 export function resolveMediaUrl(url?: string | null): string {
   const value = normalizeImageDataUrl((url || '').trim());
   if (!value) return '';
@@ -10,10 +12,10 @@ export function resolveMediaUrl(url?: string | null): string {
     return value;
   }
 
-  if (value.startsWith('/api/uploads/')) return value;
-  if (value.startsWith('api/uploads/')) return `/${value}`;
-  if (value.startsWith('/uploads/')) return `/api${value}`;
-  if (value.startsWith('uploads/')) return `/api/${value}`;
+  if (value.startsWith('/api/uploads/')) return assetUrl(value);
+  if (value.startsWith('api/uploads/')) return assetUrl(`/${value}`);
+  if (value.startsWith('/uploads/')) return assetUrl(`/api${value}`);
+  if (value.startsWith('uploads/')) return assetUrl(`/api/${value}`);
 
   return value.startsWith('/') ? value : `/${value}`;
 }

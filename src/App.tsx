@@ -7,6 +7,7 @@ import Community from './pages/Community';
 import Profile from './pages/Profile';
 import EditProfile from './pages/EditProfile';
 import Settings from './pages/Settings';
+import InsightDraftSettings from './pages/InsightDraftSettings';
 import Gallery from './pages/Gallery';
 import Walk from './pages/Walk';
 import OnThisDay from './pages/OnThisDay';
@@ -30,6 +31,7 @@ import {
   ensurePwaPushSubscription,
   getServerNotificationPreferences,
   getRandomDailyReminderBody,
+  isNativeAndroid,
   scheduleDailyReminder,
   sendBrowserNotification,
   updateServerNotificationPreferences,
@@ -158,6 +160,8 @@ function getDailyReminderStorageKey(date: string, reminderTime: string): string 
 }
 
 async function sendDailyReminderIfNeeded(): Promise<void> {
+  if (isNativeAndroid()) return;
+
   const settings = settingsService.getSettings();
   if (!settings.reminderEnabled) return;
 
@@ -264,11 +268,19 @@ async function syncExistingNotificationPreferences(): Promise<void> {
   const settings = settingsService.getSettings();
   const socialNotifyEnabled = localStorage.getItem('setting_notify_enabled') !== 'false';
   const friendRequestNotifyEnabled = localStorage.getItem('setting_friend_request_enabled') !== 'false';
+  const preference = await getServerNotificationPreferences();
+
+  if (isNativeAndroid()) {
+    if (preference?.dailyReminderEnabled) {
+      await updateServerNotificationPreferences({ dailyReminderEnabled: false });
+    }
+    return;
+  }
+
   const wantsPush = settings.reminderEnabled || socialNotifyEnabled || friendRequestNotifyEnabled;
   if (!wantsPush) return;
 
   await ensurePwaPushSubscription();
-  const preference = await getServerNotificationPreferences();
   if (settings.reminderEnabled && preference && !preference.dailyReminderEnabled) {
     await updateServerNotificationPreferences({
       dailyReminderEnabled: true,
@@ -340,6 +352,7 @@ export default function App() {
             <Route path="on-this-day" element={<OnThisDay />} />
             <Route path="trash" element={<Trash />} />
             <Route path="settings" element={<Settings />} />
+            <Route path="settings/insight-draft" element={<InsightDraftSettings />} />
             <Route path="help" element={<Help />} />
             <Route path="search" element={<Search />} />
             <Route path="login" element={<Login />} />

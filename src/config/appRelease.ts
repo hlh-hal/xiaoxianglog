@@ -1,24 +1,31 @@
 export type AppRelease = {
   version: string;
+  versionCode: number;
   releasedAt: string;
   downloadUrl: string;
   highlights: string[];
   fixes: string[];
 };
 
-export const currentVersion = '0.0.0';
+const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+
+export const currentVersion = '1.0.3';
+export const currentVersionCode = 4;
+export const updateManifestUrl = viteEnv?.VITE_APP_UPDATE_URL || 'https://hlh-hal.github.io/xiaoxianglog/app-update.json';
 
 export const latestRelease: AppRelease = {
-  version: '0.1.0',
-  releasedAt: '2026-06-07',
-  downloadUrl: '',
+  version: '1.0.3',
+  versionCode: 4,
+  releasedAt: '2026-06-08',
+  downloadUrl: 'https://github.com/hlh-hal/xiaoxianglog/releases/latest/download/xiaoxiang-log-latest.apk',
   highlights: [
-    '新增应用更新公告，打开首页时可以看到新版说明。',
-    '首页顶部新增常驻更新入口，暂时不更新时也能随时回到公告。',
-    '公告支持展示更新内容、修复内容和新版下载入口。',
+    'Android 每日写日记提醒现在只保留一条系统通知。',
+    'Android 端会自动关闭旧版本遗留的服务端每日 Web Push，避免同一时间重复提醒。',
+    '点赞、评论、好友申请等互动通知不受影响。',
   ],
   fixes: [
-    '补齐版本更新提醒流程，避免用户不知道有新版可下载。',
-    '下载地址未配置时会给出提示，不会跳到无效页面。',
+    '修复 Android 原生定时提醒和前端每日提醒兜底同时触发，导致一次弹出两条提醒的问题。',
+    '修复 Android 设置页开启每日提醒时误走 PWA Push 订阅流程的问题。',
+    '递增 Android versionCode，确保已安装旧版的用户可以覆盖更新。',
   ],
 };

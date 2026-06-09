@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import {
   DAILY_ECHO_SYSTEM_PROMPT,
+  buildPromptMemoryPack,
+  buildEchoHotMemoryContextForEcho,
   buildDailyEchoUserPrompt,
   countDailyEchoAnchorHits,
   extractDiaryEchoAnchors,
   isVagueEchoContent,
   validateDailyEchoContent,
 } from '../src/services/aiService';
+import { createEmptyInsightDraft, type DiaryEntry } from '../src/services/diaryService';
 import { parseDailyEchoContent } from '../src/utils/dailyEchoQuote';
 
 const screenshotDiaryText = `开心的事：
@@ -50,11 +53,15 @@ test('uses dedicated daily echo system prompt instead of gentle style compositio
   assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('用户日志分析助手'));
   assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('用户可信赖的成长伙伴'));
   assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('一面温暖而清晰的镜子'));
-  assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('洞察草稿'));
+  assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('不是在写一段温柔评论'));
+  assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('【内部洞察草稿】'));
+  assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('核心追问'));
+  assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('隐藏需求'));
+  assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('从……走向……'));
   assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('用户可见回声'));
   assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('最终只输出“今日回声”和“用户可见回声”'));
   assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('分享金句'));
-  assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('不要输出给用户'));
+  assert.ok(DAILY_ECHO_SYSTEM_PROMPT.includes('禁止输出内部洞察草稿'));
   assert.equal(DAILY_ECHO_SYSTEM_PROMPT.includes('现在的风格是「温柔陪伴」'), false);
 });
 
@@ -70,7 +77,114 @@ test('user prompt keeps diary details, anchors, and 600 char hard limit', () => 
   assert.ok(prompt.includes('今日回声：'));
   assert.ok(prompt.includes('用户可见回声：'));
   assert.ok(prompt.includes('12-24 字'));
-  assert.ok(prompt.includes('不要输出洞察草稿'));
+  assert.ok(prompt.includes('内部洞察草稿'));
+  assert.ok(prompt.includes('今日主线'));
+  assert.ok(prompt.includes('核心追问'));
+  assert.ok(prompt.includes('情绪底色'));
+  assert.ok(prompt.includes('隐藏需求'));
+  assert.ok(prompt.includes('人格特质'));
+  assert.ok(prompt.includes('从……走向……'));
+  assert.ok(prompt.includes('你不是在……而是在……'));
+  assert.ok(prompt.includes('必须指出用户真正卡住的地方'));
+  assert.ok(prompt.includes('如果回复只是'));
+  assert.ok(prompt.includes('不要输出内部理解或内部洞察草稿'));
+});
+
+test('user prompt does not inject cold insight draft directly', () => {
+  const draft = createEmptyInsightDraft(new Date('2026-06-07T12:00:00.000Z'));
+  draft.identity.selfPerception = '我是一个会通过复盘校准自己的人';
+  draft.patterns.recurringThemes = ['产品判断', '写作节奏'];
+  draft.recentContext.ongoingStruggle = '担心回声太像分析模块，不够自然';
+  draft.meta.version = 3;
+  draft.meta.diaryCount = 12;
+  draft.meta.confidence = 0.74;
+  const recentEntry: DiaryEntry = {
+    id: 'recent',
+    content: '<p>昨天也在想回声要更像老朋友，而不是报告。</p>',
+    images: [],
+    createdAt: '2026-06-06T08:00:00.000Z',
+    updatedAt: '2026-06-06T08:00:00.000Z',
+    diaryDate: '2026-06-06',
+    status: 'active',
+  };
+
+  const prompt = buildDailyEchoUserPrompt(diaryText, '2026-06-07', 0, '', draft, [recentEntry]);
+
+  assert.equal(prompt.includes('我是一个会通过复盘校准自己的人'), false);
+  assert.equal(prompt.includes('产品判断'), false);
+  assert.equal(prompt.includes('担心回声太像分析模块'), false);
+  assert.equal(prompt.includes('潜台词'), false);
+  assert.equal(prompt.includes('长期洞察索引'), false);
+  assert.equal(prompt.includes('用户画像'), false);
+});
+
+test('user prompt injects hot memory only, without cold-layer whisper', () => {
+  const draft = createEmptyInsightDraft(new Date('2026-06-07T12:00:00.000Z'));
+  draft.recentContext.lastInsight = '最近在把回声从功能推进成真正的陪伴。';
+  draft.meta.version = 2;
+  draft.meta.diaryCount = 8;
+  const hotMemory = {
+    version: 3,
+    seed: '正在打磨小象回声',
+    updatedAt: '2026-06-08T08:00:00.000Z',
+    entries: [
+      {
+        id: 'hot-1',
+        content: '最近反复在调小象回声，希望它记得用户正在变化的地方。',
+        source: 'ai_inferred' as const,
+        sourceDiaryIds: ['diary-1'],
+        createdAt: '2026-06-07T08:00:00.000Z',
+        lastReinforcedAt: '2026-06-08T08:00:00.000Z',
+        reinforceCount: 2,
+        status: 'active' as const,
+        kind: 'theme' as const,
+        visibility: 'direct' as const,
+        sensitivity: 'low' as const,
+        userFeedback: 'unreviewed' as const,
+        counterEvidenceDiaryIds: [],
+      },
+    ],
+  };
+
+  const hotContext = buildEchoHotMemoryContextForEcho(hotMemory, screenshotDiaryText);
+  const prompt = buildDailyEchoUserPrompt(screenshotDiaryText, '2026-06-08', 0, '', draft, [], hotMemory);
+
+  assert.ok(hotContext.includes('内部连续性线索'));
+  assert.ok(prompt.includes('最近反复在调小象回声'));
+  assert.equal(prompt.includes('最近在把回声从功能推进成真正的陪伴'), false);
+  assert.equal(prompt.includes('潜台词'), false);
+  assert.equal(prompt.includes('长期洞察索引'), false);
+  assert.equal(prompt.includes('用户画像'), false);
+  assert.equal(prompt.includes('参考模块'), false);
+});
+
+test('prompt memory pack skips unrelated hot memory', () => {
+  const hotMemory = {
+    version: 1,
+    seed: '正在打磨回声',
+    updatedAt: '2026-06-08T08:00:00.000Z',
+    entries: [
+      {
+        id: 'hot-unrelated',
+        content: '最近在练习销售成交和产品优惠介绍。',
+        source: 'ai_inferred' as const,
+        sourceDiaryIds: ['diary-1'],
+        createdAt: '2026-06-07T08:00:00.000Z',
+        lastReinforcedAt: '2026-06-08T08:00:00.000Z',
+        reinforceCount: 2,
+        status: 'active' as const,
+        kind: 'theme' as const,
+        visibility: 'direct' as const,
+        sensitivity: 'low' as const,
+        userFeedback: 'unreviewed' as const,
+        counterEvidenceDiaryIds: [],
+      },
+    ],
+  };
+
+  const pack = buildPromptMemoryPack('今天午睡时室友调低声音，感觉被照顾。', hotMemory, new Date('2026-06-09T08:00:00.000Z'));
+  assert.equal(pack.context, '');
+  assert.deepEqual(pack.selectedEntryIds, []);
 });
 
 test('extracts concrete anchors from diary details', () => {
@@ -93,6 +207,22 @@ test('accepts natural rewritten echo for screenshot diary details', () => {
   const anchors = extractDiaryEchoAnchors(screenshotDiaryText);
   assert.ok(countDailyEchoAnchorHits(content, anchors) >= 2, anchors.join(','));
   assert.equal(parseDailyEchoContent(validateDailyEchoContent(content, screenshotDiaryText).content).body, content);
+});
+
+test('accepts sales practice echo grounded in concrete diary details', () => {
+  const salesPracticeDiaryText = `开心的事：今天做销售练习时，让AI模拟客户成交时，我有那么一瞬间的爽感，可能源于做成事的成就感，
+
+充实的事：今天下午做销售练习，一个好销售第一步是对自己的产品了解，产品是什么，可以给哪些优惠，这是售卖的基础，第二步，客户可能都不知道自己想要什么，我们得先去挖掘需求，然后给价值匹配，之后打消疑虑，引导成交。在这个过程中，给予鼓励，发现她积极的点，或许可以说提供情绪价值
+
+感谢的人：父母，母亲早上给我做饭，关心我是否到校，父亲送我上车。唉，虽然很平常，平凡的父母没有给我像卡哥那种专业的指导，可是尽力再给我支持`;
+  const content = '今天你在销售练习里抓到了一种做成事的爽感，也开始明白销售不是急着成交，而是先理解产品、挖掘需求，再做价值匹配。你也看见父母做饭、关心你到校、送你上车，那些平凡的支持没有专业指导那么显眼，却一直托着你从被照顾走向更主动地理解人。';
+  const anchors = extractDiaryEchoAnchors(salesPracticeDiaryText);
+
+  assert.ok(anchors.some(anchor => /销售练习/.test(anchor)), anchors.join(','));
+  assert.ok(anchors.some(anchor => /挖掘需求|价值匹配/.test(anchor)), anchors.join(','));
+  assert.ok(anchors.some(anchor => /父母|母亲/.test(anchor)), anchors.join(','));
+  assert.ok(countDailyEchoAnchorHits(content, anchors) >= 2, anchors.join(','));
+  assert.equal(parseDailyEchoContent(validateDailyEchoContent(content, salesPracticeDiaryText).content).body, content);
 });
 
 test('parses today quote and visible echo without leaking quote into body', () => {
@@ -143,6 +273,15 @@ test('rejects provider-truncated echo even if it has text', () => {
     'length',
   );
   assert.equal(result.reason, 'truncated');
+});
+
+test('rejects visible echo that leaks memory mechanics', () => {
+  const result = validateDailyEchoContent(
+    '我记得你之前也提到过小象回声，所以根据你的长期洞察来看，你正在寻找更稳定的自己。',
+    screenshotDiaryText,
+  );
+  assert.equal(result.content, '');
+  assert.equal(result.reason, 'memory-leak');
 });
 
 test('accepts short diary echo with one concrete anchor', () => {

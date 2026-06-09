@@ -5,6 +5,8 @@ export const WRITING_ACTIVITY_WINDOW_MS = 30_000;
 export type WritingActivityState = {
   elapsedMs: number;
   lastInputAt: number | null;
+  sessionStartedAt: number | null;
+  sessionEndedAt: number | null;
 };
 
 export type DailyEchoCompletionStats = {
@@ -29,6 +31,8 @@ export function createWritingActivityState(elapsedMs = 0): WritingActivityState 
   return {
     elapsedMs: Math.max(0, elapsedMs),
     lastInputAt: null,
+    sessionStartedAt: null,
+    sessionEndedAt: null,
   };
 }
 
@@ -41,12 +45,16 @@ export function recordWritingInput(
     return {
       ...state,
       lastInputAt: timestamp,
+      sessionStartedAt: state.sessionStartedAt ?? timestamp,
+      sessionEndedAt: null,
     };
   }
 
   return {
     elapsedMs: state.elapsedMs + Math.max(0, Math.min(timestamp - state.lastInputAt, activityWindowMs)),
     lastInputAt: timestamp,
+    sessionStartedAt: state.sessionStartedAt ?? timestamp,
+    sessionEndedAt: null,
   };
 }
 
@@ -60,13 +68,24 @@ export function pauseWritingActivity(
   return {
     elapsedMs: state.elapsedMs + Math.max(0, Math.min(timestamp - state.lastInputAt, activityWindowMs)),
     lastInputAt: null,
+    sessionStartedAt: state.sessionStartedAt,
+    sessionEndedAt: timestamp,
   };
 }
 
 export function getActiveWritingMinutes(state: WritingActivityState, timestamp = Date.now()): number {
   const finalized = pauseWritingActivity(state, timestamp);
-  if (finalized.elapsedMs <= 0) return 0;
-  return Math.max(1, Math.floor(finalized.elapsedMs / 60_000));
+  const activeMinutes = finalized.elapsedMs > 0 ? Math.floor(finalized.elapsedMs / 60_000) : 0;
+  const sessionEndedAt = finalized.sessionEndedAt ?? timestamp;
+  const sessionElapsedMs = finalized.sessionStartedAt === null
+    ? 0
+    : Math.max(0, sessionEndedAt - finalized.sessionStartedAt);
+  const sessionMinutes = finalized.sessionStartedAt === null
+    ? 0
+    : Math.floor(sessionElapsedMs / 60_000);
+  const minutes = Math.max(activeMinutes, sessionMinutes);
+  if (minutes <= 0 && finalized.elapsedMs <= 0 && sessionElapsedMs <= 0) return 0;
+  return Math.max(1, minutes);
 }
 
 export function getActiveWritingSeconds(state: WritingActivityState, timestamp = Date.now()): number {

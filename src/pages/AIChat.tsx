@@ -11,15 +11,11 @@ import Markdown from 'react-markdown';
 import { CanvasIcon, IconStyle } from '../components/CanvasIcon';
 
 const MODEL_LIST = [
-  { id: 'xiaomi-mimo',                    label: 'Xiaomi MiMo'      },
-  { id: 'LongCat-Flash-Lite',             label: 'LongCat Lite'     },
-  { id: 'LongCat-Flash-Thinking-2601',    label: 'LongCat Thinking' }
+  { id: 'xiaomi-mimo', label: 'Xiaomi MiMo' },
 ];
 
 const DEFAULT_MODEL_TIMEOUT_MS = 45000;
-const MODEL_TIMEOUT_MS: Record<string, number> = {
-  'LongCat-Flash-Thinking-2601': 120000,
-};
+const MODEL_TIMEOUT_MS: Record<string, number> = {};
 
 function extractAnswer(rawText: string): string {
   // Remove all <think>...</think> paired blocks, and any unclosed <think> block at the end (for streaming)
@@ -31,11 +27,11 @@ function getModelTimeoutMs(modelId: string) {
 }
 
 function getTimeoutMessage(modelId: string) {
-  if (modelId === 'LongCat-Flash-Thinking-2601') {
-    return 'LongCat Thinking 响应较慢，本次等待超时。你可以稍后再试，或先切换到 LongCat Lite / Xiaomi MiMo。';
-  }
-
   return 'AI 响应超时，请稍后再试。';
+}
+
+function getAvailableModelId(modelId: string | null) {
+  return MODEL_LIST.some(model => model.id === modelId) ? modelId! : 'xiaomi-mimo';
 }
 
 function createId() {
@@ -72,7 +68,9 @@ export default function AIChat() {
   const [historySessions, setHistorySessions] = useState<ChatSession[]>([]);
   const [historySearchKeyword, setHistorySearchKeyword] = useState('');
   const [selectedModel, setSelectedModel] = useState(() => {
-    return localStorage.getItem('preferred_ai_model') || 'xiaomi-mimo';
+    const modelId = getAvailableModelId(localStorage.getItem('preferred_ai_model'));
+    localStorage.setItem('preferred_ai_model', modelId);
+    return modelId;
   });
   const [isModelSheetVisible, setIsModelSheetVisible] = useState(false);
   const [isModelSheetMounted, setIsModelSheetMounted] = useState(false);
@@ -1360,11 +1358,23 @@ ${state.echoText}`);
             style={{ 
               transform: isModelSheetVisible ? 'translateY(0)' : 'translateY(100%)',
               backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF',
-              paddingBottom: 'var(--app-safe-bottom)',
+              paddingBottom: 'max(var(--app-safe-bottom), 20px)',
+              minHeight: '236px',
               zIndex: 160
             }}
           >
-            <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: isDark ? '#3A3A3C' : '#F2F2F7' }}>
+            <div
+              style={{
+                width: 36,
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.12)',
+                margin: '12px auto 0',
+                flexShrink: 0,
+              }}
+            />
+
+            <div className="flex items-center justify-between px-6 pt-5 pb-4">
               <h3 className="font-headline font-semibold text-lg" style={{ color: isDark ? '#F2F2F7' : '#1C1C1E' }}>选择模型</h3>
               <button 
                 onClick={() => {
@@ -1380,7 +1390,13 @@ ${state.echoText}`);
               </button>
             </div>
 
-            <div className="flex flex-col py-2">
+            <div
+              className="flex flex-col"
+              style={{
+                gap: '10px',
+                padding: '8px 16px 0',
+              }}
+            >
               {MODEL_LIST.map(model => (
                 <button
                   key={model.id}
@@ -1390,10 +1406,18 @@ ${state.echoText}`);
                     setIsModelSheetVisible(false);
                     setTimeout(() => setIsModelSheetMounted(false), 300);
                   }}
-                  className="flex items-center justify-between px-6 py-4 transition-colors"
-                  style={{ backgroundColor: selectedModel === model.id ? (isDark ? 'rgba(68,103,51,0.15)' : 'rgba(68,103,51,0.08)') : 'transparent' }}
+                  className="flex items-center justify-between transition-colors"
+                  style={{
+                    minHeight: '72px',
+                    borderRadius: '18px',
+                    padding: '0 18px 0 20px',
+                    backgroundColor: selectedModel === model.id
+                      ? (isDark ? 'rgba(68,103,51,0.18)' : 'rgba(68,103,51,0.08)')
+                      : (isDark ? '#2C2C2E' : '#F7F8F5'),
+                    border: `1px solid ${selectedModel === model.id ? 'rgba(68,103,51,0.24)' : (isDark ? '#3A3A3C' : '#ECEDE8')}`,
+                  }}
                 >
-                  <span style={{ fontSize: '16px', color: isDark ? '#F2F2F7' : '#1C1C1E', fontWeight: selectedModel === model.id ? 600 : 400 }}>
+                  <span style={{ fontSize: '17px', color: isDark ? '#F2F2F7' : '#1C1C1E', fontWeight: 600 }}>
                     {model.label}
                   </span>
                   {selectedModel === model.id && (

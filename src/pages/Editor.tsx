@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { stripAllMarkdown } from '../lib/utils';
 import { Check, Share, Copy, MoreVertical, Image as ImageIcon, Undo, Redo, Highlighter, Bold, Quote, List, ListOrdered, X, ArrowLeft, Trash2, History, FileText, XCircle, ChevronRight, Plus, Star, Download, Palette, Minimize2, Maximize2 } from 'lucide-react';
-import { diaryService, DiaryEntry, DiaryTemplate, EditHistory, DailyEcho } from '../services/diaryService';
+import { diaryService, DiaryEntry, DiaryTemplate, EditHistory, DailyEcho, isEmptyInsightDraft } from '../services/diaryService';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -31,7 +31,7 @@ import { AppToast } from '../components/AppToast';
 import { SafeImage } from '../components/SafeImage';
 import { settingsService } from '../services/settingsService';
 import { createClientId } from '../utils/id';
-import { generateDiaryEcho } from '../services/aiService';
+import { ensureEchoHotMemoryUpdated, ensureInsightDraftUpdated, generateDiaryEcho } from '../services/aiService';
 import { DailyEchoExportCard, DailyEchoFloatingCard } from '../components/DailyEchoCard';
 import {
   type DailyEchoCompletionStats,
@@ -741,6 +741,7 @@ export default function Editor() {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [inlineImageToolbar, setInlineImageToolbar] = useState<InlineImageToolbarState | null>(null);
   const [previewImagesOverride, setPreviewImagesOverride] = useState<string[] | null>(null);
+  const [isTextSelectionActiveState, setIsTextSelectionActiveState] = useState(false);
 
   const previewHashActive = location.hash === '#preview';
   const [displayIndex, setDisplayIndex] = useState<number | null>(null);
@@ -1102,6 +1103,7 @@ export default function Editor() {
 
   const stopTextSelectionScrollGuard = useCallback(() => {
     const guard = textSelectionScrollGuardRef.current;
+    setIsTextSelectionActiveState(false);
     if (!guard) return;
 
     if (guard.frame !== null) {
@@ -1175,51 +1177,44 @@ export default function Editor() {
     return rects.length > 0 ? rects : null;
   }, []);
 
-  const isSelectionInsideScrollSafeArea = useCallback((rects: DOMRect[]) => {
+  const clampTextSelectionBlankScroll = useCallback(() => {
     const scrollEl = editorScrollRef.current;
-    if (!scrollEl) return false;
+    const editorDom = editorInstanceRef.current?.view.dom as HTMLElement | undefined;
+    if (!scrollEl || !editorDom) return false;
 
     const containerRect = scrollEl.getBoundingClientRect();
+    const contentRect = editorDom.getBoundingClientRect();
     const visualViewport = window.visualViewport;
     const visualTop = visualViewport?.offsetTop ?? 0;
     const visualBottom = visualViewport
       ? visualViewport.offsetTop + visualViewport.height
       : window.innerHeight;
-    const topBoundary = Math.max(containerRect.top, visualTop) + 76;
-    const bottomInset = keyboardInset > 0 ? 72 : 140;
-    const bottomBoundary = Math.min(containerRect.bottom, visualBottom) - bottomInset;
+    const visibleTop = Math.max(containerRect.top, visualTop);
+    const visibleBottom = Math.min(containerRect.bottom, visualBottom);
+    const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+    if (visibleHeight <= 0) return false;
 
-    if (bottomBoundary <= topBoundary) return false;
+    const contentBottomInScroll = contentRect.bottom - containerRect.top + scrollEl.scrollTop;
+    const bottomRoom = keyboardInset > 0 ? 120 : 160;
+    const minVisibleContentBottom = Math.max(160, visibleHeight - bottomRoom);
+    const maxUsefulScrollTop = Math.max(0, contentBottomInScroll - minVisibleContentBottom);
 
-    return rects.every(rect => (
-      rect.top >= topBoundary && rect.bottom <= bottomBoundary
-    ));
+    if (scrollEl.scrollTop > maxUsefulScrollTop + 24) {
+      scrollEl.scrollTop = maxUsefulScrollTop;
+      return true;
+    }
+
+    return false;
   }, [keyboardInset]);
 
   const restoreTextSelectionScrollGuard = useCallback(() => {
     const guard = textSelectionScrollGuardRef.current;
-    const scrollEl = editorScrollRef.current;
-    if (!guard || !scrollEl) return false;
+    if (!guard) return false;
 
     const rects = getEditorTextSelectionRects();
-    if (!rects) return false;
-
-    if (!isSelectionInsideScrollSafeArea(rects)) {
-      return true;
-    }
-
-    if (scrollEl.scrollTop !== guard.scrollTop) {
-      scrollEl.scrollTop = guard.scrollTop;
-    }
-    if (scrollEl.scrollLeft !== guard.scrollLeft) {
-      scrollEl.scrollLeft = guard.scrollLeft;
-    }
-    if (window.scrollX !== guard.windowScrollX || window.scrollY !== guard.windowScrollY) {
-      window.scrollTo(guard.windowScrollX, guard.windowScrollY);
-    }
-
-    return true;
-  }, [getEditorTextSelectionRects, isSelectionInsideScrollSafeArea]);
+    const clamped = clampTextSelectionBlankScroll();
+    return Boolean(rects) || clamped;
+  }, [clampTextSelectionBlankScroll, getEditorTextSelectionRects]);
 
   const scheduleTextSelectionScrollGuard = useCallback(() => {
     const guard = textSelectionScrollGuardRef.current;
@@ -1258,9 +1253,14 @@ export default function Editor() {
       window.clearTimeout(guard.releaseTimer);
     }
     guard.releaseTimer = window.setTimeout(() => {
+      if (getEditorTextSelectionRects()) {
+        guard.releaseTimer = null;
+        setIsTextSelectionActiveState(true);
+        return;
+      }
       stopTextSelectionScrollGuard();
     }, delay);
-  }, [stopTextSelectionScrollGuard]);
+  }, [getEditorTextSelectionRects, stopTextSelectionScrollGuard]);
 
   const isEditorTextSelectionActive = useCallback(() => (
     getEditorTextSelectionRects() !== null
@@ -1289,6 +1289,8 @@ export default function Editor() {
 
     const hasSelection = isEditorTextSelectionActive();
     if (hasSelection) {
+      setIsTextSelectionActiveState(true);
+      stopInputScrollLock();
       scheduleTextSelectionScrollGuard();
       return true;
     }
@@ -1310,15 +1312,23 @@ export default function Editor() {
       ensureTextSelectionScrollGuard(null);
     }
 
+    setIsTextSelectionActiveState(true);
+    stopInputScrollLock();
     scheduleTextSelectionScrollGuard();
     releaseTextSelectionScrollGuard();
     return isEditorTextSelectionActive();
-  }, [ensureTextSelectionScrollGuard, isEditorTextSelectionActive, releaseTextSelectionScrollGuard, scheduleTextSelectionScrollGuard]);
+  }, [ensureTextSelectionScrollGuard, isEditorTextSelectionActive, releaseTextSelectionScrollGuard, scheduleTextSelectionScrollGuard, stopInputScrollLock]);
 
   useEffect(() => {
     const handleSelectionChange = () => {
-      if (!isEditingRef.current || !isEditorTextSelectionActive()) return;
+      const hasSelection = isEditingRef.current && isEditorTextSelectionActive();
+      setIsTextSelectionActiveState(hasSelection);
+      if (!hasSelection) {
+        stopTextSelectionScrollGuard();
+        return;
+      }
 
+      stopInputScrollLock();
       ensureTextSelectionScrollGuard(null);
       scheduleTextSelectionScrollGuard();
       releaseTextSelectionScrollGuard(1400);
@@ -1337,7 +1347,7 @@ export default function Editor() {
       document.removeEventListener('selectionchange', handleSelectionChange);
       scrollEl?.removeEventListener('scroll', handleEditorScroll);
     };
-  }, [ensureTextSelectionScrollGuard, isEditorTextSelectionActive, releaseTextSelectionScrollGuard, scheduleTextSelectionScrollGuard]);
+  }, [ensureTextSelectionScrollGuard, isEditorTextSelectionActive, releaseTextSelectionScrollGuard, scheduleTextSelectionScrollGuard, stopInputScrollLock, stopTextSelectionScrollGuard]);
 
   const finishTapScrollLock = useCallback((e: React.PointerEvent<HTMLElement>) => {
     const lock = tapScrollLockRef.current;
@@ -1555,6 +1565,8 @@ export default function Editor() {
   const [isEchoFloatScrollHidden, setIsEchoFloatScrollHidden] = useState(false);
   const echoFloatScrollTimerRef = useRef<number | null>(null);
   const echoGenerationTokenRef = useRef(0);
+  const autoSavedDailyEchoSignatureRef = useRef('');
+  const insightDraftBackgroundUpdateRef = useRef('');
   const writingActivityRef = useRef(createWritingActivityState());
   const hasWritingActivitySinceManualSaveRef = useRef(false);
   const lastManualSaveSignatureRef = useRef('');
@@ -2825,7 +2837,59 @@ export default function Editor() {
     return updated;
   };
 
-  const startDailyEchoGeneration = async (entry: DiaryEntry, force = false) => {
+  useEffect(() => {
+    if (!dailyEcho || dailyEcho.status !== 'draft' || !dailyEcho.content || !existingJournal) return;
+    const signature = `${existingJournal.id}:${dailyEcho.generatedAt}:${dailyEcho.content}`;
+    if (autoSavedDailyEchoSignatureRef.current === signature) return;
+    autoSavedDailyEchoSignatureRef.current = signature;
+    void persistDailyEcho({ ...dailyEcho, status: 'saved' });
+  }, [dailyEcho, existingJournal]);
+
+  const getDailyEchoInsightContext = async (entry: DiaryEntry) => {
+    const [draft, hotMemory, activeEntries] = await Promise.all([
+      diaryService.getInsightDraft(),
+      diaryService.getEchoHotMemory(),
+      diaryService.getActiveEntries(),
+    ]);
+    return {
+      insightDraft: draft && !isEmptyInsightDraft(draft) ? draft : undefined,
+      hotMemory,
+      recentDiaries: activeEntries
+        .filter(item => item.id !== entry.id)
+        .slice(0, 8),
+    };
+  };
+
+  const scheduleInsightDraftUpdate = (entry: DiaryEntry) => {
+    if (!isAuthenticated() || getEntryPlainText(entry).length < 6) return;
+    const signature = `${entry.id}:${entry.updatedAt}`;
+    if (insightDraftBackgroundUpdateRef.current === signature) return;
+    insightDraftBackgroundUpdateRef.current = signature;
+
+    window.setTimeout(() => {
+      void (async () => {
+        const insightDraftResult = await ensureInsightDraftUpdated(entry, {
+          forceRemotePull: true,
+          source: 'manual-save',
+        });
+        if (insightDraftResult.diagnostics.status === 'failed') {
+          console.warn('Insight draft background update failed:', insightDraftResult.diagnostics.error);
+        }
+
+        const hotMemoryResult = await ensureEchoHotMemoryUpdated(entry);
+        if (hotMemoryResult.status === 'failed') {
+          console.warn('Echo hot memory background update failed:', hotMemoryResult.error);
+        }
+      })().catch(error => {
+        console.warn('Daily echo memory background update failed:', error);
+      });
+    }, 12000);
+  };
+
+  const startDailyEchoGeneration = async (
+    entry: DiaryEntry,
+    force = false,
+  ) => {
     const currentEcho = force ? dailyEcho || entry.dailyEcho : entry.dailyEcho;
     if (!force && (currentEcho?.status === 'saved' || currentEcho?.status === 'dismissed')) return;
     if (!force && currentEcho?.status === 'draft' && currentEcho.content && currentEcho.sourceEntryUpdatedAt === entry.updatedAt) {
@@ -2856,16 +2920,18 @@ export default function Editor() {
 
     try {
       const nextRegenerateCount = force ? (currentEcho?.regenerateCount || 0) + 1 : (currentEcho?.regenerateCount || 0);
-      const content = await generateDiaryEcho(entry, nextRegenerateCount);
+      const { insightDraft, recentDiaries, hotMemory } = await getDailyEchoInsightContext(entry);
+      const content = await generateDiaryEcho(entry, nextRegenerateCount, insightDraft, recentDiaries, hotMemory);
       if (echoGenerationTokenRef.current !== token) return;
-      setDailyEcho({
-        status: 'draft',
+      const nextEcho: DailyEcho = {
+        status: 'saved',
         content,
         styleId: 'gentle',
         generatedAt: new Date().toISOString(),
         sourceEntryUpdatedAt: entry.updatedAt,
         regenerateCount: nextRegenerateCount,
-      });
+      };
+      await persistDailyEcho(nextEcho);
     } catch (error) {
       console.warn('Failed to generate daily echo:', error);
       if (echoGenerationTokenRef.current !== token) return;
@@ -2937,7 +3003,7 @@ export default function Editor() {
   const handleSaveDailyEchoImage = async () => {
     const entry = existingJournalRef.current;
     const echo = dailyEcho;
-    if (!entry || !echo || echo.status !== 'saved') return;
+    if (!entry || !echo || echo.status === 'failed' || echo.status === 'dismissed') return;
 
     setIsEchoImageSaving(true);
     setExporting(true);
@@ -2950,7 +3016,11 @@ export default function Editor() {
     const root = createRoot(wrapper);
 
     try {
-      root.render(<DailyEchoExportCard echo={echo} date={parseDiaryDateKey(entry.diaryDate)} />);
+      const savedEcho = echo.status === 'saved' ? echo : { ...echo, status: 'saved' as const };
+      if (echo.status !== 'saved') {
+        await persistDailyEcho(savedEcho);
+      }
+      root.render(<DailyEchoExportCard echo={savedEcho} date={parseDiaryDateKey(entry.diaryDate)} />);
       await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       const el = wrapper.firstElementChild as HTMLElement | null;
       if (!el) throw new Error('Daily echo export card is not ready');
@@ -2976,7 +3046,7 @@ export default function Editor() {
           }
         } catch (renderError) {
           console.warn('Daily echo html2canvas failed, using fallback canvas:', renderError);
-          canvas = renderDailyEchoFallbackCanvas(echo, parseDiaryDateKey(entry.diaryDate));
+          canvas = renderDailyEchoFallbackCanvas(savedEcho, parseDiaryDateKey(entry.diaryDate));
         }
       } finally {
         restoreColors();
@@ -2984,10 +3054,10 @@ export default function Editor() {
       const dataUrl = canvas.toDataURL('image/png');
       if (!dataUrl || dataUrl === 'data:,') throw new Error('Daily echo image export failed');
       const nextEcho: DailyEcho = {
-        ...echo,
+        ...savedEcho,
         status: 'saved',
         card: {
-          ...echo.card,
+          ...savedEcho.card,
           localDataUrl: dataUrl,
           width: canvas.width,
           height: canvas.height,
@@ -3018,6 +3088,7 @@ export default function Editor() {
       selectedThemeRef.current?.id,
     );
     const pendingWritingSecondsBeforeSave = getActiveWritingSeconds(writingActivityRef.current);
+    const writingActivityForCompletion = pauseWritingActivity(writingActivityRef.current);
     const hadManualWritingActivity = hasWritingActivitySinceManualSaveRef.current
       || pendingWritingSecondsBeforeSave > lastManualSaveWritingSecondsRef.current
       || currentSignatureBeforeSave !== lastManualSaveSignatureRef.current;
@@ -3048,9 +3119,8 @@ export default function Editor() {
             || savedSignature !== lastManualSaveSignatureRef.current;
 
           if (shouldShowCompletionFeedback && countDiaryTextCharacters(savedEntry.content) > 0) {
-            writingActivityRef.current = pauseWritingActivity(writingActivityRef.current);
             const activeEntries = await diaryService.getActiveEntries();
-            const stats = buildDailyEchoCompletionStats(savedEntry, activeEntries, writingActivityRef.current);
+            const stats = buildDailyEchoCompletionStats(savedEntry, activeEntries, writingActivityForCompletion);
             setDailyEchoCompletionStats({
               ...stats,
               activeWritingMinutes: Math.max(1, stats.activeWritingMinutes),
@@ -3061,7 +3131,9 @@ export default function Editor() {
           }
           lastManualSaveSignatureRef.current = savedSignature;
           lastManualSaveWritingSecondsRef.current = savedWritingSeconds;
-          void startDailyEchoGeneration(savedEntry);
+          void startDailyEchoGeneration(savedEntry).finally(() => {
+            scheduleInsightDraftUpdate(savedEntry);
+          });
         }
       }
     } catch (error) {
@@ -3180,9 +3252,17 @@ export default function Editor() {
   const editorBottomBreathingRoom = fixedViewportHeight > 0
     ? `${Math.max(260, Math.round(fixedViewportHeight * 0.4))}px`
     : '40vh';
-  const editorContentBottomPadding = showThemeBar
+  const editorSelectionBottomPadding = showThemeBar
+    ? `calc(180px + env(safe-area-inset-bottom) + ${keyboardInset}px)`
+    : `calc(96px + env(safe-area-inset-bottom) + ${keyboardInset}px)`;
+  const editorContentBottomPadding = isTextSelectionActiveState
+    ? editorSelectionBottomPadding
+    : showThemeBar
     ? `calc(220px + ${editorBottomBreathingRoom} + env(safe-area-inset-bottom) + ${keyboardInset}px)`
     : `calc(160px + ${editorBottomBreathingRoom} + env(safe-area-inset-bottom) + ${keyboardInset}px)`;
+  const editorScrollPaddingBottom = isTextSelectionActiveState
+    ? 'calc(96px + env(safe-area-inset-bottom))'
+    : `calc(120px + ${editorBottomBreathingRoom})`;
   const editorTopFadeMask = [
     'linear-gradient(to bottom',
     'transparent 0px',
@@ -3214,7 +3294,7 @@ export default function Editor() {
     WebkitOverflowScrolling: 'touch',
     WebkitMaskImage: editorTopFadeMask,
     maskImage: editorTopFadeMask,
-    scrollPaddingBottom: `calc(120px + ${editorBottomBreathingRoom})`,
+    scrollPaddingBottom: editorScrollPaddingBottom,
     overflowAnchor: 'none',
   };
   const defaultDisplayImages = getDefaultDisplayImagesForContent(content, images);
@@ -3821,7 +3901,7 @@ export default function Editor() {
         onRegenerate={existingJournal ? handleRegenerateDailyEcho : undefined}
         onDismiss={existingJournal ? handleDismissDailyEcho : undefined}
         onContinueChat={dailyEcho?.content ? handleContinueDailyEchoChat : undefined}
-        onSaveImage={dailyEcho?.status === 'saved' ? handleSaveDailyEchoImage : undefined}
+        onSaveImage={dailyEcho && (dailyEcho.status === 'draft' || dailyEcho.status === 'saved') ? handleSaveDailyEchoImage : undefined}
         onCloseDiary={handleCloseDailyEchoNotebook}
       />
 

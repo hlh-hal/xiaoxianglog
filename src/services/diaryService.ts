@@ -63,6 +63,93 @@ export interface DailyEcho {
   };
 }
 
+export interface InsightDraft {
+  identity: {
+    selfPerception: string;
+    coreValues: string[];
+    lifeStage: string;
+  };
+  patterns: {
+    recurringThemes: string[];
+    emotionalPattern: string;
+    copingStyle: string;
+  };
+  recentContext: {
+    lastInsight: string;
+    ongoingStruggle: string;
+    recentGrowth: string;
+  };
+  meta: {
+    version: number;
+    lastUpdated: Date;
+    diaryCount: number;
+    confidence: number;
+  };
+}
+
+export type EchoMemoryEntrySource = 'user_explicit' | 'user_implicit' | 'ai_inferred';
+export type EchoMemoryEntryStatus = 'active' | 'fading' | 'archived';
+export type EchoMemoryEntryKind =
+  | 'detail'
+  | 'theme'
+  | 'unfinished_question'
+  | 'growth_shift'
+  | 'tone_preference'
+  | 'boundary'
+  | 'sensitive_context';
+export type EchoMemoryEntryVisibility = 'direct' | 'tone_only' | 'never_echo';
+export type EchoMemoryEntrySensitivity = 'low' | 'medium' | 'high';
+export type EchoMemoryEntryFeedback = 'accepted' | 'rejected' | 'suppressed' | 'unreviewed';
+
+export interface EchoMemoryEntry {
+  id: string;
+  content: string;
+  source: EchoMemoryEntrySource;
+  sourceDiaryIds: string[];
+  createdAt: string;
+  lastReinforcedAt: string;
+  reinforceCount: number;
+  status: EchoMemoryEntryStatus;
+  kind: EchoMemoryEntryKind;
+  visibility: EchoMemoryEntryVisibility;
+  sensitivity: EchoMemoryEntrySensitivity;
+  expiresAt?: string;
+  lastUsedInPromptAt?: string;
+  userFeedback: EchoMemoryEntryFeedback;
+  counterEvidenceDiaryIds: string[];
+}
+
+export interface EchoHotMemory {
+  version: number;
+  seed: string;
+  entries: EchoMemoryEntry[];
+  updatedAt: string;
+}
+
+export interface EchoMemorySnapshot {
+  id: string;
+  hotMemory: EchoHotMemory;
+  insightDraft?: InsightDraft | null;
+  createdAt: string;
+  trigger: 'diary_save' | 'manual' | 'migration';
+}
+
+export type InsightDraftInput = Partial<{
+  identity: Partial<InsightDraft['identity']>;
+  patterns: Partial<InsightDraft['patterns']>;
+  recentContext: Partial<InsightDraft['recentContext']>;
+  meta: Partial<Omit<InsightDraft['meta'], 'lastUpdated'> & { lastUpdated: Date | string }>;
+}>;
+
+interface StoredInsightDraft extends Omit<InsightDraft, 'meta'> {
+  id: string;
+  meta: Omit<InsightDraft['meta'], 'lastUpdated'> & { lastUpdated: Date | string };
+}
+
+interface StoredEchoHotMemory extends EchoHotMemory {
+  id: string;
+}
+
 export interface DiaryEntry {
   id: string;
   userId?: string;
@@ -160,13 +247,300 @@ interface DiaryDB extends DBSchema {
     key: string;
     value: StoredFont;
   };
+  insightDrafts: {
+    key: string;
+    value: StoredInsightDraft;
+  };
+  echoHotMemories: {
+    key: string;
+    value: StoredEchoHotMemory;
+  };
+  echoMemorySnapshots: {
+    key: string;
+    value: EchoMemorySnapshot;
+    indexes: { 'by-created': string };
+  };
 }
 
 let dbPromise: Promise<IDBPDatabase<DiaryDB>> | null = null;
 
+const INSIGHT_DRAFT_ID = 'daily-echo';
+export const ECHO_HOT_MEMORY_CONTEXT_LIMIT = 2200;
+export const ECHO_HOT_MEMORY_MAX_ENTRIES = 10;
+export const ECHO_HOT_MEMORY_SEED_MAX_LENGTH = 30;
+export const ECHO_HOT_MEMORY_ENTRY_MAX_LENGTH = 150;
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, numeric));
+}
+
+function normalizeInsightString(value: unknown): string {
+  return typeof value === 'string' ? value.trim().slice(0, 500) : '';
+}
+
+function normalizeInsightStringArray(value: unknown, limit: number): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => normalizeInsightString(item))
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function sliceChars(value: string, maxLength: number): string {
+  return Array.from(value).slice(0, maxLength).join('');
+}
+
+function normalizeInsightDate(value: unknown, fallback: Date): Date {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return new Date(value.getTime());
+  }
+  if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return new Date(fallback.getTime());
+}
+
+export function createEmptyInsightDraft(lastUpdated = new Date()): InsightDraft {
+  return {
+    identity: {
+      selfPerception: '',
+      coreValues: [],
+      lifeStage: '',
+    },
+    patterns: {
+      recurringThemes: [],
+      emotionalPattern: '',
+      copingStyle: '',
+    },
+    recentContext: {
+      lastInsight: '',
+      ongoingStruggle: '',
+      recentGrowth: '',
+    },
+    meta: {
+      version: 0,
+      lastUpdated: new Date(lastUpdated.getTime()),
+      diaryCount: 0,
+      confidence: 0.3,
+    },
+  };
+}
+
+export function getEchoHotMemoryStorageId(userId: string | null = getCurrentUserId()): string {
+  return `daily-echo:${userId || 'anonymous'}`;
+}
+
+function normalizeEchoMemoryIsoDate(value: unknown, fallback: Date): string {
+  return normalizeInsightDate(value, fallback).toISOString();
+}
+
+function normalizeEchoMemorySource(value: unknown): EchoMemoryEntrySource {
+  return value === 'user_explicit' || value === 'user_implicit' || value === 'ai_inferred'
+    ? value
+    : 'ai_inferred';
+}
+
+function normalizeEchoMemoryStatus(value: unknown): EchoMemoryEntryStatus {
+  return value === 'active' || value === 'fading' || value === 'archived'
+    ? value
+    : 'active';
+}
+
+function normalizeEchoMemoryKind(value: unknown): EchoMemoryEntryKind {
+  return value === 'detail'
+    || value === 'theme'
+    || value === 'unfinished_question'
+    || value === 'growth_shift'
+    || value === 'tone_preference'
+    || value === 'boundary'
+    || value === 'sensitive_context'
+    ? value
+    : 'theme';
+}
+
+function normalizeEchoMemoryVisibility(value: unknown): EchoMemoryEntryVisibility {
+  return value === 'direct' || value === 'tone_only' || value === 'never_echo'
+    ? value
+    : 'direct';
+}
+
+function normalizeEchoMemorySensitivity(value: unknown): EchoMemoryEntrySensitivity {
+  return value === 'low' || value === 'medium' || value === 'high'
+    ? value
+    : 'low';
+}
+
+function normalizeEchoMemoryFeedback(value: unknown): EchoMemoryEntryFeedback {
+  return value === 'accepted' || value === 'rejected' || value === 'suppressed' || value === 'unreviewed'
+    ? value
+    : 'unreviewed';
+}
+
+function normalizeEchoMemoryStringArray(value: unknown, limit: number): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value
+    .filter(item => typeof item === 'string' && item.trim())
+    .map(item => item.trim())))
+    .slice(0, limit);
+}
+
+function normalizeOptionalEchoMemoryIsoDate(value: unknown, fallbackDate: Date): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  return normalizeEchoMemoryIsoDate(value, fallbackDate);
+}
+
+export function createEmptyEchoHotMemory(now = new Date()): EchoHotMemory {
+  return {
+    version: 0,
+    seed: '',
+    entries: [],
+    updatedAt: now.toISOString(),
+  };
+}
+
+export function normalizeEchoMemoryEntry(
+  value: Partial<EchoMemoryEntry> | null | undefined,
+  fallbackDate = new Date(),
+): EchoMemoryEntry | null {
+  const content = sliceChars(typeof value?.content === 'string' ? value.content.trim() : '', ECHO_HOT_MEMORY_ENTRY_MAX_LENGTH);
+  if (!content) return null;
+  const id = typeof value?.id === 'string' && value.id.trim() ? value.id.trim() : createClientId();
+  const sourceDiaryIds = normalizeEchoMemoryStringArray(value?.sourceDiaryIds, 12);
+  const counterEvidenceDiaryIds = normalizeEchoMemoryStringArray(value?.counterEvidenceDiaryIds, 12);
+  const sensitivity = normalizeEchoMemorySensitivity(value?.sensitivity);
+
+  return {
+    id,
+    content,
+    source: normalizeEchoMemorySource(value?.source),
+    sourceDiaryIds,
+    createdAt: normalizeEchoMemoryIsoDate(value?.createdAt, fallbackDate),
+    lastReinforcedAt: normalizeEchoMemoryIsoDate(value?.lastReinforcedAt, fallbackDate),
+    reinforceCount: Math.max(0, Math.floor(clampNumber(value?.reinforceCount, 0, Number.MAX_SAFE_INTEGER, 0))),
+    status: normalizeEchoMemoryStatus(value?.status),
+    kind: normalizeEchoMemoryKind(value?.kind),
+    visibility: sensitivity === 'high' ? 'never_echo' : normalizeEchoMemoryVisibility(value?.visibility),
+    sensitivity,
+    expiresAt: normalizeOptionalEchoMemoryIsoDate(value?.expiresAt, fallbackDate),
+    lastUsedInPromptAt: normalizeOptionalEchoMemoryIsoDate(value?.lastUsedInPromptAt, fallbackDate),
+    userFeedback: normalizeEchoMemoryFeedback(value?.userFeedback),
+    counterEvidenceDiaryIds,
+  };
+}
+
+export function normalizeEchoHotMemoryForStorage(value?: Partial<EchoHotMemory> | null, fallbackDate = new Date()): EchoHotMemory {
+  const fallback = createEmptyEchoHotMemory(fallbackDate);
+  const source = value || {};
+  const seenIds = new Set<string>();
+  const entries = (Array.isArray(source.entries) ? source.entries : [])
+    .map(entry => normalizeEchoMemoryEntry(entry, fallbackDate))
+    .filter((entry): entry is EchoMemoryEntry => Boolean(entry))
+    .filter((entry) => {
+      if (seenIds.has(entry.id)) return false;
+      seenIds.add(entry.id);
+      return true;
+    })
+    .sort((a, b) => {
+      if (a.status !== b.status) return a.status === 'active' ? -1 : b.status === 'active' ? 1 : 0;
+      return new Date(b.lastReinforcedAt).getTime() - new Date(a.lastReinforcedAt).getTime();
+    })
+    .slice(0, ECHO_HOT_MEMORY_MAX_ENTRIES);
+
+  return {
+    version: Math.max(0, Math.floor(clampNumber(source.version, 0, Number.MAX_SAFE_INTEGER, fallback.version))),
+    seed: sliceChars(typeof source.seed === 'string' ? source.seed.trim() : '', ECHO_HOT_MEMORY_SEED_MAX_LENGTH),
+    entries,
+    updatedAt: normalizeEchoMemoryIsoDate(source.updatedAt, fallbackDate),
+  };
+}
+
+export function isEmptyEchoHotMemory(value?: Partial<EchoHotMemory> | null): boolean {
+  const memory = normalizeEchoHotMemoryForStorage(value);
+  return !memory.seed && memory.entries.length === 0;
+}
+
+export function normalizeInsightDraftForStorage(value?: InsightDraftInput | null, fallbackDate = new Date()): InsightDraft {
+  const fallback = createEmptyInsightDraft(fallbackDate);
+  const source = value || {};
+
+  return {
+    identity: {
+      selfPerception: normalizeInsightString(source.identity?.selfPerception),
+      coreValues: normalizeInsightStringArray(source.identity?.coreValues, 3),
+      lifeStage: normalizeInsightString(source.identity?.lifeStage),
+    },
+    patterns: {
+      recurringThemes: normalizeInsightStringArray(source.patterns?.recurringThemes, 8),
+      emotionalPattern: normalizeInsightString(source.patterns?.emotionalPattern),
+      copingStyle: normalizeInsightString(source.patterns?.copingStyle),
+    },
+    recentContext: {
+      lastInsight: normalizeInsightString(source.recentContext?.lastInsight),
+      ongoingStruggle: normalizeInsightString(source.recentContext?.ongoingStruggle),
+      recentGrowth: normalizeInsightString(source.recentContext?.recentGrowth),
+    },
+    meta: {
+      version: Math.max(0, Math.floor(clampNumber(source.meta?.version, 0, Number.MAX_SAFE_INTEGER, fallback.meta.version))),
+      lastUpdated: normalizeInsightDate(source.meta?.lastUpdated, fallback.meta.lastUpdated),
+      diaryCount: Math.max(0, Math.floor(clampNumber(source.meta?.diaryCount, 0, Number.MAX_SAFE_INTEGER, fallback.meta.diaryCount))),
+      confidence: Number(clampNumber(source.meta?.confidence, 0, 1, fallback.meta.confidence).toFixed(3)),
+    },
+  };
+}
+
+export function isEmptyInsightDraft(value?: InsightDraftInput | null): boolean {
+  if (!value) return true;
+  const draft = normalizeInsightDraftForStorage(value);
+  return !draft.identity.selfPerception
+    && draft.identity.coreValues.length === 0
+    && !draft.identity.lifeStage
+    && draft.patterns.recurringThemes.length === 0
+    && !draft.patterns.emotionalPattern
+    && !draft.patterns.copingStyle
+    && !draft.recentContext.lastInsight
+    && !draft.recentContext.ongoingStruggle
+    && !draft.recentContext.recentGrowth;
+}
+
+function toStoredInsightDraft(draft: InsightDraftInput): StoredInsightDraft {
+  const normalized = normalizeInsightDraftForStorage(draft);
+  return {
+    id: INSIGHT_DRAFT_ID,
+    identity: normalized.identity,
+    patterns: normalized.patterns,
+    recentContext: normalized.recentContext,
+    meta: {
+      ...normalized.meta,
+      lastUpdated: normalized.meta.lastUpdated.toISOString(),
+    },
+  };
+}
+
+function toStoredEchoHotMemory(memory: Partial<EchoHotMemory>, userId: string | null = getCurrentUserId()): StoredEchoHotMemory {
+  const normalized = normalizeEchoHotMemoryForStorage(memory);
+  return {
+    id: getEchoHotMemoryStorageId(userId),
+    ...normalized,
+  };
+}
+
+export function normalizeEchoMemorySnapshot(snapshot: EchoMemorySnapshot): EchoMemorySnapshot {
+  const now = new Date();
+  return {
+    id: snapshot.id || `echo-memory-snapshot-${Date.now()}`,
+    hotMemory: normalizeEchoHotMemoryForStorage(snapshot.hotMemory, now),
+    insightDraft: snapshot.insightDraft ? normalizeInsightDraftForStorage(snapshot.insightDraft, now) : null,
+    createdAt: normalizeEchoMemoryIsoDate(snapshot.createdAt, now),
+    trigger: snapshot.trigger === 'manual' || snapshot.trigger === 'migration' ? snapshot.trigger : 'diary_save',
+  };
+}
+
 export async function initDB() {
   if (!dbPromise) {
-    dbPromise = openDB<DiaryDB>('ethos-diary-db', 4, {
+    dbPromise = openDB<DiaryDB>('ethos-diary-db', 6, {
       upgrade(db) {
         if (!db.objectStoreNames.contains('entries')) {
           const store = db.createObjectStore('entries', { keyPath: 'id' });
@@ -186,6 +560,16 @@ export async function initDB() {
         }
         if (!db.objectStoreNames.contains('customFonts')) {
           db.createObjectStore('customFonts', { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains('insightDrafts')) {
+          db.createObjectStore('insightDrafts', { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains('echoHotMemories')) {
+          db.createObjectStore('echoHotMemories', { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains('echoMemorySnapshots')) {
+          const snapshotStore = db.createObjectStore('echoMemorySnapshots', { keyPath: 'id' });
+          snapshotStore.createIndex('by-created', 'createdAt');
         }
       },
     });
@@ -521,20 +905,47 @@ async function uploadDailyEchoCardForSync(entry: DiaryEntry): Promise<{ entry: D
 }
 
 function toSyncPayload(entry: DiaryEntry): DiaryEntry {
-  const { syncVersion: _syncVersion, userId: _userId, ...payload } = entry;
-  payload.diaryDate = getDiaryDateKey(payload.diaryDate, new Date());
-  if (payload.dailyEcho == null) {
-    delete (payload as Partial<DiaryEntry>).dailyEcho;
-  } else if (payload.dailyEcho.card) {
-    payload.dailyEcho = {
-      ...payload.dailyEcho,
-      card: {
-        ...payload.dailyEcho.card,
-        localDataUrl: undefined,
-      },
-    };
+  const payload: DiaryEntry = {
+    id: entry.id,
+    title: entry.title,
+    content: entry.content || '',
+    images: filterValidImages(entry.images),
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    diaryDate: getDiaryDateKey(entry.diaryDate, new Date()),
+    status: entry.status,
+  };
+
+  if (entry.trashReason !== undefined) payload.trashReason = entry.trashReason;
+  if (entry.trashedAt !== undefined) payload.trashedAt = entry.trashedAt;
+  if (entry.isPinned !== undefined) payload.isPinned = entry.isPinned;
+  if (entry.isHidden !== undefined) payload.isHidden = entry.isHidden;
+  if (entry.mood !== undefined) payload.mood = entry.mood;
+  if (entry.weather !== undefined) payload.weather = entry.weather;
+  if (entry.tags !== undefined) payload.tags = entry.tags;
+  if (entry.blocks !== undefined) payload.blocks = entry.blocks;
+  if (entry.prompts !== undefined) payload.prompts = entry.prompts;
+  if (entry.backgroundId !== undefined) payload.backgroundId = entry.backgroundId;
+  if (entry.themeId !== undefined) payload.themeId = entry.themeId;
+  if (entry.activeWritingSeconds !== undefined) payload.activeWritingSeconds = entry.activeWritingSeconds;
+
+  if (entry.dailyEcho != null) {
+    payload.dailyEcho = entry.dailyEcho.card
+      ? {
+          ...entry.dailyEcho,
+          card: {
+            ...entry.dailyEcho.card,
+            localDataUrl: undefined,
+          },
+        }
+      : entry.dailyEcho;
   }
-  return payload as DiaryEntry;
+
+  return payload;
+}
+
+export function buildSyncPushPayload(entries: DiaryEntry[]): { entries: DiaryEntry[] } {
+  return { entries: entries.map(toSyncPayload) };
 }
 
 async function saveLocalHistorySnapshot(history: Omit<EditHistory, 'id' | 'summary'>): Promise<void> {
@@ -575,6 +986,9 @@ function mergeHistoryLists(localHistory: EditHistory[], remoteHistory: EditHisto
 }
 
 export const diaryService = {
+  createEmptyInsightDraft,
+  createEmptyEchoHotMemory,
+
   getCachedActiveEntries(): DiaryEntry[] | null {
     return activeEntriesCache ? activeEntriesCache.filter(entry => isEntryForCurrentUser(entry)) : null;
   },
@@ -593,6 +1007,49 @@ export const diaryService = {
     await this.getActiveEntries();
     this.startAutoSync();
     this.triggerSync();
+  },
+
+  async getInsightDraft(): Promise<InsightDraft | undefined> {
+    const db = await initDB();
+    const stored = await db.get('insightDrafts', INSIGHT_DRAFT_ID);
+    return stored ? normalizeInsightDraftForStorage(stored) : undefined;
+  },
+
+  async saveInsightDraft(draft: InsightDraftInput): Promise<InsightDraft> {
+    const db = await initDB();
+    const normalized = normalizeInsightDraftForStorage(draft);
+    await db.put('insightDrafts', toStoredInsightDraft(normalized));
+    return normalized;
+  },
+
+  async clearInsightDraft(): Promise<void> {
+    const db = await initDB();
+    await db.delete('insightDrafts', INSIGHT_DRAFT_ID);
+  },
+
+  async getEchoHotMemory(userId: string | null = getCurrentUserId()): Promise<EchoHotMemory | undefined> {
+    const db = await initDB();
+    const stored = await db.get('echoHotMemories', getEchoHotMemoryStorageId(userId));
+    return stored ? normalizeEchoHotMemoryForStorage(stored) : undefined;
+  },
+
+  async saveEchoHotMemory(memory: Partial<EchoHotMemory>, userId: string | null = getCurrentUserId()): Promise<EchoHotMemory> {
+    const db = await initDB();
+    const stored = toStoredEchoHotMemory(memory, userId);
+    await db.put('echoHotMemories', stored);
+    return normalizeEchoHotMemoryForStorage(stored);
+  },
+
+  async clearEchoHotMemory(userId: string | null = getCurrentUserId()): Promise<void> {
+    const db = await initDB();
+    await db.delete('echoHotMemories', getEchoHotMemoryStorageId(userId));
+  },
+
+  async saveEchoMemorySnapshot(snapshot: EchoMemorySnapshot): Promise<EchoMemorySnapshot> {
+    const db = await initDB();
+    const normalized = normalizeEchoMemorySnapshot(snapshot);
+    await db.put('echoMemorySnapshots', normalized);
+    return normalized;
   },
 
   startAutoSync(): void {
@@ -648,13 +1105,16 @@ export const diaryService = {
     }
 
     const db = await initDB();
-    const tx = db.transaction(['entries', 'templates', 'history', 'chatSessions', 'customFonts'], 'readwrite');
+    const tx = db.transaction(['entries', 'templates', 'history', 'chatSessions', 'customFonts', 'insightDrafts', 'echoHotMemories', 'echoMemorySnapshots'], 'readwrite');
     await Promise.all([
       tx.objectStore('entries').clear(),
       tx.objectStore('templates').clear(),
       tx.objectStore('history').clear(),
       tx.objectStore('chatSessions').clear(),
       tx.objectStore('customFonts').clear(),
+      tx.objectStore('insightDrafts').clear(),
+      tx.objectStore('echoHotMemories').clear(),
+      tx.objectStore('echoMemorySnapshots').clear(),
     ]);
     await tx.done;
 
@@ -766,7 +1226,7 @@ export const diaryService = {
           activeEntriesCache = null;
           localEntriesChanged = true;
         }
-        toPush.push(toSyncPayload(prepared.entry));
+        toPush.push(prepared.entry);
       }
 
       let latestPushServerTime = '';
@@ -775,7 +1235,7 @@ export const diaryService = {
         const batch = toPush.slice(index, index + SYNC_BATCH_SIZE);
         let pushResult: { serverTime: string; results?: { id: string; status: string; reason?: string }[] };
         try {
-          pushResult = await api.post<{ serverTime: string; results?: { id: string; status: string; reason?: string }[] }>('/sync/push', { entries: batch });
+          pushResult = await api.post<{ serverTime: string; results?: { id: string; status: string; reason?: string }[] }>('/sync/push', buildSyncPushPayload(batch));
         } catch (error) {
           const firstIds = batch
             .map(entry => entry.id)

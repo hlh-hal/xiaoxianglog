@@ -23,6 +23,7 @@ import {
   getBrowserNotificationPermission,
   getNotificationUnavailableReason,
   getRandomDailyReminderBody,
+  isNativeAndroid,
   openNotificationPermissionSettings,
   requestBrowserNotificationPermission,
   scheduleDailyReminder,
@@ -143,10 +144,20 @@ export default function Settings() {
       if (!preference) return;
       const notificationAllowed = permission === 'granted';
 
-      setSettings(settingsService.saveSettings({
-        reminderEnabled: preference.dailyReminderEnabled && notificationAllowed,
-        reminderTime: preference.dailyReminderTime,
-      }));
+      if (isNativeAndroid()) {
+        if (preference.dailyReminderEnabled) {
+          updateServerNotificationPreferences({ dailyReminderEnabled: false })
+            .catch(error => console.warn('Failed to disable native duplicate reminder preference:', error));
+        }
+        setSettings(settingsService.saveSettings({
+          reminderTime: preference.dailyReminderTime,
+        }));
+      } else {
+        setSettings(settingsService.saveSettings({
+          reminderEnabled: preference.dailyReminderEnabled && notificationAllowed,
+          reminderTime: preference.dailyReminderTime,
+        }));
+      }
       updateLocalNotificationSetting('setting_notify_enabled', setNotifyEnabled, preference.socialNotifyEnabled && notificationAllowed);
       updateLocalNotificationSetting('setting_friend_request_enabled', setFriendRequestEnabled, preference.friendRequestNotifyEnabled && notificationAllowed);
     };
@@ -160,6 +171,11 @@ export default function Settings() {
     if (pending.type === 'reminder') {
       clearTodayLocalReminderState(settings.reminderTime);
       updateSetting('reminderEnabled', true);
+      if (isNativeAndroid()) {
+        updateServerNotificationPreferences({ dailyReminderEnabled: false })
+          .catch(error => console.warn('Failed to disable duplicate server reminder preference:', error));
+        return;
+      }
       updateServerNotificationPreferences({
         dailyReminderEnabled: true,
         dailyReminderTime: settings.reminderTime,
@@ -256,16 +272,21 @@ export default function Settings() {
     }
 
     const allowed = await ensureNotificationPermission('每日写日记提醒', { type: 'reminder' });
-    const pushReady = allowed ? await syncPushSubscription() : false;
+    const pushReady = isNativeAndroid() ? allowed : (allowed ? await syncPushSubscription() : false);
     updateSetting('reminderEnabled', allowed && pushReady);
     if (allowed && pushReady) {
       clearTodayLocalReminderState(settings.reminderTime);
       await scheduleDailyReminder(settings.reminderTime, REMINDER_NOTIFICATION_TITLE, getRandomDailyReminderBody())
         .catch(error => console.warn('Schedule reminder failed:', error));
-      await updateServerNotificationPreferences({
-        dailyReminderEnabled: true,
-        dailyReminderTime: settings.reminderTime,
-      }).catch(error => console.warn('Failed to sync reminder preference:', error));
+      if (isNativeAndroid()) {
+        await updateServerNotificationPreferences({ dailyReminderEnabled: false })
+          .catch(error => console.warn('Failed to disable duplicate server reminder preference:', error));
+      } else {
+        await updateServerNotificationPreferences({
+          dailyReminderEnabled: true,
+          dailyReminderTime: settings.reminderTime,
+        }).catch(error => console.warn('Failed to sync reminder preference:', error));
+      }
       showToast('写日记提醒已开启');
     }
     } catch (error: any) {
@@ -284,10 +305,15 @@ export default function Settings() {
       clearTodayLocalReminderState(value);
       await scheduleDailyReminder(value, REMINDER_NOTIFICATION_TITLE, getRandomDailyReminderBody())
         .catch(error => console.warn('Schedule reminder failed:', error));
-      await updateServerNotificationPreferences({
-        dailyReminderEnabled: true,
-        dailyReminderTime: value,
-      }).catch(error => console.warn('Failed to sync reminder time:', error));
+      if (isNativeAndroid()) {
+        await updateServerNotificationPreferences({ dailyReminderEnabled: false })
+          .catch(error => console.warn('Failed to disable duplicate server reminder preference:', error));
+      } else {
+        await updateServerNotificationPreferences({
+          dailyReminderEnabled: true,
+          dailyReminderTime: value,
+        }).catch(error => console.warn('Failed to sync reminder time:', error));
+      }
     }
   };
 
@@ -704,7 +730,7 @@ export default function Settings() {
         <div className="shrink-0" style={{ width: '40px', height: '40px' }} />
       </header>
 
-      <main className="app-content-container space-y-8 pt-6">
+      <main className="app-content-container settings-content-container space-y-8 pt-6">
         <section className="space-y-3">
           <SectionTitle title="提醒" />
           <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(47,52,46,0.02)] overflow-hidden">
@@ -796,6 +822,16 @@ export default function Settings() {
               </div>
               <Toggle checked={settings.dailyEchoFloatEnabled} onChange={(value) => updateSetting('dailyEchoFloatEnabled', value)} />
             </div>
+            <button
+              onClick={() => navigate('/settings/insight-draft')}
+              className="w-full flex items-center justify-between gap-4 px-5 py-4 border-b border-surface-container/50 active:bg-surface-container-low transition-colors text-left"
+            >
+              <div className="flex min-w-0 flex-1 flex-col items-start">
+                <span className="text-[15px] font-medium">小象回声记忆</span>
+                <span className="text-[11px] text-on-surface-variant/70">本机保存，可查看、修正近期记忆</span>
+              </div>
+              <ChevronRight className="w-5 h-5 text-outline-variant" />
+            </button>
             <div className="flex items-center justify-between gap-4 px-5 py-4">
               <div className="flex min-w-0 flex-1 flex-col items-start">
                 <span className="text-[15px] font-medium">图片插入正文</span>

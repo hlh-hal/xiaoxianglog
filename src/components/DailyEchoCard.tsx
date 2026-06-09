@@ -72,7 +72,6 @@ function DailyEchoPanel({
   echo,
   isGenerating = false,
   isSavingImage = false,
-  onSave,
   onRegenerate,
   onDismiss,
   onContinueChat,
@@ -92,11 +91,6 @@ function DailyEchoPanel({
             {isGenerating ? '小象正在为今天提炼一句回声' : quote}
           </p>
         </div>
-        {isSaved && (
-          <span className="mt-2 inline-flex rounded-full bg-[#446733]/8 px-2.5 py-1 text-[11px] text-[#446733]">
-            已收进这篇
-          </span>
-        )}
       </div>
 
       {isGenerating ? (
@@ -116,16 +110,7 @@ function DailyEchoPanel({
 
       {!isGenerating && (
         <div className="mt-3 flex shrink-0 flex-wrap items-center gap-2">
-          {!isSaved && !isFailed && onSave && (
-            <button
-              type="button"
-              onClick={onSave}
-              className="rounded-full bg-[#446733] px-3.5 py-1.5 text-[12px] font-medium text-white active:scale-95"
-            >
-              收进这篇
-            </button>
-          )}
-          {isSaved && onSaveImage && (
+          {!isFailed && onSaveImage && (
             <button
               type="button"
               onClick={onSaveImage}

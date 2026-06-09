@@ -4,6 +4,7 @@ import { requireAuth, optionalAuth } from '../middleware/auth.js';
 import { cleanText, paramString, positiveInt, queryString, stringArray } from '../utils/request.js';
 import { deleteStoredUrls } from '../lib/objectStorage.js';
 import { sendNotificationPush } from '../lib/push.js';
+import { repairLegacyImageUrls } from '../lib/imageRepair.js';
 
 const router = Router();
 
@@ -37,7 +38,7 @@ function sanitizePublicHtml(value: unknown) {
     .trim();
 }
 
-function formatPost(post: any, likedByMe = false) {
+async function formatPost(post: any, likedByMe = false) {
   return {
     id: post.id,
     user: {
@@ -48,7 +49,7 @@ function formatPost(post: any, likedByMe = false) {
       time: post.createdAt ? formatTime(post.createdAt) : undefined,
     },
     content: post.content,
-    images: parseJsonArray(post.images),
+    images: await repairLegacyImageUrls(parseJsonArray(post.images)),
     viewCount: post.viewCount,
     readCount: post.readCount,
     likes: post._count?.likes || 0,
@@ -105,7 +106,7 @@ router.get('/posts', optionalAuth, async (req: Request, res: Response) => {
       likedPostIds = new Set(likes.map(l => l.postId));
     }
 
-    res.json({ posts: posts.map(p => formatPost(p, likedPostIds.has(p.id))), total, page, limit });
+    res.json({ posts: await Promise.all(posts.map(p => formatPost(p, likedPostIds.has(p.id)))), total, page, limit });
   } catch (err: any) {
     console.error('获取帖子列表失败:', err);
     res.status(500).json({ error: '获取失败' });
@@ -147,8 +148,10 @@ router.get('/posts/:id', optionalAuth, async (req: Request, res: Response) => {
       take: 20,
     });
 
+    const formattedPost = await formatPost({ ...post, viewCount: post.viewCount + 1 }, likedByMe);
+
     res.json({
-      ...formatPost({ ...post, viewCount: post.viewCount + 1 }, likedByMe),
+      ...formattedPost,
       likedUsers: likedUsers.map(l => ({
         id: l.user.id,
         name: l.user.nickname,
@@ -196,7 +199,7 @@ router.post('/posts', requireAuth, async (req: Request, res: Response) => {
       },
     });
 
-    res.status(201).json(formatPost(post));
+    res.status(201).json(await formatPost(post));
   } catch (err: any) {
     console.error('发表帖子失败:', err);
     res.status(500).json({ error: '发表失败' });

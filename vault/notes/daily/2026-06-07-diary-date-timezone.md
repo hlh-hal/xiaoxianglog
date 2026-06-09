@@ -27,3 +27,16 @@
 ## 后续注意
 
 本次不批量迁移历史错位数据，只防止新数据继续错。线上已有错位日志如果需要纠正，应单独做带人工确认或结合 `createdAt` / 正文日期的修复脚本。
+
+## 云端部署
+
+- 2026-06-07 已执行 `npm run build` 和 `server/` 下 `npm run build`。
+- 已通过 `deploy-upload.ps1 -Target front` 上传前端 `dist/`，19/19 文件 OK。线上首页已引用 `assets/index-CTtE4lRx.js` 和 `assets/index-CnskmKfg.css`，两个静态资源返回 200。
+- 为避免覆盖线上 `.env`，后端没有执行全量 `deploy-upload.ps1 -Target back`；已最小范围上传：
+  - `server/dist/routes/diary.*`
+  - `server/dist/routes/sync.*`
+  - `server/src/routes/diary.ts`
+  - `server/src/routes/sync.ts`
+- 已从 FTP 拉回远端 `dist/routes/diary.js` 和 `dist/routes/sync.js` 验证，均包含 `normalizeDiaryDate` / `toLocalDateKey`，且不再包含 `toISOString().slice(0, 10)` 日期归一。
+- 线上 `/api/health` 返回 `build: cpamc-only-20260520`、`pid: 7628`。FTP 不会重启 Node；后端日期修复需要在宝塔/服务器终端重启 `C:\wwwroot\xiaoxiang-server` Node 项目后运行时才会生效。
+- 用户随后已重启后端；复查 `https://www.xiaoxianglog.cn/api/health` 返回 `pid: 2984`，确认新进程已接管。线上首页仍引用 `assets/index-CTtE4lRx.js` / `assets/index-CnskmKfg.css`。

@@ -49,15 +49,19 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+export function resolveAssetUrl(path: string, apiBase = API_BASE): string {
+  if (!path || /^https?:\/\//i.test(path) || path.startsWith('data:')) return path;
+  const baseWithoutApi = apiBase.replace(/\/$/, '').replace(/\/api$/, '');
+  return `${baseWithoutApi}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 function cacheBusted(path: string): string {
   const separator = path.includes('?') ? '&' : '?';
   return `${path}${separator}_ts=${Date.now()}`;
 }
 
 export function assetUrl(path: string): string {
-  if (!path || /^https?:\/\//i.test(path) || path.startsWith('data:')) return path;
-  const baseWithoutApi = API_BASE.replace(/\/api$/, '');
-  return `${baseWithoutApi}${path.startsWith('/') ? path : `/${path}`}`;
+  return resolveAssetUrl(path);
 }
 
 /**

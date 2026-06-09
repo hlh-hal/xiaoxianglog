@@ -35,7 +35,7 @@ export function getRandomDailyReminderBody(): string {
   return DAILY_REMINDER_BODIES[Math.floor(Math.random() * DAILY_REMINDER_BODIES.length)];
 }
 
-function isNativeAndroid(): boolean {
+export function isNativeAndroid(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 }
 
