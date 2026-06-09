@@ -1,15 +1,15 @@
 {
-  "versionName": "1.0.4",
-  "versionCode": 5,
+  "versionName": "1.0.5",
+  "versionCode": 6,
   "releasedAt": "2026-06-09",
   "apkUrl": "https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk",
   "changes": [
-    "Android 原生版侧边栏不再显示“安装到桌面”，界面更符合已安装 App 的使用场景。",
-    "Android 更新下载主地址切换到小象日志自有服务器，国内下载更顺畅，GitHub 保留为备用镜像。"
+    "Android 原生版现在始终启用更新检查，不再被网页域名判断误伤。",
+    "Android 原生版侧边栏不再显示“安装到桌面”，界面更符合已安装 App 的使用场景。"
   ],
   "fixes": [
+    "修复部分 Android 安装包打开首页后没有出现更新公告的问题。",
     "修复 Android 二级页面使用系统右滑返回时直接退到桌面的问题，现在会优先返回上一级页面。",
-    "修复 Android 系统返回键/返回手势未接入 React Router 历史栈的问题。",
-    "保留 v1.0.3 的每日提醒重复通知修复，确保每日写日记提醒只保留一条系统通知。"
+    "保留每日提醒重复通知修复，确保每日写日记提醒只保留一条系统通知。"
   ]
 }
