@@ -2,7 +2,7 @@
   "versionName": "1.0.3",
   "versionCode": 4,
   "releasedAt": "2026-06-08",
-  "apkUrl": "https://github.com/hlh-hal/xiaoxianglog/releases/latest/download/xiaoxiang-log-latest.apk",
+  "apkUrl": "https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk",
   "changes": [
     "Android 每日写日记提醒现在只保留一条系统通知。",
     "Android 端会自动关闭旧版本遗留的服务端每日 Web Push，避免同一时间重复提醒。",
