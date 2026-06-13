@@ -262,7 +262,7 @@ export default function InsightDraftSettings() {
   const insightSummary = formatInsightSummary(insightDraft);
 
   return (
-    <div className="min-h-screen bg-background text-on-surface pb-[calc(32px+env(safe-area-inset-bottom))]">
+    <div className="app-page-scroll h-dvh min-h-0 overflow-y-auto bg-background text-on-surface pb-[calc(4rem+var(--app-safe-bottom))]">
       <header className="sticky top-0 z-20 flex items-center justify-center bg-background/95 px-4 pb-3 pt-[calc(14px+env(safe-area-inset-top))] backdrop-blur">
         <button
           onClick={() => navigate(-1)}

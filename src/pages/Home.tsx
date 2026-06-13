@@ -31,6 +31,41 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastNavigateTime = useRef<number>(0);
+  const journalsRef = useRef<DiaryEntry[]>(journals);
+  const loadVersionRef = useRef(0);
+
+  useEffect(() => {
+    journalsRef.current = journals;
+  }, [journals]);
+
+  const getScrollTop = () => {
+    const container = scrollRef.current;
+    if (container) {
+      return container.scrollTop;
+    }
+    return window.scrollY;
+  };
+
+  const scrollToTop = (top: number, behavior: ScrollBehavior = 'auto') => {
+    const container = scrollRef.current;
+    const safeTop = Math.max(0, top);
+    if (container) {
+      container.scrollTo({ top: safeTop, behavior });
+      return;
+    }
+    window.scrollTo({ top: safeTop, behavior });
+  };
+
+  const getElementScrollTop = (element: Element) => {
+    const container = scrollRef.current;
+    if (container) {
+      const containerRect = container.getBoundingClientRect();
+      const elementRect = element.getBoundingClientRect();
+      return container.scrollTop + elementRect.top - containerRect.top;
+    }
+
+    return window.scrollY + element.getBoundingClientRect().top;
+  };
 
   // Action Menu State
   const [actionMenuJournal, setActionMenuJournal] = useState<DiaryEntry | null>(null);
@@ -41,8 +76,21 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
   const [isDeletingSelected, setIsDeletingSelected] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const loadData = async () => {
+  const loadData = async (options: { allowEmpty?: boolean } = {}) => {
+    const loadVersion = ++loadVersionRef.current;
     const data = await diaryService.getActiveEntries();
+    if (loadVersion !== loadVersionRef.current) return;
+
+    if (!options.allowEmpty && data.length === 0 && journalsRef.current.length > 0) {
+      window.setTimeout(async () => {
+        if (loadVersion !== loadVersionRef.current) return;
+        const confirmed = await diaryService.getActiveEntries();
+        if (loadVersion !== loadVersionRef.current) return;
+        setJournals(confirmed);
+      }, 250);
+      return;
+    }
+
     setJournals(data);
   };
 
@@ -77,9 +125,9 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
     if (isDrawerOpen) {
       if (sessionStorage.getItem('suppressHomeScrollRestoreOnce') === 'true') {
         sessionStorage.removeItem('suppressHomeScrollRestoreOnce');
-        window.scrollTo({ top: 0, behavior: 'instant' });
+        scrollToTop(0);
         requestAnimationFrame(() => {
-          window.scrollTo({ top: 0, behavior: 'instant' });
+          scrollToTop(0);
         });
         setHasRestoredScroll(true);
       }
@@ -89,7 +137,7 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
     if (journals.length > 0 && !hasRestoredScroll) {
       const saved = sessionStorage.getItem('timeline_scroll');
       if (saved) {
-        window.scrollTo({ top: Number(saved), behavior: 'instant' });
+        scrollToTop(Number(saved));
       }
       setHasRestoredScroll(true);
     }
@@ -103,7 +151,7 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
     if (now - lastNavigateTime.current < 400) return;
     lastNavigateTime.current = now;
 
-    sessionStorage.setItem('timeline_scroll', String(window.scrollY));
+    sessionStorage.setItem('timeline_scroll', String(getScrollTop()));
     navigate(path);
   };
 
@@ -128,8 +176,8 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
 
       if (element) {
         // Scroll with an offset for the top header
-        const y = element.getBoundingClientRect().top + window.scrollY - 80;
-        window.scrollTo({ top: y, behavior: 'smooth' });
+        const y = getElementScrollTop(element) - 16;
+        scrollToTop(y, 'smooth');
       }
     }
   }, [selectedDate, journals, isBackdrop, isDrawerOpen]);
@@ -265,7 +313,7 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
 
   const handleHide = async (journal: DiaryEntry) => {
     await diaryService.updateEntry(journal.id, { isHidden: true });
-    loadData();
+    loadData({ allowEmpty: true });
     setActionMenuJournal(null);
   };
 
@@ -277,13 +325,13 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
 
   const handlePin = async (journal: DiaryEntry) => {
     await diaryService.updateEntry(journal.id, { isPinned: !journal.isPinned });
-    loadData();
+    loadData({ allowEmpty: true });
     setActionMenuJournal(null);
   };
 
   const handleTrash = async (journal: DiaryEntry) => {
     await diaryService.moveToTrash(journal.id, 'deleted');
-    loadData();
+    loadData({ allowEmpty: true });
     setActionMenuJournal(null);
   };
 
@@ -301,11 +349,11 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
     try {
       const count = await diaryService.moveEntriesToTrash(selectedIds, 'deleted');
       setToastMessage(count > 0 ? `已移入回收站 ${count} 篇` : '没有可删除的日志');
-      await loadData();
+      await loadData({ allowEmpty: true });
     } catch (error) {
       console.error('Delete selected journals failed:', error);
       setToastMessage('删除失败，请重试');
-      await loadData();
+      await loadData({ allowEmpty: true });
     } finally {
       setIsDeletingSelected(false);
       window.setTimeout(() => setToastMessage(null), 2000);
@@ -313,7 +361,7 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
   };
 
   return (
-    <div className="app-reading-container pt-3 pb-0">
+    <div ref={scrollRef} className="app-page-scroll app-reading-container min-h-0 h-full flex-1 overflow-y-auto pt-3 pb-[calc(8rem+var(--app-safe-bottom))]">
       {/* Multi-select Top Bar */}
       {isMultiSelectMode && (
         <div className="app-main-fixed-header app-safe-header fixed top-0 bg-surface z-50 flex items-center justify-between px-4 md:px-6 shadow-sm animate-in slide-in-from-top">

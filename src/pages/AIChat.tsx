@@ -80,6 +80,7 @@ export default function AIChat() {
   const [activeContextSession, setActiveContextSession] = useState<ChatSession | null>(null);
   const [contextMenuPos, setContextMenuPos] = useState<{x: number, y: number} | null>(null);
   const pressTimer = useRef<NodeJS.Timeout | null>(null);
+  const edgeSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const handledDailyEchoStateKeyRef = useRef('');
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
@@ -602,8 +603,6 @@ ${state.echoText}`);
     : historySessions;
 
   const groupedSessions = groupSessions(filteredSessions);
-  let startX = 0;
-
   const quickPrompts = [
     '📊 根据我的日记，我最近状态怎么样？',
     '💡 从我的日记看，我擅长什么？有什么特点？',
@@ -619,16 +618,28 @@ ${state.echoText}`);
         backgroundColor: isDark ? '#1C1C1E' : '#FAF9F5',
         boxSizing: 'border-box'
       }}
-      onTouchStart={e => { startX = e.touches[0].clientX; }}
+      onTouchStart={e => {
+        const touch = e.touches[0];
+        edgeSwipeStartRef.current = { x: touch.clientX, y: touch.clientY };
+      }}
       onTouchEnd={e => {
-        const delta = e.changedTouches[0].clientX - startX;
-        if (delta > 60 && startX < 40) {
+        const start = edgeSwipeStartRef.current;
+        edgeSwipeStartRef.current = null;
+        if (!start) return;
+
+        const touch = e.changedTouches[0];
+        const deltaX = touch.clientX - start.x;
+        const deltaY = touch.clientY - start.y;
+        if (start.x < 40 && deltaX > 60 && Math.abs(deltaY) < 80) {
           if (window.history.length > 1) {
             navigate(-1);
           } else {
             navigate('/', { replace: true });
           }
         }
+      }}
+      onTouchCancel={() => {
+        edgeSwipeStartRef.current = null;
       }}
     >
       {/* AppBar */}

@@ -1,16 +1,15 @@
 {
-  "versionName": "1.0.3",
-  "versionCode": 4,
-  "releasedAt": "2026-06-08",
-  "apkUrl": "https://github.com/hlh-hal/xiaoxianglog/releases/latest/download/xiaoxiang-log-latest.apk",
+  "versionName": "1.0.14",
+  "versionCode": 15,
+  "releasedAt": "2026-06-13",
+  "apkUrl": "https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk",
   "changes": [
-    "Android 每日写日记提醒现在只保留一条系统通知。",
-    "Android 端会自动关闭旧版本遗留的服务端每日 Web Push，避免同一时间重复提醒。",
-    "点赞、评论、好友申请等互动通知不受影响。"
+    "首页滑动查看日志时不再突然出现大段空白，列表内容会保持连续。",
+    "优化时间轴日志卡片的滚动绘制，减少快速滑动时的文字残影和闪烁。",
+    "优化首页滚动位置保存和日期跳转，返回首页时更稳定。"
   ],
   "fixes": [
-    "修复 Android 原生定时提醒和前端每日提醒兜底同时触发，导致一次弹出两条提醒的问题。",
-    "修复 Android 设置页开启每日提醒时误走 PWA Push 订阅流程的问题。",
-    "递增 Android versionCode，确保已安装旧版的用户可以覆盖更新。"
+    "修复同步或页面重新激活时短暂读到空列表，导致首页闪成空白的问题。",
+    "修复滚动位置计算混用页面坐标和内部滚动容器坐标，可能造成跳到异常空白区域的问题。"
   ]
 }

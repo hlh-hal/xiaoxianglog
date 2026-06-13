@@ -47,6 +47,14 @@
 
 html[data-platform="android"] {
   --app-safe-top: max(env(safe-area-inset-top, 0px), 28px);
+  overscroll-behavior-y: contain;
+  overflow-x: hidden;
+}
+
+html[data-platform="android"] body,
+html[data-platform="android"] #root {
+  overscroll-behavior-y: contain;
+  overflow-x: hidden;
 }
 
 .dark {
@@ -72,11 +80,14 @@ body {
   color: var(--color-on-surface);
   font-family: var(--font-sans);
   -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: contain;
+  overflow-x: hidden;
 }
 
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  overscroll-behavior-y: contain;
 }
 
 .app-safe-header {
@@ -113,6 +124,35 @@ html {
 .app-main-fixed-header {
   left: 0;
   width: 100%;
+}
+
+.app-route-scrollport {
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.app-page-scroll {
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+html[data-platform="android"] .app-page-scroll {
+  touch-action: pan-y;
+}
+
+.home-timeline-item,
+.home-timeline-card {
+  backface-visibility: hidden;
+}
+
+.home-timeline-card {
+  contain: paint;
+}
+
+html[data-platform="android"] .home-timeline-item,
+html[data-platform="android"] .home-timeline-card {
+  transform: translateZ(0);
 }
 
 @media (min-width: 768px) {

@@ -13,3 +13,6 @@ server/prisma/data/*.db-shm
 server/prisma/data/*.db-wal
 cpa-local-test/
 cpa-manager/
+artifacts/echo-prompt-evals/
+artifacts/echo-prompt-lab/
+artifacts/echo-prompt-research/

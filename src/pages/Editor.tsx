@@ -21,6 +21,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
 import { useAuth } from '../contexts/AuthContext';
 import { sanitizeModernColors, measureExportCard, pickExportScale, decodeErrorReason, waitForExportRenderReady, renderExportCanvas } from '../utils/exportImage';
+import { canUseAndroidImageSaver, savePngDataUrlToAndroidGallery } from '../services/androidImageSaver';
 import { DiaryTheme, allThemes } from '../types/theme';
 import { api, getAccessToken, isAuthenticated } from '../services/apiClient';
 import { createRoot } from 'react-dom/client';
@@ -657,6 +658,15 @@ function renderDailyEchoFallbackCanvas(echo: DailyEcho, date: Date) {
   return canvas;
 }
 
+function parseEntryCreatedAt(value: unknown, fallbackDate = new Date()): Date {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === 'string' || typeof value === 'number') {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+  return fallbackDate;
+}
+
 export default function Editor() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -669,6 +679,7 @@ export default function Editor() {
   const activeEntryIdRef = useRef<string>(id || createClientId());
   const routeEntryIdRef = useRef<string | null>(id);
   const draftDiaryDateRef = useRef<string | null>(null);
+  const draftCreatedAtRef = useRef<string>(new Date().toISOString());
   const lastPersistedSignatureRef = useRef<string>('');
   const autosaveHistoryBaselineSavedRef = useRef(false);
   const isMountedRef = useRef(true);
@@ -863,6 +874,8 @@ export default function Editor() {
     routeEntryIdRef.current = id;
     if (id) {
       activeEntryIdRef.current = id;
+    } else {
+      draftCreatedAtRef.current = new Date().toISOString();
     }
   }, [id]);
 
@@ -1965,22 +1978,13 @@ export default function Editor() {
       root.unmount();
       document.body.removeChild(wrapper);
 
-      // 鍏煎 Capacitor 鍘熺敓 App 鐜
-      const cap = (window as any).Capacitor;
-      if (cap?.isNativePlatform?.()) {
+      if (canUseAndroidImageSaver()) {
         try {
-          const capacitorFilesystem = '@capacitor/filesystem';
-          const { Filesystem, Directory } = await import(/* @vite-ignore */ capacitorFilesystem);
-          const base64Data = dataUrl.split(',')[1];
           const fileName = `小象日志_${format(displayDate, 'yyyy-MM-dd')}.png`;
-          await Filesystem.writeFile({
-            path: fileName,
-            data: base64Data,
-            directory: Directory.Documents,
-          });
-          showToast('已保存到文件夹');
+          await savePngDataUrlToAndroidGallery(dataUrl, fileName);
+          showToast('图片已保存到系统相册');
         } catch (capErr) {
-          console.error('Capacitor 淇濆瓨澶辫触:', capErr);
+          console.error('Android image save failed:', capErr);
           showToast('保存失败，请重试');
         }
       } else {
@@ -2384,6 +2388,7 @@ export default function Editor() {
           hasWritingActivitySinceManualSaveRef.current = false;
           activeEntryIdRef.current = data.id;
           draftDiaryDateRef.current = data.diaryDate;
+          draftCreatedAtRef.current = data.createdAt || draftCreatedAtRef.current;
           setExistingJournal(data);
           const loadedImages = data.images?.filter((img: string) => typeof img === 'string' && img.trim() !== '') || [];
           setImagesWithRef(loadedImages);
@@ -2761,6 +2766,7 @@ export default function Editor() {
         content: currentContent,
         images: currentImages,
         diaryDate: getDraftDiaryDate(),
+        createdAt: draftCreatedAtRef.current,
         backgroundId: currentBackgroundId,
         themeId: currentThemeId,
         activeWritingSeconds,
@@ -2790,6 +2796,7 @@ export default function Editor() {
     writingActivityRef.current = createWritingActivityState((savedEntry.activeWritingSeconds || activeWritingSeconds) * 1_000);
     activeEntryIdRef.current = savedEntry.id;
     draftDiaryDateRef.current = savedEntry.diaryDate;
+    draftCreatedAtRef.current = savedEntry.createdAt || draftCreatedAtRef.current;
     lastPersistedSignatureRef.current = signature;
 
     if (markClean && latestSignature === signature) {
@@ -3231,6 +3238,10 @@ export default function Editor() {
   const displayDate = existingJournal
     ? parseDiaryDateKey(existingJournal.diaryDate)
     : parseDiaryDateKey(draftDiaryDateRef.current || Date.now());
+  const displayCreatedAt = parseEntryCreatedAt(
+    existingJournal?.createdAt || draftCreatedAtRef.current,
+    displayDate,
+  );
   
   const bgStyle = bgConfig.type === 'color' 
     ? { backgroundColor: bgConfig.value }
@@ -3300,6 +3311,7 @@ export default function Editor() {
   const defaultDisplayImages = getDefaultDisplayImagesForContent(content, images);
   const activePreviewImages = previewImagesOverride ?? images;
   const shouldShowInlineImageToolbar = Boolean(inlineImageToolbar && isEditing && !previewHashActive);
+  const shouldHideDailyEchoForWriting = isEditing && isFocused && !previewHashActive;
   const shouldHideDailyEchoForBlockingOverlay = !dailyEchoFloatEnabled
     || isEchoFloatMutedToday
     || showThemeBar
@@ -3317,9 +3329,9 @@ export default function Editor() {
   const shouldHideDailyEchoFloat = shouldHideDailyEchoForBlockingOverlay
     || keyboardInset > 0
     || isEchoFloatScrollHidden;
-  const shouldHideDailyEchoCard = dailyEchoCompletionStats
+  const shouldHideDailyEchoCard = shouldHideDailyEchoForWriting || (dailyEchoCompletionStats
     ? shouldHideDailyEchoForBlockingOverlay
-    : shouldHideDailyEchoFloat;
+    : shouldHideDailyEchoFloat);
 
   const toggleInlineImageSize = () => {
     if (!inlineImageToolbar || !editor) return;
@@ -3568,7 +3580,7 @@ export default function Editor() {
                 ...(selectedTheme ? { color: selectedTheme.secondaryColor } : {})
               }}
             >
-              {format(displayDate, 'a hh:mm', { locale: zhCN })}
+              {format(displayCreatedAt, 'a hh:mm', { locale: zhCN })}
             </p>
           </div>
         </div>
@@ -4290,6 +4302,7 @@ export default function Editor() {
                       content: currentContent,
                       images: currentImages,
                       diaryDate: getDraftDiaryDate(),
+                      createdAt: draftCreatedAtRef.current,
                       backgroundId: backgroundIdRef.current,
                       themeId: selectedThemeRef.current?.id,
                       status: 'trashed',

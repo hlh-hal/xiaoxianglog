@@ -238,6 +238,7 @@ router.post('/push', async (req: Request, res: Response) => {
         const nextStatus = normalizeStatus(entry.status);
         const nextTags = Array.isArray(entry.tags) ? JSON.stringify(stringArray(entry.tags)) : null;
         const nextImagesValue = nextImages.length > 0 ? JSON.stringify(nextImages) : null;
+        const nextCreatedAt = dateOrNull(entry.createdAt);
         const nextTrashedAt = dateOrNull(entry.trashedAt);
         const nextActiveWritingSeconds = normalizeActiveWritingSeconds(entry.activeWritingSeconds);
 
@@ -302,6 +303,7 @@ router.post('/push', async (req: Request, res: Response) => {
               userId,
               title: nullableString(entry.title),
               content: nextContent,
+              ...(nextCreatedAt && { createdAt: nextCreatedAt }),
               diaryDate: nextDiaryDate,
               status: nextStatus,
               mood: nullableString(entry.mood),

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import {
   BookOpen,
@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { AppToast } from '../components/AppToast';
+import { currentVersion } from '../config/appRelease';
 
 const FEEDBACK_EMAIL = '1647810838@qq.com';
 
@@ -307,12 +308,13 @@ export default function Help() {
     <div
       className="animate-in fade-in slide-in-from-right-8 duration-300 ease-out"
       style={{
-        minHeight: '100vh',
+        height: '100dvh',
         backgroundColor: c.bg,
         color: c.text,
         fontFamily: 'inherit',
         display: 'flex',
         flexDirection: 'column',
+        overflow: 'hidden',
       }}
     >
       <nav
@@ -345,8 +347,10 @@ export default function Help() {
       </nav>
 
       <div
+        className="app-page-scroll"
         style={{
           flex: 1,
+          minHeight: 0,
           overflowY: 'auto',
           paddingTop: 'var(--app-total-header-height)',
           paddingBottom: 'calc(32px + var(--app-safe-bottom))',
@@ -598,7 +602,7 @@ export default function Help() {
 
         <div style={{ textAlign: 'center', padding: '28px 16px 20px' }}>
           <div style={{ fontSize: '16px', fontWeight: 700, color: c.text, marginBottom: '4px' }}>小象日志</div>
-          <div style={{ fontSize: '12px', color: c.tertiary, marginBottom: '16px' }}>记录生活的美好 · Version 1.0.0</div>
+          <div style={{ fontSize: '12px', color: c.tertiary, marginBottom: '16px' }}>记录生活的美好 · Version {currentVersion}</div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: '20px' }}>
             <button
               onClick={() => navigate('/terms')}

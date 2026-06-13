@@ -5,7 +5,8 @@
 小象日志是一个私密、温和、偏移动端体验的日记应用。详细技术栈、目录职责、编码风格和验证方式见仓库根目录 `AGENTS.md`。
 
 ## 当前状态
-- 2026-06-09：小象回声记忆系统 v2 已按汇总报告落地，本轮只做本地离线评估，不改后端、不加线上埋点、不部署。热层 `EchoHotMemory` 扩展为可撤回、可过期、可控敏感度的近期关系线索；新增 `PromptMemoryPack`，生成前只筛选自然相关的 0-2 条内部连续性线索，冷层 `InsightDraft` 继续只做长期假设索引。设置页主体验改为“近期记忆线索”卡片，高级 JSON 折叠。验证详情见 `vault/notes/daily/2026-06-09-echo-memory-v2.md`。
+- 2026-06-11：小象回声 Prompt Lab 手动 A/B 页面已废弃，改为本地 Auto Research 自动研究工具，并补齐可视化操作台与独立 Prompt Git 版本库。旧入口 `http://localhost:3010/lab` 和 `npm run lab:echo-prompt` 不再维护；新 UI 入口为 `npm run research:echo-prompt:ui` / `http://localhost:3010/research`，CLI 为 `npm run research:echo-prompt:quick` / `npm run research:echo-prompt` / `npm run research:echo-prompt:expanded`。产物写入 `artifacts/echo-prompt-research/runs/<runId>/`，版本历史写入嵌套仓库 `artifacts/echo-prompt-research/prompt-history/`。线上回声 baseline 不自动修改，只有用户明确采用最佳 prompt 时才人工固化。详情见 `vault/notes/daily/2026-06-11-echo-prompt-auto-research.md`。
+- 2026-06-09：小象回声记忆系统 v2 已按汇总报告落地并上传云端服务器；本轮只做本地离线评估，不改后端、不加线上埋点。热层 `EchoHotMemory` 扩展为可撤回、可过期、可控敏感度的近期关系线索；新增 `PromptMemoryPack`，生成前只筛选自然相关的 0-2 条内部连续性线索，冷层 `InsightDraft` 继续只做长期假设索引。设置页主体验改为“近期记忆线索”卡片，高级 JSON 折叠。线上入口为 `assets/index-DXLQuVJK.js`，构建标识 `echo-memory-v2-20260609-1`，PWA 缓存版本 `xiaoxiang-pwa-v15`。验证详情见 `vault/notes/daily/2026-06-09-echo-memory-v2.md`。
 - 2026-06-09：完成“小象回声记忆系统与提示词注入”多视角分析，报告目录为 `vault/projects/echo-memory-analysis-2026-06-09/`，共 10 份：`00-summary.md` 汇总报告 + 9 份独立视角报告。核心结论：继续双层记忆，但冷层 `InsightDraft` 只做长期假设索引，热层 `EchoHotMemory` 升级为少量可撤回的近期关系线索，生成前新增类似 `PromptMemoryPack` 的选择器，只把与今日日记自然相关、低风险、能改善分寸感的 0-2 条线索注入回声。
 - 2026-06-08：Android APK 已同步最新 PWA 并构建正式签名包 `C:\Users\ASUS\Desktop\xiaoxiang-apk\xiaoxiang-log-latest.apk`，版本为 `1.0.1` / `versionCode 2`，包名 `com.xiaoxiang.diary`，签名校验 v2/v3 通过；新增 `docs/` GitHub Pages 下载官网和远程更新清单 `docs/app-update.json` / `public/app-update.json`。GitHub CLI 已安装但尚未登录，Pages/Release 线上部署需先执行 `gh auth login`。
 
@@ -103,3 +104,92 @@
 - 互动通知（点赞、评论、好友申请）继续保留服务端通知链路。
 - 新版 APK 为 `1.0.3` / `versionCode 4`，本地文件仍为 `C:\Users\ASUS\Desktop\xiaoxiang-apk\xiaoxiang-log-latest.apk`，Release 为 `https://github.com/hlh-hal/xiaoxianglog/releases/tag/android-v1.0.3`。
 - 正式签名 v2/v3 校验通过，证书 MD5 仍为 `9a0e0281cd8b3070c425c22290fd3eb4`。验证详情见 `vault/notes/daily/2026-06-08-android-v103-notification.md`。
+## 2026-06-09 APK 自有服务器主下载源
+
+- 为改善国内下载速度，Android APK 主下载地址已从 GitHub Release latest 改为 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk`，GitHub Release latest 保留为备用镜像。
+- 本地涉及文件：`src/config/appRelease.ts`、`public/app-update.json`、`docs/app-update.json`、`docs/index.html`。
+- 当前正式 APK 已上传到服务器 `/dist/download/xiaoxiang-log-latest.apk` 并可通过公网 `/download/xiaoxiang-log-latest.apk` 下载；同时按计划上传了一份到 `/xiaoxiang-download/xiaoxiang-log-latest.apk`，供后续宝塔/Nginx alias 使用。
+- 服务器下载验证：`200 OK`，大小 `13677401` 字节，Range 请求 `206 Partial Content`，下载后 SHA256 为 `D89DB206610FE9F79B76E5EF6E98DD293863E45D7DB752D0EDD7B0A93A0AB274`。
+- GitHub Pages `app-update.json` 和官网已同步；交接详情见 `vault/notes/daily/2026-06-09-apk-self-hosted-download.md`。
+
+## 2026-06-09 Android 隐藏 PWA 安装入口
+
+- Android 原生 APK 内不再显示“安装到桌面”，顶部更多菜单、侧边栏抽屉和安装 Bottom Sheet 均通过 `!Capacitor.isNativePlatform()` 限制。
+- 浏览器/PWA 环境仍保留该入口；验证命令 `npm run lint` 和 `npm run android:sync` 通过，Android assets 已同步到 `assets/index-Dr7LXTph.js`。
+- 交接详情见 `vault/notes/daily/2026-06-09-android-hide-pwa-install.md`。
+
+## 2026-06-09 Android 系统返回手势
+
+- 新增 `@capacitor/app@8.1.0`，在 `src/components/Layout.tsx` 接管 Android `backButton` 事件。
+- 系统返回手势现在会先关闭弹层/抽屉，再在二级路由 `navigate(-1)` 返回上一级；只有首页才退出应用。无历史但非首页时会回到 `/`。
+- 验证命令：`npm run lint`、`npm run android:sync`、临时 JDK 21 环境下 `android\gradlew.bat assembleDebug` 均通过。
+- 交接详情见 `vault/notes/daily/2026-06-09-android-back-gesture.md`。
+
+## 2026-06-09 Android v1.0.4 发布
+
+- 已重新发布 Android 正式签名 APK：`1.0.4` / `versionCode 5`，用于触发已安装 `1.0.3` 用户的首页更新提示。
+- 自有服务器主下载 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk` 已覆盖新版，大小 `13681579` 字节，SHA256 `ADB092C644BB46169EDC055846811B4D6F988F6E26609FC26D68D2F35A4496A9`。
+- GitHub Pages `app-update.json` 已返回 `versionName 1.0.4` / `versionCode 5`，官网显示“当前版本 v1.0.4”。
+- GitHub Release 备用镜像已创建：`https://github.com/hlh-hal/xiaoxianglog/releases/tag/android-v1.0.4`，latest 备用链接指向该版本。
+- 交接详情见 `vault/notes/daily/2026-06-09-android-v104-release.md`。
+
+## 2026-06-09 Android v1.0.5 更新公告修复
+
+- 修复 Android 原生版首页不出现更新公告的问题：`shouldEnableApkUpdateNotice()` 不再在原生 Android 中按 hostname 排除 `xiaoxianglog.cn`。
+- 已发布正式签名 APK：`1.0.5` / `versionCode 6`，主下载仍为 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk`。
+- 服务器 APK 大小 `13681579` 字节，SHA256 `5A8F4242E6CF1B9B9C2EF0761206425B9E494A7FDD8E558AC3A3A6C8F8E1857F`。
+- GitHub Pages `app-update.json` 已返回 `versionName 1.0.5` / `versionCode 6`，Release 备用镜像为 `https://github.com/hlh-hal/xiaoxianglog/releases/tag/android-v1.0.5`。
+- 交接详情见 `vault/notes/daily/2026-06-09-android-v105-update-notice-fix.md`。
+
+## 2026-06-09 Android 发布 Skill
+
+- 已创建 Codex skill：`C:\Users\ASUS\.codex\skills\xiaoxiang-android-release`。
+- 后续可用“发布小象日志安卓版”“打包推送到用户端”“更新 APK 并让首页弹更新公告”等触发全自动 Android 发布流程。
+- Skill 只记录流程、路径、验证和安全规则，不保存 keystore、签名密码、FTP 密码或 token。
+- 交接详情见 `vault/notes/daily/2026-06-09-android-release-skill.md`。
+## 2026-06-10 Android v1.0.7 发布
+
+- 已发布 Android 正式签名 APK：`1.0.7` / `versionCode 8`，包名 `com.xiaoxiang.diary`。
+- 主下载地址 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk` 已覆盖为新版，SHA256 `115DF438097F90574B481CC45C00392DE95C11665FAD3CDDB40C08B29757328E`。
+- Android 内置更新检查默认地址已改为自有服务器 `https://xiaoxianglog.cn/app-update.json`，减少国内访问 GitHub 导致更新公告不弹的风险。
+- GitHub Pages `app-update.json` 已同步到 `1.0.7 / 8`，Pages build 状态 `built`；GitHub Release 备用镜像为 `https://github.com/hlh-hal/xiaoxianglog/releases/tag/android-v1.0.7`。
+- 交接详情见 `vault/notes/daily/2026-06-10-android-v107-release.md`。
+
+## 2026-06-10 Android v1.0.8 滚动修复
+
+- 已发布 Android 正式签名 APK：`1.0.8` / `versionCode 9`，用于修复真机上顶部/底部固定时中间内容无法上下滑动的问题。
+- 主下载地址 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk` 已覆盖为新版，SHA256 `286F11FBE9C32354AD4933FFB2949EDBEBAD367254313E921B5FD9730C27C356`。
+- 主要改动：放松 Android 全局 `touch-action`，为主内容区和首页/日志圈/我的页面明确设置可滚动容器，首页滚动保存/跳转优先使用内容容器。
+- GitHub Pages `app-update.json` 已同步到 `1.0.8 / 9`，Pages build 状态 `built`；GitHub Release 备用镜像为 `https://github.com/hlh-hal/xiaoxianglog/releases/tag/android-v1.0.8`。
+- 交接详情见 `vault/notes/daily/2026-06-10-android-v108-scroll-fix-release.md`。
+## 2026-06-10 Android 发布 Skill 改为自有服务器默认路径
+
+- `xiaoxiang-android-release` skill 默认发布路径已改为只走自有服务器：更新 APK 到 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk`，更新自有服务器 `https://xiaoxianglog.cn/app-update.json`，不再自动同步 GitHub Pages / GitHub Release。
+- GitHub 备用镜像仍保留在 skill 文档中，但只有用户明确要求“同步 GitHub / 发备用镜像”时才执行。
+- `release_preflight.py` 默认不再访问 GitHub Pages，减少预检耗时；如需检查镜像，使用 `--include-github`。
+- 本次排查确认线上 manifest 与线上 APK 均为 `1.0.8 / versionCode 9`。如果手机端已安装 `1.0.8`，不弹更新提示是预期行为；下一次需要发布 `1.0.9 / versionCode 10` 或更高才能触发更新公告。
+- 用户随后确认手机是 `1.0.7` 但仍无更新提示；进一步定位为静态 `https://xiaoxianglog.cn/app-update.json` 缺少 CORS 响应头，Android WebView 可能无法读取远端清单。已在 `src/services/updateNoticeService.ts` 增加 Capacitor 原生 HTTP 兜底，并在 `deploy/nginx/xiaoxiang-reverse-proxy.conf` 增加 `/app-update.json` CORS 模板；线上仍需宝塔/Nginx 实际应用该配置并 reload。
+- 交接详情见 `vault/notes/daily/2026-06-10-android-release-skill-self-hosted-only.md`。
+
+## 2026-06-11 小象回声 Auto Research
+
+- 旧 Prompt Lab 手动页面已下线，不再使用 `http://localhost:3010/lab` 或 `npm run lab:echo-prompt`。
+- 新流程是自动研究：生成器只看 prompt + 日记；评分器只看评分标准 + 日记 + 输出，不看 prompt；改进器只看 prompt 和扣分原因；棘轮器只 keep 不退步的版本。
+- 本地命令：`npm run research:echo-prompt:ui` 打开可视化操作台；`npm run research:echo-prompt:quick`、`npm run research:echo-prompt`、`npm run research:echo-prompt:expanded` 保留为 CLI。
+- 页面地址：`http://localhost:3010/research`。页面支持保存本地手动样本、启动研究、实时版本曲线、版本历史表、prompt/diff/commit 查看和最佳 prompt 下载。
+- 结果目录：`artifacts/echo-prompt-research/runs/<runId>/`。最佳版本在 `best.prompt.txt`，迭代日志在 `iterations.jsonl`，分数表在 `scoreboard.tsv`，人工查看报告在 `report.html`。
+- 独立版本库：`artifacts/echo-prompt-research/prompt-history/`，每轮生成 `vNNN` 并提交 Git；keep/discard 都保留，discard 不覆盖 `current/best.prompt.txt`。
+- 线上安全边界：研究工具只产出本地文件，不自动改 `src/services/aiService.ts` 的线上 baseline。采用最佳 prompt 需要后续人工确认。
+
+## 2026-06-11 Android v1.0.13 更新弹窗图标与帮助页版本
+
+- 已发布自有服务器主链路 Android 正式包 `1.0.13 / versionCode 14`，主下载地址仍为 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk`。
+- 更新公告弹窗和首页更新入口图标改为正式桌面图标 `/icons/xiaoxiang-pwa-512.png`；不要误用旧卡通图 `/icons/xiaoxiang-log-icon.png`。
+- 帮助页底部版本号改为跟随 `src/config/appRelease.ts` 的 `currentVersion`，不再写死 `Version 1.0.0`。
+- 本次仅发布自有服务器，未同步 GitHub Pages / GitHub Release；验证详情见 `vault/notes/daily/2026-06-11-android-v113-icon-help-version-release.md`。
+
+## 2026-06-11 小象回声 Auto Research UI 修复补充
+
+- `http://localhost:3010/research` 已支持直接输入本轮原始 prompt；也可一键载入 baseline、candidate 或当前 best 作为 seed prompt。
+- 历史版本查看已优化：版本号可点击，详情区会显示 prompt 原文、diff、评分摘要和 Git commit；服务端不再为单个版本详情遍历完整历史，避免 Prompt 原文区域空白或加载过慢。
+- 该工具仍只写入 `artifacts/echo-prompt-research/` 和独立 prompt-history Git 仓库，不自动修改线上 `src/services/aiService.ts`。

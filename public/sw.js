@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'xiaoxiang-pwa-v14';
+const CACHE_VERSION = 'xiaoxiang-pwa-v17';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

@@ -669,7 +669,7 @@ export default function Settings() {
   const isVaultArchiveMode = vaultCapability.mode === 'archive-download';
 
   return (
-    <div className="min-h-screen bg-surface text-on-surface font-body pb-10 relative animate-in fade-in slide-in-from-right-8 duration-300 ease-out">
+    <div className="app-page-scroll h-dvh min-h-0 overflow-y-auto bg-surface text-on-surface font-body pb-[calc(4rem+var(--app-safe-bottom))] relative animate-in fade-in slide-in-from-right-8 duration-300 ease-out">
       <AppToast message={toastMessage} />
 
       {vaultSyncProgress && (
@@ -1141,7 +1141,7 @@ export default function Settings() {
             </button>
           </header>
 
-          <div className="flex-1 overflow-y-auto p-6 bg-surface">
+          <div className="app-page-scroll min-h-0 flex-1 overflow-y-auto p-6 bg-surface">
             <div
               style={{
                 fontFamily: 'var(--diary-font-family)',

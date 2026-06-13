@@ -269,7 +269,7 @@ export default function Profile() {
     : 'min-h-[108px] content-center justify-center gap-x-4 gap-y-4 px-6 py-5';
 
   return (
-    <div className="app-reading-container bg-surface text-on-surface pb-4 pt-[calc(var(--app-total-header-height)+16px)]">
+    <div className="app-page-scroll app-reading-container min-h-0 h-full flex-1 overflow-y-auto bg-surface text-on-surface pb-[calc(7rem+var(--app-safe-bottom))] pt-[calc(var(--app-total-header-height)+16px)]">
       <header className="app-main-fixed-header app-safe-header fixed top-0 z-50 bg-surface/80 backdrop-blur-xl">
         <div className="app-reading-container flex justify-between items-center h-[var(--app-header-height)]">
           <button className="relative" onClick={() => navigate('/inbox')}>

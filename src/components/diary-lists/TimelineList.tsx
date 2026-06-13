@@ -23,7 +23,7 @@ interface ListProps {
 
 export function TimelineList({ journals, isMultiSelectMode, selectedJournals, handlePointerDown, handlePointerMove, handlePointerUp }: ListProps) {
   return (
-    <div className="relative -ml-5 md:ml-0">
+    <div className="home-timeline-list relative -ml-5 md:ml-0">
       {/* Vertical Line */}
       <div className="absolute left-[19px] top-4 bottom-4 w-[2px] bg-primary/10 z-0"></div>
 
@@ -31,7 +31,7 @@ export function TimelineList({ journals, isMultiSelectMode, selectedJournals, ha
         <article 
           key={journal.id} 
           data-date={format(parseDiaryDateKey(journal.diaryDate), 'yyyy-MM-dd')}
-          className="relative pl-10 group mb-8 cursor-pointer select-none"
+          className="home-timeline-item relative pl-10 group mb-6 cursor-pointer select-none"
           style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
           onPointerDown={(e) => handlePointerDown(e, journal)}
           onPointerMove={handlePointerMove}
@@ -51,7 +51,7 @@ export function TimelineList({ journals, isMultiSelectMode, selectedJournals, ha
           </div>
 
           <div className="flex flex-col gap-2">
-            <header className="sticky top-16 left-0 w-full z-30 flex items-center justify-between py-2 bg-surface/80 backdrop-blur-md">
+            <header className="relative z-10 flex items-center justify-between pb-2">
               <div className="flex items-center gap-2">
                 <time className="font-label text-xs font-semibold text-outline tracking-wider uppercase">
                   {format(parseDiaryDateKey(journal.diaryDate), 'MM月dd日 · EEEE', { locale: zhCN })}
@@ -60,7 +60,7 @@ export function TimelineList({ journals, isMultiSelectMode, selectedJournals, ha
               </div>
             </header>
 
-            <div className={`bg-surface-container-lowest px-4 md:px-5 py-[14px] rounded-[28px] md:rounded-[24px] shadow-[0_4px_20px_rgba(0,0,0,0.02)] transition-all duration-500 ${isMultiSelectMode && selectedJournals.has(journal.id) ? 'ring-2 ring-primary bg-primary/5' : 'hover:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.04)]'}`}>
+            <div className={`home-timeline-card bg-surface-container-lowest px-4 md:px-5 py-[14px] rounded-[28px] md:rounded-[24px] shadow-[0_4px_20px_rgba(0,0,0,0.02)] transition-shadow duration-200 ${isMultiSelectMode && selectedJournals.has(journal.id) ? 'ring-2 ring-primary bg-primary/5' : 'hover:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.04)]'}`}>
               {/* 
               {journal.title && (
                 <h3 className="font-headline text-xl font-bold text-on-surface mb-3 leading-tight tracking-tight">

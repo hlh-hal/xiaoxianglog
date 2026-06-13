@@ -4,13 +4,14 @@ import {
   Menu, Search, MoreVertical, BookOpen, Compass, User, 
   Image as ImageIcon, Footprints, History, Moon, Sun, Cloud, 
   Trash2, Settings, HelpCircle, Plus, ChevronLeft, ChevronRight,
-  Check, X, Download, RefreshCw, Sparkles
+  Check, X, Download, RefreshCw
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, isToday, addMonths, subMonths, format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
 import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
 import { diaryService } from '../services/diaryService';
 import { getDailyQuote } from '../utils/quotes';
 import { useTheme } from '../contexts/ThemeContext';
@@ -21,6 +22,7 @@ import { AppToast } from './AppToast';
 import { parseDiaryDateKey } from '../utils/diaryDate';
 import { currentVersion, latestRelease as bundledRelease, type AppRelease } from '../config/appRelease';
 import {
+  downloadAndInstallApkUpdate,
   getConfiguredDownloadUrl,
   getLatestRelease,
   markUpdateNoticePrompted,
@@ -33,11 +35,6 @@ export type ListStyle = 'timeline' | 'card_flow' | 'briefing' | 'magazine';
 
 function shouldEnableApkUpdateNotice(): boolean {
   if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') return false;
-  if (typeof window === 'undefined') return false;
-
-  const hostname = window.location.hostname.toLowerCase();
-  if (hostname === 'xiaoxianglog.cn' || hostname.endsWith('.xiaoxianglog.cn')) return false;
-
   return true;
 }
 
@@ -46,6 +43,7 @@ export default function Layout() {
   const { isDark, toggleTheme } = useTheme();
   const { user } = useAuth();
   const pwaInstall = usePwaInstall();
+  const shouldShowPwaInstall = !Capacitor.isNativePlatform();
   const isLoggedIn = !!user;
   const location = useLocation();
   const navigate = useNavigate();
@@ -71,6 +69,7 @@ export default function Layout() {
   const [isUpdateNoticeOpen, setIsUpdateNoticeOpen] = useState(false);
   const [releaseInfo, setReleaseInfo] = useState<AppRelease>(bundledRelease);
   const [showUpdateEntry, setShowUpdateEntry] = useState(() => shouldShowApkUpdateNotice && shouldShowUpdateEntry(bundledRelease));
+  const [isUpdateDownloading, setIsUpdateDownloading] = useState(false);
   const [installMessage, setInstallMessage] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [listStyle, setListStyle] = useState<ListStyle>(() => {
@@ -232,6 +231,7 @@ export default function Layout() {
   };
 
   const openInstallSheet = () => {
+    if (!shouldShowPwaInstall) return;
     setInstallMessage('');
     setIsMenuOpen(false);
     setIsInstallSheetOpen(true);
@@ -267,6 +267,66 @@ export default function Layout() {
     };
   }, [shouldShowApkUpdateNotice, location.pathname]);
 
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') return;
+
+    const listener = CapacitorApp.addListener('backButton', ({ canGoBack }) => {
+      if (isUpdateNoticeOpen) {
+        setIsUpdateNoticeOpen(false);
+        return;
+      }
+
+      if (isInstallSheetOpen) {
+        setIsInstallSheetOpen(false);
+        return;
+      }
+
+      if (isStyleSheetOpen) {
+        setIsStyleSheetOpen(false);
+        return;
+      }
+
+      if (isCalendarOpen) {
+        setIsCalendarOpen(false);
+        return;
+      }
+
+      if (isMenuOpen) {
+        setIsMenuOpen(false);
+        return;
+      }
+
+      if (isDrawerOpen) {
+        handleCloseDrawer();
+        return;
+      }
+
+      if (location.pathname !== '/') {
+        if (canGoBack) {
+          navigate(-1);
+        } else {
+          navigate('/', { replace: true });
+        }
+        return;
+      }
+
+      CapacitorApp.exitApp();
+    });
+
+    return () => {
+      listener.then(handle => handle.remove()).catch(() => undefined);
+    };
+  }, [
+    isCalendarOpen,
+    isDrawerOpen,
+    isInstallSheetOpen,
+    isMenuOpen,
+    isStyleSheetOpen,
+    isUpdateNoticeOpen,
+    location.pathname,
+    navigate,
+  ]);
+
   const openUpdateNotice = () => {
     setIsUpdateNoticeOpen(true);
   };
@@ -287,6 +347,30 @@ export default function Layout() {
     const url = getConfiguredDownloadUrl(releaseInfo);
     if (!url) {
       showToast('新版下载地址还没配置好，稍后再来看看。');
+      return;
+    }
+
+    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+      setIsUpdateDownloading(true);
+      downloadAndInstallApkUpdate(releaseInfo)
+        .then(status => {
+          if (status === 'permission_required') {
+            showToast('请允许小象日志安装应用，再回到这里点一次下载新版');
+            return;
+          }
+          showToast('安装包已准备好，请按系统提示完成安装');
+        })
+        .catch(error => {
+          console.warn('Failed to start native APK update flow, falling back to browser download', error);
+          showToast('应用内安装未启动，已为你打开浏览器下载');
+          const opened = window.open(url, '_blank', 'noopener,noreferrer');
+          if (!opened) {
+            window.location.href = url;
+          }
+        })
+        .finally(() => {
+          setIsUpdateDownloading(false);
+        });
       return;
     }
 
@@ -360,6 +444,8 @@ export default function Layout() {
     { path: '/community', icon: Compass, label: '日志圈' },
     { path: '/profile', icon: User, label: '我的' },
   ];
+
+  const isMainTabRoute = ['/', '/community', '/profile'].includes(location.pathname);
 
   const styleOptions: { id: ListStyle; name: string; preview: string }[] = [
     { id: 'timeline', name: '时间轴模式', preview: 'bg-surface-container-high border-l-2 border-primary' },
@@ -511,7 +597,7 @@ export default function Layout() {
                       >
                         <span className="font-headline text-[15px] text-on-surface">设置</span>
                       </button>
-                      {!pwaInstall.isInstalled && (
+                      {shouldShowPwaInstall && !pwaInstall.isInstalled && (
                         <>
                           <div className="h-[1px] bg-outline-variant/20 mx-4"></div>
                           <button
@@ -545,8 +631,12 @@ export default function Layout() {
             onClick={openUpdateNotice}
             className="flex min-h-12 w-full items-center gap-3 rounded-2xl border border-primary/15 bg-surface-container-lowest/90 px-4 py-3 text-left shadow-[0_8px_24px_rgba(68,103,51,0.08)] active:scale-[0.99] transition-transform"
           >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary-container text-primary">
-              <Sparkles className="h-5 w-5" />
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-surface-container-lowest ring-1 ring-outline-variant/20">
+              <img
+                src="/icons/xiaoxiang-pwa-512.png"
+                alt="小象日志"
+                className="h-full w-full object-cover"
+              />
             </span>
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-semibold text-on-surface">发现新版本 {releaseInfo.version}</span>
@@ -795,7 +885,7 @@ export default function Layout() {
             <Cloud className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
             <span className="text-[15px]">云盘管理</span>
           </button>
-          {!pwaInstall.isInstalled && (
+          {shouldShowPwaInstall && !pwaInstall.isInstalled && (
             <button onClick={openInstallSheet} className="flex items-center gap-4 text-on-surface px-10 py-3 hover:bg-surface-container-high rounded-r-full transition-all duration-300 group">
               <Download className="w-5 h-5 text-outline group-hover:text-primary transition-colors" />
               <span className="text-[15px]">安装到桌面</span>
@@ -818,17 +908,21 @@ export default function Layout() {
 
       {/* Main Content */}
       <main className={cn(
-        "md:ml-[var(--app-sidebar-width)] transition-all duration-500 min-h-screen flex flex-col relative",
-        ['/', '/community', '/profile'].includes(location.pathname) ? "pb-[calc(72px+var(--app-safe-bottom))]" : "pb-0"
+        "app-route-scrollport md:ml-[var(--app-sidebar-width)] transition-all duration-500 flex flex-col relative",
+        location.pathname === '/'
+          ? "h-[calc(100dvh-var(--app-total-header-height))] overflow-hidden"
+          : isMainTabRoute
+            ? "h-dvh overflow-hidden"
+            : "min-h-screen"
       )}>
-        <div className="flex-1 w-full flex flex-col">
+        <div className="min-h-0 flex-1 w-full flex flex-col">
           <AnimatePresence mode="wait">
             <motion.div
               key={location.pathname}
               initial={false}
               animate={{ x: 0, borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
               transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
-              className="flex-1 flex flex-col bg-surface"
+              className="min-h-0 flex-1 flex flex-col bg-surface"
             >
               <Outlet context={{ selectedDate, listStyle, isDrawerOpen, openDrawer: () => setIsDrawerOpen(true), closeDrawer: handleCloseDrawer, toggleDrawer, returnToDrawer }} />
             </motion.div>
@@ -893,7 +987,7 @@ export default function Layout() {
 
       {/* PWA Install Bottom Sheet */}
       <AnimatePresence>
-        {isInstallSheetOpen && !pwaInstall.isInstalled && (
+        {shouldShowPwaInstall && isInstallSheetOpen && !pwaInstall.isInstalled && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -979,8 +1073,12 @@ export default function Layout() {
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center gap-3 border-b border-outline-variant/15 px-5 py-4 sm:px-6">
-                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary text-white shadow-[0_8px_20px_rgba(68,103,51,0.22)]">
-                  <Sparkles className="h-6 w-6" />
+                <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-surface-container-lowest shadow-[0_8px_20px_rgba(68,103,51,0.16)] ring-1 ring-outline-variant/20">
+                  <img
+                    src="/icons/xiaoxiang-pwa-512.png"
+                    alt="小象日志"
+                    className="h-full w-full object-cover"
+                  />
                 </span>
                 <div className="min-w-0 flex-1">
                   <h2 className="font-headline text-xl font-semibold text-on-surface">发现新版本</h2>
@@ -1056,10 +1154,11 @@ export default function Layout() {
                 <button
                   type="button"
                   onClick={handleDownloadUpdate}
-                  className="flex items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-medium text-white shadow-[0_10px_24px_rgba(68,103,51,0.22)] active:scale-[0.98] transition-transform"
+                  disabled={isUpdateDownloading}
+                  className="flex items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-medium text-white shadow-[0_10px_24px_rgba(68,103,51,0.22)] transition-transform active:scale-[0.98] disabled:opacity-70 disabled:active:scale-100"
                 >
-                  <Download className="h-4 w-4" />
-                  下载新版
+                  {isUpdateDownloading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                  {isUpdateDownloading ? '正在准备安装包' : '下载新版'}
                 </button>
               </div>
             </motion.div>
@@ -1082,7 +1181,7 @@ export default function Layout() {
       )}
 
       {/* Bottom Navigation Bar */}
-      {['/', '/community', '/profile'].includes(location.pathname) && (
+      {isMainTabRoute && (
         <nav 
           className="fixed bottom-0 left-0 w-full md:left-[var(--app-sidebar-width)] md:w-[calc(100%-var(--app-sidebar-width))] flex justify-around items-center px-4 bg-surface/90 backdrop-blur-xl z-50 rounded-t-[24px] shadow-[0_-10px_40px_rgba(0,0,0,0.03)] border-t border-outline-variant/10"
           style={{ paddingTop: '6px', paddingBottom: 'var(--app-safe-bottom)' }}

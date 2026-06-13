@@ -161,7 +161,7 @@ export default function Community() {
   };
 
   return (
-    <div className="bg-surface min-h-screen">
+    <div className="app-page-scroll min-h-0 h-full flex-1 overflow-y-auto bg-surface">
       <header className="app-main-fixed-header app-safe-header fixed top-0 z-40 flex justify-between items-center px-6 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/10">
         <div className="flex items-center gap-2">
           <BookOpen className="w-6 h-6 text-outline" />

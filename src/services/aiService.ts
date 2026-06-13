@@ -256,6 +256,29 @@ export type PromptMemoryPack = {
   selectedEntries: EchoMemoryEntry[];
 };
 
+export type DailyEchoPromptVersion = 'baseline' | 'candidate';
+
+export type DailyEchoPromptSetArgs = {
+  diaryText: string;
+  diaryDate: string;
+  regenerateCount?: number;
+  retryReason?: string;
+  insightDraft?: InsightDraft;
+  recentDiaries?: DiaryEntry[];
+  hotMemory?: EchoHotMemory;
+  promptMemoryPack?: PromptMemoryPack;
+  attempt?: number;
+};
+
+export type DailyEchoPromptSet = {
+  version: DailyEchoPromptVersion;
+  systemPrompt: string;
+  userPrompt: string;
+  modelId: string;
+  temperature: number;
+  maxTokens: number;
+};
+
 const ECHO_MEMORY_MAX_PROMPT_ENTRIES = 2;
 const ECHO_MEMORY_REUSE_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000;
 const ECHO_MEMORY_STOP_TERMS = new Set([
@@ -2126,6 +2149,38 @@ ${hotMemoryContext}
 ${diaryText || '这篇日记内容很短。'}`;
 }
 
+export const CANDIDATE_DAILY_ECHO_SYSTEM_PROMPT = DAILY_ECHO_SYSTEM_PROMPT;
+
+export function buildDailyEchoPromptSet(
+  version: DailyEchoPromptVersion,
+  args: DailyEchoPromptSetArgs,
+): DailyEchoPromptSet {
+  const attempt = args.attempt ?? 0;
+  const promptMemoryPack = args.promptMemoryPack ?? buildPromptMemoryPack(args.diaryText, args.hotMemory);
+  const systemPrompt = version === 'candidate'
+    ? CANDIDATE_DAILY_ECHO_SYSTEM_PROMPT
+    : DAILY_ECHO_SYSTEM_PROMPT;
+  const userPrompt = buildDailyEchoUserPrompt(
+    args.diaryText,
+    args.diaryDate,
+    args.regenerateCount ?? 0,
+    args.retryReason ?? '',
+    args.insightDraft,
+    args.recentDiaries ?? [],
+    args.hotMemory,
+    promptMemoryPack,
+  );
+
+  return {
+    version,
+    systemPrompt,
+    userPrompt,
+    modelId: getConfiguredAiModelId(),
+    temperature: attempt === 0 ? 0.62 : 0.42,
+    maxTokens: DAILY_ECHO_MAX_TOKENS,
+  };
+}
+
 async function markPromptMemoryEntriesUsed(hotMemory: EchoHotMemory | undefined, pack: PromptMemoryPack, now = new Date()): Promise<void> {
   if (!hotMemory || pack.selectedEntryIds.length === 0) return;
   const selectedIds = new Set(pack.selectedEntryIds);
@@ -2153,23 +2208,32 @@ export async function generateDiaryEcho(
 ): Promise<string> {
   const diaryText = stripHtml(entry.content || '').slice(0, 2200);
   const diaryDate = entry.diaryDate ? getDiaryDateKey(entry.diaryDate) : toDiaryDateKey();
-  const systemPrompt = DAILY_ECHO_SYSTEM_PROMPT;
 
   let rejectedReason = '';
   let lastRequestError: unknown;
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const promptMemoryPack = buildPromptMemoryPack(diaryText, hotMemory);
-    const userPrompt = buildDailyEchoUserPrompt(diaryText, diaryDate, regenerateCount, rejectedReason, insightDraft, recentDiaries, hotMemory, promptMemoryPack);
+    const promptSet = buildDailyEchoPromptSet('baseline', {
+      diaryText,
+      diaryDate,
+      regenerateCount,
+      retryReason: rejectedReason,
+      insightDraft,
+      recentDiaries,
+      hotMemory,
+      promptMemoryPack,
+      attempt,
+    });
     let result: DailyEchoCompletionResult;
     try {
       result = await api.post<DailyEchoCompletionResult>('/chat/complete', {
-        modelId: getConfiguredAiModelId(),
-        temperature: attempt === 0 ? 0.62 : 0.42,
-        maxTokens: DAILY_ECHO_MAX_TOKENS,
+        modelId: promptSet.modelId,
+        temperature: promptSet.temperature,
+        maxTokens: promptSet.maxTokens,
         messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
+          { role: 'system', content: promptSet.systemPrompt },
+          { role: 'user', content: promptSet.userPrompt },
         ],
       });
     } catch (error) {

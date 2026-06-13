@@ -24,6 +24,16 @@
 - `npm run build` 通过；仅保留既有 `diaryService.ts` 动静态导入和大 chunk 警告。
 - 本地 Vite + Chrome 移动视口打开 `/settings/insight-draft` 冒烟通过，文本包含“小象回声记忆 / 近期记忆线索 / 高级 JSON 编辑”，截图：`artifacts/echo-memory-v2-settings-mobile-debug-2026-06-09.png`。
 
+## 云端上传
+
+- 2026-06-09：按用户要求上传到云端服务器；本次只发布前端 `dist/`，没有上传后端、没有修改 Prisma、没有重启 Node。
+- 发布前将前端构建标识更新为 `echo-memory-v2-20260609-1`，将 PWA 缓存版本更新为 `xiaoxiang-pwa-v15`。
+- 重新验证并通过：`npm run test:echo-hot-memory`、`npm run test:daily-echo-quality`、`npm run test:echo-memory-eval`、`npm run test:insight-draft`、`npm run lint`、`npm run build`。
+- 执行 `deploy-upload.ps1 -Target front`，20/20 个前端文件上传 OK。
+- 线上首页 `https://www.xiaoxianglog.cn/` 已引用 `assets/index-DXLQuVJK.js` 和 `assets/index-CBNdLnOs.css`；线上 `sw.js` 已返回 `CACHE_VERSION = 'xiaoxiang-pwa-v15'`。
+- 线上 JS `assets/index-DXLQuVJK.js` 与本地 `dist/assets/index-DXLQuVJK.js` 长度均为 `2142039`，SHA256 均为 `61BC5518DA67CDE5A9061416B86CDE8896A9CE591F312296D722EDEAABD037A9`。
+- 线上 `/api/health` 返回 `build: cpamc-only-20260520`、`pid: 2984`，后端未变化。
+
 ## 后续注意
 
 - 本轮没有新增 `MemoryEvidence` / `MemoryMutationLog` store，没有云端同步记忆，也没有线上行为埋点；后续如果要做评估，只能继续走本地离线或用户明确同意的本地诊断包。

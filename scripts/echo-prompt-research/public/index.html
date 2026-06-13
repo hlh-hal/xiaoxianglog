@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>小象回声 Auto Research</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f3ec;
+      --panel: #fffdf7;
+      --line: #ded7ca;
+      --ink: #223021;
+      --muted: #697367;
+      --green: #386b35;
+      --blue: #2f6fdd;
+      --red: #b84a3f;
+      --gray: #87847d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Microsoft YaHei", "Segoe UI", sans-serif;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 24px;
+      background: rgba(255, 253, 247, 0.94);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(10px);
+    }
+    h1 { margin: 0; font-size: 24px; }
+    h2 { margin: 0 0 12px; font-size: 18px; }
+    h3 { margin: 0 0 8px; font-size: 15px; }
+    main {
+      display: grid;
+      grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+      gap: 18px;
+      padding: 18px 24px 36px;
+    }
+    section, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .stack { display: grid; gap: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 700; }
+    input, select, textarea, button {
+      font: inherit;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fffefa;
+      color: var(--ink);
+    }
+    input, select { height: 42px; padding: 0 12px; }
+    textarea {
+      min-height: 112px;
+      resize: vertical;
+      padding: 10px 12px;
+      line-height: 1.6;
+    }
+    button {
+      height: 42px;
+      padding: 0 14px;
+      cursor: pointer;
+      font-weight: 800;
+    }
+    button.version-link {
+      height: auto;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--green);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    button.primary {
+      color: #fff;
+      background: var(--green);
+      border-color: var(--green);
+    }
+    button:disabled { cursor: not-allowed; opacity: 0.6; }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+    .kpi {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfaf4;
+    }
+    .kpi b { display: block; margin-top: 5px; font-size: 20px; }
+    .chart {
+      min-height: 280px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fffefa;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+    }
+    th { color: var(--muted); background: #f4efe5; position: sticky; top: 0; }
+    tr[data-version] { cursor: pointer; }
+    tr[data-version]:hover { background: #f5f8f1; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #edf4e9;
+      color: var(--green);
+      font-weight: 800;
+      font-size: 12px;
+    }
+    .pill.discard { background: #f7e8e4; color: var(--red); }
+    .pill.baseline { background: #e9f0fb; color: var(--blue); }
+    .method {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .method div {
+      min-height: 116px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfaf4;
+    }
+    pre {
+      margin: 0;
+      max-height: 420px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.55;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fffefa;
+    }
+    details summary { cursor: pointer; font-weight: 800; }
+    .right { display: grid; gap: 14px; min-width: 0; }
+    @media (max-width: 980px) {
+      header { align-items: flex-start; flex-direction: column; }
+      main { grid-template-columns: 1fr; padding: 12px; }
+      .kpis, .method, .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>小象回声 Auto Research</h1>
+      <div class="muted small">自动生成、独立评分、自动改 prompt、Git 棘轮择优</div>
+    </div>
+    <div class="toolbar">
+      <button id="refreshBtn">刷新版本</button>
+      <a id="downloadBest" class="muted small" href="#" hidden>下载本轮最佳 prompt</a>
+    </div>
+  </header>
+
+  <main>
+    <aside class="stack">
+      <section>
+        <h2>样本库</h2>
+        <label>
+          日记正文
+          <textarea id="diaryText" placeholder="粘贴一篇用于评测的小象日志日记。真实日记只保存在本机 artifacts，不写入 prompt Git 历史。"></textarea>
+        </label>
+        <div class="grid">
+          <label>
+            参考回声，可选
+            <textarea id="referenceEcho" placeholder="可空。用于评分器参考，不给生成器看。"></textarea>
+          </label>
+          <label>
+            评分备注，可选
+            <textarea id="rubricNotes" placeholder="例如：不要过度分析；要贴近疲惫感。"></textarea>
+          </label>
+        </div>
+        <div class="toolbar">
+          <button id="saveSampleBtn" class="primary">保存样本</button>
+          <span id="sampleStatus" class="muted small"></span>
+        </div>
+      </section>
+
+      <section>
+        <h2>研究设置</h2>
+        <div class="grid">
+          <label>数据集<select id="dataset"></select></label>
+          <label>种子 prompt
+            <select id="seedPrompt">
+              <option value="baseline">baseline</option>
+              <option value="candidate">candidate</option>
+              <option value="text">自定义原始 prompt</option>
+            </select>
+          </label>
+          <label>轮数<input id="rounds" type="number" min="0" value="5" /></label>
+          <label>样本数<input id="limit" type="number" min="0" value="3" /></label>
+          <label>目标分<input id="target" type="number" min="1" max="5" step="0.1" value="4.6" /></label>
+          <label>耐心轮数<input id="patience" type="number" min="1" value="8" /></label>
+        </div>
+        <label class="toolbar" style="margin-top: 10px;">
+          <input id="dryRun" type="checkbox" style="width: 18px; height: 18px;" />
+          <span>dry-run，只验证流程，不调模型</span>
+        </label>
+        <label style="margin-top: 10px;">
+          原始 Prompt（作为本轮 v001 / baseline）
+          <textarea id="seedPromptText" placeholder="选择“自定义原始 prompt”后，在这里粘贴你要开始优化的 prompt。留空则使用上面的 baseline/candidate。"></textarea>
+        </label>
+        <div class="toolbar">
+          <button id="loadBaselineBtn">载入 baseline</button>
+          <button id="loadCandidateBtn">载入 candidate</button>
+          <button id="loadBestBtn">载入当前 best</button>
+          <button id="clearPromptBtn">清空</button>
+        </div>
+        <div class="toolbar">
+          <button id="startBtn" class="primary">开始研究</button>
+          <span id="runStatus" class="muted small">空闲</span>
+        </div>
+      </section>
+
+      <section>
+        <h2>三环境隔离</h2>
+        <div class="method">
+          <div><h3>生成环境</h3><p class="muted">只看 prompt + 日记输入，不看评分标准和历史决策。</p></div>
+          <div><h3>评分环境</h3><p class="muted">只看评分标准 + 日记输入 + 输出，不看 prompt。</p></div>
+          <div><h3>迭代 Agent</h3><p class="muted">只看 prompt + 分数 + 扣分原因，不参与评分。</p></div>
+        </div>
+      </section>
+    </aside>
+
+    <div class="right">
+      <section>
+        <h2>版本曲线</h2>
+        <div class="kpis">
+          <div class="kpi"><span class="muted small">当前版本</span><b id="kpiVersion">-</b></div>
+          <div class="kpi"><span class="muted small">当前分</span><b id="kpiScore">-</b></div>
+          <div class="kpi"><span class="muted small">最佳分</span><b id="kpiBest">-</b></div>
+          <div class="kpi"><span class="muted small">keep</span><b id="kpiKeep">0</b></div>
+          <div class="kpi"><span class="muted small">discard</span><b id="kpiDiscard">0</b></div>
+        </div>
+        <div id="chart" class="chart"></div>
+      </section>
+
+      <section>
+        <h2>版本历史</h2>
+        <div style="max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 8px;">
+          <table>
+            <thead>
+              <tr><th>版本</th><th>决策</th><th>分数</th><th>变化</th><th>commit</th><th>方向</th></tr>
+            </thead>
+            <tbody id="versionRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>版本详情</h2>
+        <div id="versionSummary" class="muted small">点击上方版本查看 prompt、diff 和 commit。</div>
+        <div class="grid" style="margin-top: 12px;">
+          <div>
+            <h3>Prompt 原文</h3>
+            <pre id="promptView"></pre>
+          </div>
+          <div>
+            <h3>与上一版 Diff</h3>
+            <pre id="diffView"></pre>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>运行日志</h2>
+        <pre id="logView"></pre>
+        <details style="margin-top: 12px;">
+          <summary>最近 run</summary>
+          <pre id="recentRuns"></pre>
+        </details>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      versions: [],
+      currentRun: [],
+      eventSource: null,
+      runId: '',
+      pollTimer: null,
+      seedPrompts: {},
+    };
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(options.headers || {}),
+        },
+      });
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!response.ok) throw new Error(data.error || response.statusText);
+      return data;
+    }
+
+    function decisionPill(decision) {
+      const cls = decision === 'discard' ? 'discard' : decision === 'baseline' ? 'baseline' : '';
+      return `<span class="pill ${cls}">${decision || '-'}</span>`;
+    }
+
+    function renderChart(items) {
+      const versions = items.length ? items : state.versions;
+      if (!versions.length) {
+        $('chart').innerHTML = '<div class="muted" style="padding: 20px;">还没有版本记录。</div>';
+        return;
+      }
+      const width = Math.max(760, versions.length * 86);
+      const height = 280;
+      const pad = 40;
+      const scores = versions.map((item) => Number(item.score || 0));
+      const min = Math.max(0, Math.min(...scores, 4) - 0.15);
+      const max = Math.min(5, Math.max(...scores, 5));
+      const xFor = (i) => pad + (versions.length === 1 ? 0 : (i / (versions.length - 1)) * (width - pad * 2));
+      const yFor = (score) => height - pad - ((score - min) / Math.max(0.01, max - min)) * (height - pad * 2);
+      const points = versions.map((item, i) => `${xFor(i)},${yFor(Number(item.score || 0))}`).join(' ');
+      const dots = versions.map((item, i) => {
+        const color = item.decision === 'discard' ? 'var(--red)' : item.decision === 'baseline' ? 'var(--blue)' : 'var(--green)';
+        return `<g data-version="${item.version}">
+          <circle cx="${xFor(i)}" cy="${yFor(Number(item.score || 0))}" r="6" fill="${color}" />
+          <text x="${xFor(i) - 16}" y="${height - 12}" font-size="12">${item.version}</text>
+          <text x="${xFor(i) - 16}" y="${yFor(Number(item.score || 0)) - 10}" font-size="11">${Number(item.score || 0).toFixed(2)}</text>
+        </g>`;
+      }).join('');
+      $('chart').innerHTML = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
+        <rect x="0" y="0" width="${width}" height="${height}" fill="#fffefa"></rect>
+        <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" stroke="#c9c0b2"></line>
+        <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" stroke="#c9c0b2"></line>
+        <polyline points="${points}" fill="none" stroke="#315f3a" stroke-width="3"></polyline>
+        ${dots}
+      </svg>`;
+    }
+
+    function renderVersions(items = state.versions) {
+      $('versionRows').innerHTML = items.map((item) => `
+        <tr data-version="${item.version}">
+          <td><button class="version-link" data-version="${item.version}">${item.version}</button></td>
+          <td>${decisionPill(item.decision)}</td>
+          <td>${Number(item.score || 0).toFixed(3)}</td>
+          <td>${Number(item.scoreDelta || 0).toFixed(3)}</td>
+          <td class="small">${String(item.commitHash || '').slice(0, 10)}</td>
+          <td>${item.direction || ''}</td>
+        </tr>
+      `).join('');
+      document.querySelectorAll('.version-link').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          loadVersion(button.dataset.version);
+        });
+      });
+      renderChart(state.currentRun.length ? state.currentRun : items);
+    }
+
+    function updateKpis(items) {
+      const latest = items.at(-1);
+      const keep = items.filter((item) => item.decision === 'keep' || item.decision === 'baseline').length;
+      const discard = items.filter((item) => item.decision === 'discard').length;
+      $('kpiVersion').textContent = latest?.version || '-';
+      $('kpiScore').textContent = latest ? Number(latest.score).toFixed(3) : '-';
+      $('kpiBest').textContent = latest ? Number(latest.bestScore || latest.score).toFixed(3) : '-';
+      $('kpiKeep').textContent = String(keep);
+      $('kpiDiscard').textContent = String(discard);
+    }
+
+    async function loadState() {
+      const data = await api('/api/research/state');
+      state.seedPrompts = await api('/api/research/seed-prompts');
+      $('dataset').innerHTML = data.datasets.map((item) => `<option value="${item.name}">${item.name} (${item.count})</option>`).join('');
+      $('dataset').value = data.defaults.dataset;
+      $('rounds').value = data.defaults.rounds;
+      $('limit').value = data.defaults.limit;
+      $('target').value = data.defaults.target;
+      $('patience').value = data.defaults.patience;
+      $('recentRuns').textContent = JSON.stringify(data.recentRuns, null, 2);
+      await loadVersions();
+    }
+
+    async function loadVersions() {
+      const data = await api('/api/research/versions');
+      state.versions = data.versions || [];
+      renderVersions();
+      updateKpis(state.currentRun.length ? state.currentRun : state.versions);
+    }
+
+    async function loadVersion(version) {
+      $('versionSummary').textContent = `正在加载 ${version}...`;
+      $('promptView').textContent = '';
+      $('diffView').textContent = '';
+      try {
+        const detail = await api(`/api/research/versions/${version}`);
+        $('versionSummary').textContent = `${detail.version} · ${detail.decision} · score ${Number(detail.score || 0).toFixed(3)} · commit ${detail.commitHash || ''}`;
+        $('promptView').textContent = detail.prompt || '(该版本 prompt 为空)';
+        $('diffView').textContent = detail.diff || '这是第一版，或上一版文件不存在。';
+      } catch (error) {
+        $('versionSummary').textContent = `加载失败：${error.message}`;
+        $('promptView').textContent = '';
+        $('diffView').textContent = '';
+      }
+    }
+
+    async function saveSample() {
+      $('sampleStatus').textContent = '保存中...';
+      try {
+        const result = await api('/api/research/samples', {
+          method: 'POST',
+          body: JSON.stringify({
+            diaryText: $('diaryText').value,
+            referenceEcho: $('referenceEcho').value,
+            rubricNotes: $('rubricNotes').value,
+          }),
+        });
+        $('sampleStatus').textContent = `已保存 ${result.saved} 条`;
+        await loadState();
+      } catch (error) {
+        $('sampleStatus').textContent = error.message;
+      }
+    }
+
+    function appendLog(text) {
+      $('logView').textContent += `${text}\n`;
+      $('logView').scrollTop = $('logView').scrollHeight;
+    }
+
+    async function startRun() {
+      if (state.eventSource) state.eventSource.close();
+      if (state.pollTimer) clearInterval(state.pollTimer);
+      state.currentRun = [];
+      renderVersions([]);
+      updateKpis([]);
+      $('logView').textContent = '';
+      $('runStatus').textContent = '启动中...';
+      $('startBtn').disabled = true;
+      $('downloadBest').hidden = true;
+      try {
+        const data = await api('/api/research/runs', {
+          method: 'POST',
+          body: JSON.stringify({
+            dataset: $('dataset').value,
+            seedPrompt: $('seedPrompt').value,
+            seedPromptText: $('seedPromptText').value,
+            rounds: Number($('rounds').value),
+            limit: Number($('limit').value),
+            target: Number($('target').value),
+            patience: Number($('patience').value),
+            dryRun: $('dryRun').checked,
+          }),
+        });
+        state.runId = data.runId;
+        $('runStatus').textContent = `运行中：${data.runId}`;
+        state.pollTimer = setInterval(() => pollRun(data.runId), 2500);
+        const source = new EventSource(`/api/research/runs/${data.runId}/events`);
+        state.eventSource = source;
+        source.addEventListener('start', (event) => {
+          const payload = JSON.parse(event.data);
+          appendLog(`开始：${payload.runId}，样本数 ${payload.caseCount}`);
+        });
+        source.addEventListener('version', (event) => {
+          const payload = JSON.parse(event.data);
+          state.currentRun.push(payload);
+          renderVersions(state.currentRun);
+          updateKpis(state.currentRun);
+          appendLog(`${payload.version} ${payload.decision} score=${Number(payload.score).toFixed(3)} best=${Number(payload.bestScore).toFixed(3)} commit=${String(payload.commitHash || '').slice(0, 10)}`);
+        });
+        source.addEventListener('log', (event) => {
+          appendLog(JSON.parse(event.data).message);
+        });
+        source.addEventListener('done', async (event) => {
+          const payload = JSON.parse(event.data);
+          await finishRun(payload.summary);
+          source.close();
+        });
+        source.addEventListener('error', (event) => {
+          if (event.data) appendLog(`错误：${JSON.parse(event.data).message}`);
+        });
+      } catch (error) {
+        $('runStatus').textContent = error.message;
+        $('startBtn').disabled = false;
+      }
+    }
+
+    async function finishRun(summary) {
+      if (!summary) return;
+      if (state.pollTimer) {
+        clearInterval(state.pollTimer);
+        state.pollTimer = null;
+      }
+      $('runStatus').textContent = `完成：${summary.bestVersion} / ${Number(summary.bestScore).toFixed(3)}`;
+      $('downloadBest').href = `/api/research/runs/${summary.runId}/best-prompt`;
+      $('downloadBest').hidden = false;
+      $('startBtn').disabled = false;
+      await loadVersions();
+    }
+
+    async function pollRun(runId) {
+      try {
+        const data = await api(`/api/research/runs/${runId}`);
+        if (data.status === 'done') {
+          await finishRun(data.summary);
+          if (state.eventSource) state.eventSource.close();
+        }
+        if (data.status === 'error') {
+          if (state.pollTimer) clearInterval(state.pollTimer);
+          $('runStatus').textContent = `失败：${data.error}`;
+          $('startBtn').disabled = false;
+        }
+      } catch (error) {
+        appendLog(`状态轮询失败：${error.message}`);
+      }
+    }
+
+    $('saveSampleBtn').addEventListener('click', saveSample);
+    $('startBtn').addEventListener('click', startRun);
+    $('refreshBtn').addEventListener('click', loadState);
+    $('loadBaselineBtn').addEventListener('click', () => {
+      $('seedPrompt').value = 'text';
+      $('seedPromptText').value = state.seedPrompts.baseline || '';
+    });
+    $('loadCandidateBtn').addEventListener('click', () => {
+      $('seedPrompt').value = 'text';
+      $('seedPromptText').value = state.seedPrompts.candidate || '';
+    });
+    $('loadBestBtn').addEventListener('click', async () => {
+      const latestBest = state.versions.filter((item) => item.decision === 'keep' || item.decision === 'baseline').at(-1);
+      if (!latestBest) return;
+      await loadVersion(latestBest.version);
+      $('seedPrompt').value = 'text';
+      $('seedPromptText').value = $('promptView').textContent || '';
+    });
+    $('clearPromptBtn').addEventListener('click', () => {
+      $('seedPromptText').value = '';
+    });
+    $('seedPromptText').addEventListener('input', () => {
+      if ($('seedPromptText').value.trim()) $('seedPrompt').value = 'text';
+    });
+    loadState().catch((error) => {
+      $('runStatus').textContent = error.message;
+    });
+  </script>
+</body>
+</html>

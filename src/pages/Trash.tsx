@@ -54,9 +54,9 @@ export default function Trash() {
   };
 
   return (
-    <div className="min-h-screen bg-surface text-on-surface pb-12 animate-in fade-in slide-in-from-right-8 duration-300 ease-out">
+    <div className="flex h-dvh flex-col overflow-hidden bg-surface text-on-surface animate-in fade-in slide-in-from-right-8 duration-300 ease-out">
       <header 
-        className="app-safe-header sticky top-0 z-40 flex items-center justify-between px-4 w-full transition-colors duration-300 bg-[#FAF9F5] dark:bg-[#1C1C1E]"
+        className="app-safe-header sticky top-0 z-40 flex shrink-0 items-center justify-between px-4 w-full transition-colors duration-300 bg-[#FAF9F5] dark:bg-[#1C1C1E]"
       >
         <button 
           onClick={goBack}
@@ -84,7 +84,7 @@ export default function Trash() {
         </div>
       </header>
 
-      <main className="app-reading-container pt-6">
+      <main className="app-page-scroll app-reading-container min-h-0 flex-1 overflow-y-auto pt-6 pb-12">
         {items.length > 0 ? (
           <>
             <header className="mb-8">

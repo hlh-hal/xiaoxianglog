@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {
   DAILY_ECHO_SYSTEM_PROMPT,
+  CANDIDATE_DAILY_ECHO_SYSTEM_PROMPT,
+  buildDailyEchoPromptSet,
   buildPromptMemoryPack,
   buildEchoHotMemoryContextForEcho,
   buildDailyEchoUserPrompt,
@@ -88,6 +90,32 @@ test('user prompt keeps diary details, anchors, and 600 char hard limit', () => 
   assert.ok(prompt.includes('必须指出用户真正卡住的地方'));
   assert.ok(prompt.includes('如果回复只是'));
   assert.ok(prompt.includes('不要输出内部理解或内部洞察草稿'));
+});
+
+test('daily echo prompt lab starts with candidate matching baseline', () => {
+  const baseline = buildDailyEchoPromptSet('baseline', {
+    diaryText,
+    diaryDate: '2026-05-31',
+    regenerateCount: 0,
+    attempt: 0,
+  });
+  const candidate = buildDailyEchoPromptSet('candidate', {
+    diaryText,
+    diaryDate: '2026-05-31',
+    regenerateCount: 0,
+    attempt: 0,
+  });
+
+  assert.equal(CANDIDATE_DAILY_ECHO_SYSTEM_PROMPT, DAILY_ECHO_SYSTEM_PROMPT);
+  assert.equal(baseline.systemPrompt, DAILY_ECHO_SYSTEM_PROMPT);
+  assert.equal(candidate.systemPrompt, baseline.systemPrompt);
+  assert.equal(candidate.userPrompt, baseline.userPrompt);
+  assert.equal(candidate.temperature, 0.62);
+  assert.equal(buildDailyEchoPromptSet('baseline', {
+    diaryText,
+    diaryDate: '2026-05-31',
+    attempt: 1,
+  }).temperature, 0.42);
 });
 
 test('user prompt does not inject cold insight draft directly', () => {
