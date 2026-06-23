@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { stringArray } from '../utils/request.js';
 import { repairLegacyImageUrls } from '../lib/imageRepair.js';
 import { areStringArraysEqual, parseStoredStringArray, saveEditHistorySnapshot } from '../lib/editHistory.js';
+import { handleEntryChangedForMonthlyEcho } from '../lib/monthlyEchoService.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -285,6 +286,11 @@ router.post('/push', async (req: Request, res: Response) => {
           };
 
           await updateDiaryEntryCompat({ id: existing.id }, updateData);
+          handleEntryChangedForMonthlyEcho({
+            userId,
+            entryId: existing.id,
+            previousDiaryDate: existing.diaryDate,
+          }).catch(error => console.warn('[monthly-echo] enqueue after sync update failed:', error));
 
           return { id, status: 'updated' };
         };
@@ -339,6 +345,8 @@ router.post('/push', async (req: Request, res: Response) => {
             content: created.content,
             images: parseStoredStringArray(created.images),
           });
+          handleEntryChangedForMonthlyEcho({ userId, entryId: created.id })
+            .catch(error => console.warn('[monthly-echo] enqueue after sync create failed:', error));
           results.push({ id, status: 'created' });
         }
       } catch (err: any) {

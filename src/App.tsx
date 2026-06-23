@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Home from './pages/Home';
 import Editor from './pages/Editor';
@@ -11,11 +11,14 @@ import InsightDraftSettings from './pages/InsightDraftSettings';
 import Gallery from './pages/Gallery';
 import Walk from './pages/Walk';
 import OnThisDay from './pages/OnThisDay';
+import AnnualEcho from './pages/AnnualEcho';
+import MonthlyEcho from './pages/MonthlyEcho';
 import Trash from './pages/Trash';
 import Search from './pages/Search';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import ForgotPassword from './pages/ForgotPassword';
+import FirstRunVaultOnboarding from './pages/FirstRunVaultOnboarding';
 import AIChat from './pages/AIChat';
 import Leaderboard from './pages/Leaderboard';
 import FriendList from './pages/FriendList';
@@ -37,6 +40,7 @@ import {
   updateServerNotificationPreferences,
 } from './utils/notify';
 import { api, isAuthenticated } from './services/apiClient';
+import { firstInstallVaultOnboardingService } from './services/firstInstallVaultOnboardingService';
 
 if ('scrollRestoration' in history) {
   history.scrollRestoration = 'manual';
@@ -269,6 +273,8 @@ async function syncExistingNotificationPreferences(): Promise<void> {
   const socialNotifyEnabled = localStorage.getItem('setting_notify_enabled') !== 'false';
   const friendRequestNotifyEnabled = localStorage.getItem('setting_friend_request_enabled') !== 'false';
   const preference = await getServerNotificationPreferences();
+  const monthlyEchoPushEnabled = preference?.monthlyEchoPushEnabled !== false
+    && localStorage.getItem('setting_monthly_echo_push_enabled') !== 'false';
 
   if (isNativeAndroid()) {
     if (preference?.dailyReminderEnabled) {
@@ -277,7 +283,7 @@ async function syncExistingNotificationPreferences(): Promise<void> {
     return;
   }
 
-  const wantsPush = settings.reminderEnabled || socialNotifyEnabled || friendRequestNotifyEnabled;
+  const wantsPush = settings.reminderEnabled || socialNotifyEnabled || friendRequestNotifyEnabled || monthlyEchoPushEnabled;
   if (!wantsPush) return;
 
   await ensurePwaPushSubscription();
@@ -289,13 +295,40 @@ async function syncExistingNotificationPreferences(): Promise<void> {
   }
 }
 
+function FirstInstallVaultOnboardingGate() {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const check = () => {
+      if (
+        firstInstallVaultOnboardingService.shouldShow()
+        && location.pathname !== '/first-run/local-vault'
+      ) {
+        navigate('/first-run/local-vault', { replace: true });
+      }
+    };
+
+    check();
+    window.addEventListener(firstInstallVaultOnboardingService.stateChangedEvent, check);
+    return () => {
+      window.removeEventListener(firstInstallVaultOnboardingService.stateChangedEvent, check);
+    };
+  }, [location.pathname, navigate]);
+
+  return null;
+}
+
 export default function App() {
   useEffect(() => {
     const init = async () => {
-      await diaryService.init();          // 确保 DB 已初始化
-      await loadCustomFonts();            // 加载自定义字体
-      await initWelcomeDiary();           // 创建欢迎日记（仅首次）
-
+      await diaryService.init();
+      const existingEntries = await diaryService.getAllEntries().catch(() => []);
+      await firstInstallVaultOnboardingService.initialize({
+        hasExistingEntries: existingEntries.length > 0,
+      });
+      await loadCustomFonts();
+      await initWelcomeDiary();
       const settings = settingsService.getSettings();
       if (settings.reminderEnabled) {
         await scheduleDailyReminder(settings.reminderTime, '小象日志', getRandomDailyReminderBody()).catch(() => false);
@@ -341,6 +374,7 @@ export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
+        <FirstInstallVaultOnboardingGate />
         <Routes>
           <Route path="/" element={<Layout />}>
             <Route index element={<Home />} />
@@ -350,6 +384,8 @@ export default function App() {
             <Route path="gallery" element={<Gallery />} />
             <Route path="walk" element={<Walk />} />
             <Route path="on-this-day" element={<OnThisDay />} />
+            <Route path="annual-echo" element={<AnnualEcho />} />
+            <Route path="monthly-echo" element={<MonthlyEcho />} />
             <Route path="trash" element={<Trash />} />
             <Route path="settings" element={<Settings />} />
             <Route path="settings/insight-draft" element={<InsightDraftSettings />} />
@@ -367,6 +403,7 @@ export default function App() {
           <Route path="/post/:id" element={<PostDetail />} />
           <Route path="/editor" element={<Editor />} />
           <Route path="/friends" element={<FriendList />} />
+          <Route path="/first-run/local-vault" element={<FirstRunVaultOnboarding />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

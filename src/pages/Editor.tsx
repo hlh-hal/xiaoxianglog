@@ -728,6 +728,7 @@ export default function Editor() {
     remainingFrames: number;
   } | null>(null);
   const textSelectionScrollGuardRef = useRef<TextSelectionScrollGuard | null>(null);
+  const imeCompositionLockRef = useRef<number | null>(null);
 
   // Menu and Modals State
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -898,6 +899,13 @@ export default function Editor() {
   useEffect(() => {
     isEditingRef.current = isEditing && !previewHashActive;
   }, [isEditing, previewHashActive]);
+
+  useEffect(() => () => {
+    if (imeCompositionLockRef.current !== null) {
+      window.clearTimeout(imeCompositionLockRef.current);
+      imeCompositionLockRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     previewEntryClickGuardUntilRef.current = id ? Date.now() + 600 : 0;
@@ -1304,7 +1312,6 @@ export default function Editor() {
     if (hasSelection) {
       setIsTextSelectionActiveState(true);
       stopInputScrollLock();
-      scheduleTextSelectionScrollGuard();
       return true;
     }
 
@@ -1327,10 +1334,9 @@ export default function Editor() {
 
     setIsTextSelectionActiveState(true);
     stopInputScrollLock();
-    scheduleTextSelectionScrollGuard();
     releaseTextSelectionScrollGuard();
     return isEditorTextSelectionActive();
-  }, [ensureTextSelectionScrollGuard, isEditorTextSelectionActive, releaseTextSelectionScrollGuard, scheduleTextSelectionScrollGuard, stopInputScrollLock]);
+  }, [ensureTextSelectionScrollGuard, isEditorTextSelectionActive, releaseTextSelectionScrollGuard, stopInputScrollLock]);
 
   useEffect(() => {
     const handleSelectionChange = () => {
@@ -1343,7 +1349,6 @@ export default function Editor() {
 
       stopInputScrollLock();
       ensureTextSelectionScrollGuard(null);
-      scheduleTextSelectionScrollGuard();
       releaseTextSelectionScrollGuard(1400);
     };
 
@@ -2164,23 +2169,37 @@ export default function Editor() {
     pointerup: (_view: unknown, event: PointerEvent) => selectInlineImageFromEvent(event),
     click: (_view: unknown, event: MouseEvent) => selectInlineImageFromEvent(event),
     beforeinput: () => {
+      recordWritingActivity();
       lockScrollForEditorInput();
       return false;
     },
     input: () => {
+      recordWritingActivity();
       lockScrollForEditorInput();
       return false;
     },
-    compositionstart: () => {
+    compositionstart: (view: { dom: HTMLElement }) => {
+      recordWritingActivity();
+      view.dom.classList.add('is-ime-composing');
+      if (imeCompositionLockRef.current !== null) {
+        window.clearTimeout(imeCompositionLockRef.current);
+      }
       lockScrollForEditorInput();
       return false;
     },
     compositionupdate: () => {
-      lockScrollForEditorInput();
+      recordWritingActivity();
       return false;
     },
-    compositionend: () => {
-      lockScrollForEditorInput();
+    compositionend: (view: { dom: HTMLElement }) => {
+      recordWritingActivity();
+      if (imeCompositionLockRef.current !== null) {
+        window.clearTimeout(imeCompositionLockRef.current);
+      }
+      imeCompositionLockRef.current = window.setTimeout(() => {
+        view.dom.classList.remove('is-ime-composing');
+        imeCompositionLockRef.current = null;
+      }, 80);
       return false;
     },
     keydown: (_view: unknown, event: KeyboardEvent) => {
@@ -2190,6 +2209,7 @@ export default function Editor() {
         || event.key === 'Delete';
 
       if (editingKey) {
+        recordWritingActivity();
         lockScrollForEditorInput();
       }
 
@@ -3282,6 +3302,7 @@ export default function Editor() {
     '#000 calc(76px + env(safe-area-inset-top))',
     '#000 100%)',
   ].join(', ');
+  const shouldUseEditorTopFadeMask = !isEditing && !isTextSelectionActiveState;
   const navStyle: React.CSSProperties = {
     height: editorChromeHeight,
     paddingTop: 'env(safe-area-inset-top)',
@@ -3303,8 +3324,8 @@ export default function Editor() {
     paddingTop: editorContentTopPadding,
     paddingBottom: editorContentBottomPadding,
     WebkitOverflowScrolling: 'touch',
-    WebkitMaskImage: editorTopFadeMask,
-    maskImage: editorTopFadeMask,
+    WebkitMaskImage: shouldUseEditorTopFadeMask ? editorTopFadeMask : undefined,
+    maskImage: shouldUseEditorTopFadeMask ? editorTopFadeMask : undefined,
     scrollPaddingBottom: editorScrollPaddingBottom,
     overflowAnchor: 'none',
   };

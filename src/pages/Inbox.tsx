@@ -197,11 +197,12 @@ export default function Inbox() {
 
   return (
     <div style={{
-      minHeight: '100vh',
+      height: '100dvh',
       backgroundColor: isDark ? '#1C1C1E' : '#FAF9F5',
       fontFamily: 'inherit',
       display: 'flex',
-      flexDirection: 'column'
+      flexDirection: 'column',
+      overflow: 'hidden'
     }}>
       {/* TopAppBar */}
       <div style={{
@@ -218,7 +219,8 @@ export default function Inbox() {
         paddingLeft: '8px',
         paddingRight: '16px',
         borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`,
-        boxSizing: 'border-box'
+        boxSizing: 'border-box',
+        flexShrink: 0
       }}>
         <button 
           onClick={() => navigate(-1)}
@@ -241,7 +243,8 @@ export default function Inbox() {
         backgroundColor: isDark ? '#1C1C1E' : '#FAF9F5',
         position: 'sticky',
         top: 'var(--app-total-header-height)',
-        zIndex: 40
+        zIndex: 40,
+        flexShrink: 0
       }}>
         {TABS.map((tab, idx) => {
           const isActive = activeTab === idx;
@@ -281,7 +284,10 @@ export default function Inbox() {
       </div>
 
       {/* List */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div
+        className="app-page-scroll"
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
+      >
         {filteredList.map(item => (
           <div
             key={item.id}

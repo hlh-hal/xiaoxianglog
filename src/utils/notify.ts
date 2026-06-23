@@ -178,6 +178,10 @@ export type ServerNotificationPreferences = {
   dailyReminderEnabled: boolean;
   dailyReminderTime: string;
   dailyReminderTimezone: string;
+  monthlyEchoEnabled: boolean;
+  monthlyEchoPushEnabled: boolean;
+  monthlyEchoPushTime: string;
+  monthlyEchoTimezone: string;
   socialNotifyEnabled: boolean;
   friendRequestNotifyEnabled: boolean;
 };
@@ -429,6 +433,7 @@ export async function updateServerNotificationPreferences(
   if (!isAuthenticated()) return null;
   return api.put<ServerNotificationPreferences>('/notifications/preferences', {
     dailyReminderTimezone: getBrowserTimezone(),
+    monthlyEchoTimezone: preferences.monthlyEchoTimezone || getBrowserTimezone(),
     ...preferences,
   });
 }

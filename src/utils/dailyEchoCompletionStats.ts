@@ -1,6 +1,6 @@
 import type { DiaryEntry } from '../services/diaryService';
 
-export const WRITING_ACTIVITY_WINDOW_MS = 30_000;
+export const WRITING_ACTIVITY_WINDOW_MS = 90_000;
 
 export type WritingActivityState = {
   elapsedMs: number;
@@ -75,17 +75,9 @@ export function pauseWritingActivity(
 
 export function getActiveWritingMinutes(state: WritingActivityState, timestamp = Date.now()): number {
   const finalized = pauseWritingActivity(state, timestamp);
-  const activeMinutes = finalized.elapsedMs > 0 ? Math.floor(finalized.elapsedMs / 60_000) : 0;
-  const sessionEndedAt = finalized.sessionEndedAt ?? timestamp;
-  const sessionElapsedMs = finalized.sessionStartedAt === null
-    ? 0
-    : Math.max(0, sessionEndedAt - finalized.sessionStartedAt);
-  const sessionMinutes = finalized.sessionStartedAt === null
-    ? 0
-    : Math.floor(sessionElapsedMs / 60_000);
-  const minutes = Math.max(activeMinutes, sessionMinutes);
-  if (minutes <= 0 && finalized.elapsedMs <= 0 && sessionElapsedMs <= 0) return 0;
-  return Math.max(1, minutes);
+  const activeMinutes = finalized.elapsedMs > 0 ? Math.round(finalized.elapsedMs / 60_000) : 0;
+  if (activeMinutes <= 0 && finalized.elapsedMs <= 0) return 0;
+  return Math.max(1, activeMinutes);
 }
 
 export function getActiveWritingSeconds(state: WritingActivityState, timestamp = Date.now()): number {

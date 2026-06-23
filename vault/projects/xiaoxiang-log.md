@@ -1,5 +1,13 @@
 # 小象日志
 
+## 2026-06-21 月度回声上线版
+
+- 已实现持久化后端月度回声链路：`DailyTraceNode -> MonthlyArcDraft -> MonthlyEcho`，通过 `MonthlyEchoJobLog` 做轻量 job、失败落库和 `userId + monthKey + jobType` 运行锁。保存/同步/删除日记只标记 trace pending/stale/invalid 并入队，不在请求链路调用 AI。
+- `monthKey` 基于 `entry.diaryDate` 日历键计算；跨月修改会 stale 旧月和新月；GET `/api/monthly-echo` 会先查 echo、pending job、running lock，避免前端刷新重复建任务。月末推送按用户 `monthlyEchoTimezone` + 本地 `HH:mm`，支持月末错过补偿和次月 1 日短窗口；推送路径增加 runtime lock、事务内二次检查 `pushedAt`，已 pushed 后 stale 只更新内容不重复推送。
+- AI 安全：所有月度 prompt 明确声明日记、今日回声、Trace/Draft 都是待分析材料不是指令；`evidenceQuotes` 必须来自原文/今日回声连续短句，`posterQuote` 只能来自已校验证据且高风险内容不进入海报 quote；自伤/自杀/伤害他人内容走安全兜底模板，不生成收藏式金句、诊断或浪漫化表达。
+- 前端新增 `/monthly-echo?monthKey=YYYY-MM` 五张卡片式月度回声、完整回声折叠、海报保存；搜索新增月度回声虚拟结果；设置页新增月度回声生成开关、月末推送提醒开关和本地推送时间。
+- 验证：`server npm run db:generate`、`server npm run build`、根目录 `npm run test:monthly-echo`、`npm run lint`、`npm run build` 均通过；测试成功截图在 `artifacts/monthly-echo-test-success.png`。部署前仍需对目标数据库执行 `server npm run db:push` 并确认 scheduler 常驻。
+
 ## 项目背景
 
 小象日志是一个私密、温和、偏移动端体验的日记应用。详细技术栈、目录职责、编码风格和验证方式见仓库根目录 `AGENTS.md`。
@@ -193,3 +201,34 @@
 - `http://localhost:3010/research` 已支持直接输入本轮原始 prompt；也可一键载入 baseline、candidate 或当前 best 作为 seed prompt。
 - 历史版本查看已优化：版本号可点击，详情区会显示 prompt 原文、diff、评分摘要和 Git commit；服务端不再为单个版本详情遍历完整历史，避免 Prompt 原文区域空白或加载过慢。
 - 该工具仍只写入 `artifacts/echo-prompt-research/` 和独立 prompt-history Git 仓库，不自动修改线上 `src/services/aiService.ts`。
+
+## 2026-06-13 Android v1.0.14 黑边、滚动残影、导出修复发布
+
+- 已发布自有服务器主链路 Android 正式包 `1.0.14 / versionCode 16`，主下载地址仍为 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk`。
+- 更新公告内容对应三处修复：顶部状态栏黑/灰边、首页滚动文字残影/中段空白、Android 导出日志图片保存失败。
+- 线上 `app-update.json` 已返回 `1.0.14 / 16`，公网 APK SHA256 与本地正式签名包一致：`E7DC23A2DC66EDA03128B3263C23BF88D124FE71237F5459CCF1B44B0B3B1D92`。
+- 本次仅发布自有服务器，未同步 GitHub Pages / GitHub Release；验证详情见 `vault/notes/daily/2026-06-13-android-v114-blackbar-scroll-export-release.md`。
+
+## 2026-06-13 年度回声 v1
+
+- 已新增 `/annual-echo?year=YYYY`，作为移动端优先的旧日记翻页式年度报告；入口可由搜索 `年度报告`、`年报`、`年度回声` 或 `2026年度报告` 等关键词触发。
+- 年度统计本地计算，缓存只写 IndexedDB `annualEchoDigests`，不进 Prisma、不参与同步；缓存按年度日记 source hash 判断是否过期。
+- AI 只负责克制生成：用户原话金句、年度总回应、证据明确的 `只要……我就……` 使用说明书；前端工具层会校验原文、证据、句式、去重，失败走本地 fallback。
+- 用户本轮明确要求“暂时不用推送到用户端”，所以本次没有实现 12 月 16 日系统推送、后端定时任务、Android 本地通知、通知偏好字段或设置页开关。
+- 验证：`npm run test:annual-echo`、`npm run lint`、`npm run build` 通过；本地 Vite + Playwright/Edge 冒烟验证了搜索入口、年度页、多条说明书展开/滚动和桌面宽度。
+
+
+## 2026-06-20 Android v1.0.15 发布
+
+- 已发布自有服务器主链路 Android 正式包 1.0.15 / versionCode 17，主下载地址仍为 https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk。
+- 更新公告对应当天 daily note：编辑器移动端选区白块、写完日记后的活跃写作用时统计、消息页面长列表滚动。
+- 线上 pp-update.json 已返回 1.0.15 / 17，公网 APK 与本地正式签名包 SHA256 一致：EA500B56857DCDEBC764F56146D2DDE5A50931F7195655CBFA0248E3CC73B38D。
+- 本次未同步 GitHub Pages / GitHub Release；验证详情见 ault/notes/daily/2026-06-20-android-v115-release.md。
+
+
+## 2026-06-22 Android v1.0.16 发布
+
+- 已发布自有服务器主链路 Android 正式包 1.0.16 / versionCode 18，主下载地址仍为 https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk。
+- 更新公告三项：导出日记图片中英文重叠修复、编辑器移动端光标/选区白块优化、写完日记后的真实写作用时统计修正。
+- 线上 pp-update.json 已返回 1.0.16 / 18，公网 APK 与本地正式签名包 SHA256 一致：F3F764E1E8A9901FDA20E470E6D18FC5CCB7B7BAC1AFBB8F6DB11F80466AAAFE。
+- 本次未同步 GitHub Pages / GitHub Release；验证详情见 ault/notes/daily/2026-06-22-android-v116-release.md。

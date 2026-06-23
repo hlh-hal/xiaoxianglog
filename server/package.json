@@ -9,6 +9,7 @@
     "start:bt": "node dist/index.js",
     "doctor:cpamc": "node scripts/doctor-cpamc.mjs",
     "backup:db": "tsx scripts/backup-db-to-oss.ts",
+    "backfill:monthly-echo": "tsx scripts/backfill-monthly-echo.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",

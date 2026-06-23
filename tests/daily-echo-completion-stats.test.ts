@@ -45,25 +45,40 @@ test('counts user text while excluding diary template labels and punctuation', (
   assert.equal(countDiaryTextCharacters(html), 17);
 });
 
-test('caps active writing time at 30 seconds and ignores inactive gaps', () => {
+test('caps active writing time at 90 seconds and ignores inactive gaps', () => {
   let activity = createWritingActivityState();
   activity = recordWritingInput(activity, 1_000);
   activity = recordWritingInput(activity, 11_000);
   activity = recordWritingInput(activity, 81_000);
 
-  assert.equal(activity.elapsedMs, 40_000);
+  assert.equal(activity.elapsedMs, 80_000);
   assert.equal(getActiveWritingMinutes(activity, 82_000), 1);
 });
 
-test('completion minutes use the edit session span instead of only active keystrokes', () => {
+test('completion minutes ignore wall-clock gaps and use capped active writing time', () => {
   let activity = createWritingActivityState();
   activity = recordWritingInput(activity, 0);
   activity = recordWritingInput(activity, 6 * 60_000);
   activity = recordWritingInput(activity, 12 * 60_000);
 
-  assert.equal(activity.elapsedMs, 60_000);
-  assert.equal(getActiveWritingSeconds(activity, 12 * 60_000), 60);
-  assert.equal(getActiveWritingMinutes(activity, 12 * 60_000), 12);
+  assert.equal(activity.elapsedMs, 180_000);
+  assert.equal(getActiveWritingSeconds(activity, 12 * 60_000), 180);
+  assert.equal(getActiveWritingMinutes(activity, 12 * 60_000), 3);
+});
+
+test('continuous five minute writing with natural pauses displays about five minutes', () => {
+  let activity = createWritingActivityState();
+  activity = recordWritingInput(activity, 0);
+  activity = recordWritingInput(activity, 65_000);
+  activity = recordWritingInput(activity, 145_000);
+  activity = recordWritingInput(activity, 225_000);
+  activity = pauseWritingActivity(activity, 295_000);
+
+  assert.equal(getActiveWritingMinutes(activity, 295_000), 5);
+});
+
+test('minutes round to the nearest minute to reduce undercounting', () => {
+  assert.equal(getActiveWritingMinutes(createWritingActivityState(4 * 60_000 + 31_000)), 5);
 });
 
 test('pause stops background or blur time from accumulating', () => {
@@ -77,14 +92,14 @@ test('pause stops background or blur time from accumulating', () => {
   assert.equal(activity.lastInputAt, null);
 });
 
-test('active writing minutes use complete minutes with a one minute minimum', () => {
+test('active writing minutes round up after the half-minute mark with a one minute minimum', () => {
   let activity = createWritingActivityState();
   activity = recordWritingInput(activity, 0);
   activity = recordWritingInput(activity, 30_000);
   activity = recordWritingInput(activity, 60_000);
   activity = recordWritingInput(activity, 90_000);
 
-  assert.equal(getActiveWritingMinutes(activity, 91_000), 1);
+  assert.equal(getActiveWritingMinutes(activity, 91_000), 2);
   assert.equal(getActiveWritingSeconds(activity, 91_000), 91);
 });
 
@@ -98,6 +113,25 @@ test('restores a persisted writing baseline and keeps accumulating across sessio
 
   assert.equal(getActiveWritingSeconds(activity), 14 * 60 + 60);
   assert.equal(getActiveWritingMinutes(activity), 15);
+});
+
+test('split writing across a long break accumulates active time without counting the break', () => {
+  let activity = createWritingActivityState();
+  activity = recordWritingInput(activity, 0);
+  activity = recordWritingInput(activity, 30_000);
+  activity = recordWritingInput(activity, 60_000);
+  activity = pauseWritingActivity(activity, 61_000);
+
+  const persistedSeconds = getActiveWritingSeconds(activity, 61_000);
+  assert.equal(persistedSeconds, 61);
+
+  activity = createWritingActivityState(persistedSeconds * 1_000);
+  activity = recordWritingInput(activity, 60 * 60_000);
+  activity = recordWritingInput(activity, 60 * 60_000 + 30_000);
+  activity = pauseWritingActivity(activity, 60 * 60_000 + 61_000);
+
+  assert.equal(getActiveWritingSeconds(activity, 60 * 60_000 + 61_000), 122);
+  assert.equal(getActiveWritingMinutes(activity, 60 * 60_000 + 61_000), 2);
 });
 
 test('repeated reads without new input do not increase persisted writing time', () => {

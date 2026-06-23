@@ -1,0 +1,37 @@
+﻿◇ injected env (23) from server\.env // tip: ◈ secrets for agents [www.dotenvx.com]
+◇ injected env (0) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+{
+  "trace": [
+    {
+      "_count": {
+        "_all": 7
+      },
+      "status": "generated"
+    }
+  ],
+  "echo": {
+    "status": "ready",
+    "title": "当“到家说声”成为月度的温柔锚点",
+    "pushedAt": null,
+    "posterQuote": "读到这句话，心里一下就安静了。",
+    "posterThemeLine": "在朴素约定与务实调整中，确认生活的节",
+    "generatedAt": "2026-06-21T06:02:33.250Z"
+  },
+  "jobs": [
+    {
+      "jobType": "monthly_echo",
+      "status": "success",
+      "attemptCount": 1,
+      "lockedUntil": null,
+      "lastError": null
+    },
+    {
+      "jobType": "trace",
+      "status": "pending",
+      "attemptCount": 0,
+      "lockedUntil": null,
+      "lastError": null
+    }
+  ],
+  "jobCount": 2
+}

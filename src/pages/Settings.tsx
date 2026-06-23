@@ -33,7 +33,8 @@ import {
 type PendingNotificationToggle =
   | { type: 'reminder' }
   | { type: 'notify' }
-  | { type: 'friendRequest' };
+  | { type: 'friendRequest' }
+  | { type: 'monthlyEchoPush' };
 
 const REMINDER_NOTIFICATION_TITLE = '小象日志';
 
@@ -76,6 +77,11 @@ export default function Settings() {
   const [friendRequestEnabled, setFriendRequestEnabled] = useState(
     () => localStorage.getItem('setting_friend_request_enabled') !== 'false' && getBrowserNotificationPermission() === 'granted',
   );
+  const [monthlyEchoEnabled, setMonthlyEchoEnabled] = useState(true);
+  const [monthlyEchoPushEnabled, setMonthlyEchoPushEnabled] = useState(
+    () => localStorage.getItem('setting_monthly_echo_push_enabled') !== 'false' && getBrowserNotificationPermission() === 'granted',
+  );
+  const [monthlyEchoPushTime, setMonthlyEchoPushTime] = useState('20:00');
 
   const showToast = (message: string) => {
     setToastMessage(message);
@@ -124,6 +130,7 @@ export default function Settings() {
       const granted = permission === 'granted';
       setNotifyEnabled(localStorage.getItem('setting_notify_enabled') !== 'false' && granted);
       setFriendRequestEnabled(localStorage.getItem('setting_friend_request_enabled') !== 'false' && granted);
+      setMonthlyEchoPushEnabled(localStorage.getItem('setting_monthly_echo_push_enabled') !== 'false' && granted);
 
       if (permission === 'denied' || permission === 'unsupported' || permission === 'insecure') {
         if (settingsService.getSettings().reminderEnabled) {
@@ -131,6 +138,7 @@ export default function Settings() {
         }
         updateLocalNotificationSetting('setting_notify_enabled', setNotifyEnabled, false);
         updateLocalNotificationSetting('setting_friend_request_enabled', setFriendRequestEnabled, false);
+        updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, false);
       }
     }).catch(error => console.warn('Failed to check notification permission:', error));
   }, []);
@@ -160,6 +168,13 @@ export default function Settings() {
       }
       updateLocalNotificationSetting('setting_notify_enabled', setNotifyEnabled, preference.socialNotifyEnabled && notificationAllowed);
       updateLocalNotificationSetting('setting_friend_request_enabled', setFriendRequestEnabled, preference.friendRequestNotifyEnabled && notificationAllowed);
+      setMonthlyEchoEnabled(preference.monthlyEchoEnabled !== false);
+      setMonthlyEchoPushTime(preference.monthlyEchoPushTime || '20:00');
+      updateLocalNotificationSetting(
+        'setting_monthly_echo_push_enabled',
+        setMonthlyEchoPushEnabled,
+        preference.monthlyEchoPushEnabled !== false && notificationAllowed,
+      );
     };
 
     loadServerNotificationState().catch(error => console.warn('Failed to load server notification preferences:', error));
@@ -187,6 +202,16 @@ export default function Settings() {
       updateLocalNotificationSetting('setting_notify_enabled', setNotifyEnabled, true);
       updateServerNotificationPreferences({ socialNotifyEnabled: true })
         .catch(error => console.warn('Failed to sync notification preference:', error));
+      return;
+    }
+
+    if (pending.type === 'monthlyEchoPush') {
+      updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, true);
+      updateServerNotificationPreferences({
+        monthlyEchoEnabled: true,
+        monthlyEchoPushEnabled: true,
+        monthlyEchoPushTime,
+      }).catch(error => console.warn('Failed to sync monthly echo push preference:', error));
       return;
     }
 
@@ -358,6 +383,62 @@ export default function Settings() {
     } finally {
       setNotificationBusyType(null);
     }
+  };
+
+  const handleMonthlyEchoToggle = async (enabled: boolean) => {
+    if (notificationBusyType) return;
+    setMonthlyEchoEnabled(enabled);
+    if (!enabled) {
+      updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, false);
+    }
+    await updateServerNotificationPreferences({
+      monthlyEchoEnabled: enabled,
+      monthlyEchoPushEnabled: enabled ? monthlyEchoPushEnabled : false,
+      monthlyEchoPushTime,
+    }).catch(error => console.warn('Failed to sync monthly echo preference:', error));
+    showToast(enabled ? '月度回声已开启' : '月度回声已关闭，历史回声仍可查看');
+  };
+
+  const handleMonthlyEchoPushToggle = async (enabled: boolean) => {
+    if (notificationBusyType) return;
+    setNotificationBusyType('monthlyEchoPush');
+    try {
+      if (!enabled) {
+        updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, false);
+        await updateServerNotificationPreferences({
+          monthlyEchoPushEnabled: false,
+          monthlyEchoPushTime,
+        }).catch(error => console.warn('Failed to sync monthly echo push preference:', error));
+        return;
+      }
+
+      const allowed = await ensureNotificationPermission('月末回声提醒', { type: 'monthlyEchoPush' });
+      const pushReady = allowed ? await syncPushSubscription() : false;
+      updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, allowed && pushReady);
+      if (allowed && pushReady) {
+        setMonthlyEchoEnabled(true);
+        await updateServerNotificationPreferences({
+          monthlyEchoEnabled: true,
+          monthlyEchoPushEnabled: true,
+          monthlyEchoPushTime,
+        }).catch(error => console.warn('Failed to sync monthly echo push preference:', error));
+        showToast('月末回声提醒已开启');
+      }
+    } catch (error: any) {
+      console.warn('Failed to toggle monthly echo push preference:', error);
+      updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, false);
+      showToast(error?.message || '月末回声提醒开启失败，请稍后再试');
+    } finally {
+      setNotificationBusyType(null);
+    }
+  };
+
+  const handleMonthlyEchoPushTimeChange = async (value: string) => {
+    setMonthlyEchoPushTime(value);
+    await updateServerNotificationPreferences({
+      monthlyEchoPushTime: value,
+      monthlyEchoPushEnabled,
+    }).catch(error => console.warn('Failed to sync monthly echo push time:', error));
   };
 
   const handleExport = async (formatName: string) => {
@@ -758,6 +839,50 @@ export default function Settings() {
         </section>
 
         <section className="space-y-3">
+          <SectionTitle title="月度回声" />
+          <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(47,52,46,0.02)] overflow-hidden">
+            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-surface-container/50">
+              <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+                <span className="text-[15px] font-medium">月度回声</span>
+                <span className="text-xs leading-5 text-on-surface-variant">
+                  {monthlyEchoEnabled ? '每月整理生活轨迹、情绪主线和下个月的小问题' : '已关闭，历史月度回声仍可查看'}
+                </span>
+              </div>
+              <Toggle
+                checked={monthlyEchoEnabled}
+                onChange={handleMonthlyEchoToggle}
+                disabled={notificationBusyType !== null}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-surface-container/50">
+              <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+                <span className="text-[15px] font-medium">月末推送提醒</span>
+                <span className="text-xs leading-5 text-on-surface-variant">
+                  {monthlyEchoEnabled ? '到月末时，小象会在你设定的本地时间提醒查看' : '开启月度回声后可设置推送提醒'}
+                </span>
+              </div>
+              <Toggle
+                checked={monthlyEchoPushEnabled && monthlyEchoEnabled}
+                onChange={handleMonthlyEchoPushToggle}
+                loading={notificationBusyType === 'monthlyEchoPush'}
+                disabled={!monthlyEchoEnabled || (notificationBusyType !== null && notificationBusyType !== 'monthlyEchoPush')}
+              />
+            </div>
+            <button
+              className="w-full flex items-center justify-between px-5 py-4 active:bg-surface-container-low transition-colors duration-200 disabled:opacity-50"
+              disabled={!monthlyEchoEnabled || !monthlyEchoPushEnabled}
+              onClick={() => setActiveSheet('monthlyEchoTime')}
+            >
+              <span className="text-[15px] font-medium">月末提醒时间</span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-on-surface-variant">{monthlyEchoPushTime}</span>
+                <ChevronRight className="w-5 h-5 text-outline-variant" />
+              </div>
+            </button>
+          </div>
+        </section>
+
+        <section className="space-y-3">
           <SectionTitle title="消息通知" />
           <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(47,52,46,0.02)] overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-surface-container/50">
@@ -952,6 +1077,26 @@ export default function Settings() {
             onChange={(event) => handleReminderTimeChange(event.target.value)}
             className="text-4xl font-bold bg-transparent border-none outline-none text-center text-primary"
           />
+          <button
+            onClick={() => setActiveSheet(null)}
+            className="mt-8 w-full py-3 bg-primary text-white rounded-xl font-medium active:scale-95 transition-transform"
+          >
+            完成
+          </button>
+        </div>
+      </BottomSheet>
+
+      <BottomSheet isOpen={activeSheet === 'monthlyEchoTime'} onClose={() => setActiveSheet(null)} title="月末提醒时间">
+        <div className="flex flex-col items-center py-4">
+          <input
+            type="time"
+            value={monthlyEchoPushTime}
+            onChange={(event) => handleMonthlyEchoPushTimeChange(event.target.value)}
+            className="text-4xl font-bold bg-transparent border-none outline-none text-center text-primary"
+          />
+          <p className="mt-4 text-center text-sm leading-6 text-on-surface-variant">
+            使用你当前设备的本地时区。后端会保存 IANA timezone，时区无效时自动 fallback。
+          </p>
           <button
             onClick={() => setActiveSheet(null)}
             className="mt-8 w-full py-3 bg-primary text-white rounded-xl font-medium active:scale-95 transition-transform"

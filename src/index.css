@@ -244,7 +244,29 @@ html[data-platform="android"] .home-timeline-card {
   line-height: var(--diary-line-height);
   font-family: var(--diary-font-family);
   color: var(--diary-font-color) !important;
+  caret-color: var(--color-primary);
+  -webkit-tap-highlight-color: transparent;
   white-space: pre-wrap;
+}
+
+.ProseMirror::selection,
+.ProseMirror *::selection {
+  background: rgba(68, 103, 51, 0.22);
+  color: inherit;
+}
+
+.ProseMirror [style*="background-color: rgb(255, 255, 255)"],
+.ProseMirror [style*="background-color:white"],
+.ProseMirror [style*="background-color: white"],
+.ProseMirror [style*="background: rgb(255, 255, 255)"],
+.ProseMirror [style*="background:white"],
+.ProseMirror [style*="background: white"] {
+  background: transparent !important;
+}
+
+.ProseMirror.is-ime-composing,
+.ProseMirror.is-ime-composing * {
+  transition: none !important;
 }
 
 .ProseMirror *:not(a):not(code) {

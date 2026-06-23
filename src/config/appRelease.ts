@@ -9,22 +9,23 @@ export type AppRelease = {
 
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
 
-export const currentVersion = '1.0.14';
-export const currentVersionCode = 15;
+export const currentVersion = '1.0.16';
+export const currentVersionCode = 18;
 export const updateManifestUrl = viteEnv?.VITE_APP_UPDATE_URL || 'https://xiaoxianglog.cn/app-update.json';
 
 export const latestRelease: AppRelease = {
-  version: '1.0.14',
-  versionCode: 15,
-  releasedAt: '2026-06-13',
+  version: '1.0.16',
+  versionCode: 18,
+  releasedAt: '2026-06-22',
   downloadUrl: 'https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk',
   highlights: [
-    '首页滑动查看日志时不再突然出现大段空白，列表内容会保持连续。',
-    '优化时间轴日志卡片的滚动绘制，减少快速滑动时的文字残影和闪烁。',
-    '优化首页滚动位置保存和日期跳转，返回首页时更稳定。',
+    '修复导出日记图片时中英文相邻文本可能重叠的问题，导出的长图更清晰。',
+    '优化编辑器移动端光标和选区显示，减少输入法选中文字时出现白色块状遮挡。',
+    '修正写完日记后的用时统计，只累计真实活跃写作时间，不再把中途离开的空档算进去。',
   ],
   fixes: [
-    '修复同步或页面重新激活时短暂读到空列表，导致首页闪成空白的问题。',
-    '修复滚动位置计算混用页面坐标和内部滚动容器坐标，可能造成跳到异常空白区域的问题。',
+    '导出图片改用更稳定的文本断行方式，避免 html2canvas 渲染时出现字符挤压或覆盖。',
+    '为正文编辑区域补充选区颜色和触摸高亮规则，降低系统默认绘制导致的白块问题。',
+    '调整日记完成卡片的写作时长计算逻辑，跨时段继续写作时统计更准确。',
   ],
 };

@@ -12,6 +12,8 @@ import {
   isWebPushConfigured,
   sendPushToUser,
 } from '../lib/push.js';
+import { cancelPendingMonthlyEchoJobs } from '../lib/monthlyEchoService.js';
+import { normalizePushTime, safeTimeZone } from '../lib/monthlyEchoUtils.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -217,6 +219,8 @@ router.put('/preferences', async (req: Request, res: Response) => {
       select: {
         dailyReminderEnabled: true,
         dailyReminderTime: true,
+        dailyReminderTimezone: true,
+        monthlyEchoEnabled: true,
       },
     });
     let shouldResetDailyReminderDate = false;
@@ -244,6 +248,25 @@ router.put('/preferences', async (req: Request, res: Response) => {
       }
     }
 
+    if (typeof body.monthlyEchoEnabled === 'boolean') {
+      data.monthlyEchoEnabled = body.monthlyEchoEnabled;
+    }
+
+    if (typeof body.monthlyEchoPushEnabled === 'boolean') {
+      data.monthlyEchoPushEnabled = body.monthlyEchoPushEnabled;
+    }
+
+    if (typeof body.monthlyEchoPushTime === 'string') {
+      data.monthlyEchoPushTime = normalizePushTime(body.monthlyEchoPushTime);
+    }
+
+    if (typeof body.monthlyEchoTimezone === 'string' && body.monthlyEchoTimezone.length <= 80) {
+      data.monthlyEchoTimezone = safeTimeZone(
+        body.monthlyEchoTimezone,
+        existingPreference?.dailyReminderTimezone || 'Asia/Shanghai',
+      );
+    }
+
     if (typeof body.socialNotifyEnabled === 'boolean') {
       data.socialNotifyEnabled = body.socialNotifyEnabled;
     }
@@ -264,6 +287,10 @@ router.put('/preferences', async (req: Request, res: Response) => {
       },
       update: data,
     });
+
+    if (data.monthlyEchoEnabled === false && existingPreference?.monthlyEchoEnabled !== false) {
+      await cancelPendingMonthlyEchoJobs(userId);
+    }
 
     res.json(preference);
   } catch (err: any) {

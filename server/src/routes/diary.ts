@@ -17,6 +17,10 @@ import { paramString, positiveInt, queryString, stringArray } from '../utils/req
 import { deleteStoredUrls } from '../lib/objectStorage.js';
 import { repairLegacyImageUrls } from '../lib/imageRepair.js';
 import { areStringArraysEqual, parseStoredStringArray, saveEditHistorySnapshot } from '../lib/editHistory.js';
+import {
+  handleEntryChangedForMonthlyEcho,
+  handleEntryDeletedForMonthlyEcho,
+} from '../lib/monthlyEchoService.js';
 
 const router = Router();
 
@@ -180,6 +184,9 @@ router.post('/entries', async (req: Request, res: Response) => {
       images: parseJsonArray(entry.images),
     });
 
+    handleEntryChangedForMonthlyEcho({ userId, entryId: entry.id })
+      .catch(error => console.warn('[monthly-echo] enqueue after create failed:', error));
+
     res.status(201).json(await formatDiaryEntry(entry));
   } catch (err: any) {
     console.error('创建日记失败:', err);
@@ -251,6 +258,11 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
     }
 
     const updated = await prisma.diaryEntry.findFirst({ where: { id: entryId, userId } });
+    handleEntryChangedForMonthlyEcho({
+      userId,
+      entryId,
+      previousDiaryDate: existingForHistory.diaryDate,
+    }).catch(error => console.warn('[monthly-echo] enqueue after update failed:', error));
     res.json(await formatDiaryEntry(updated));
   } catch (err: any) {
     console.error('更新日记失败:', err);
@@ -263,7 +275,7 @@ router.delete('/entries/:id', async (req: Request, res: Response) => {
   try {
     const entry = await prisma.diaryEntry.findFirst({
       where: { id: paramString(req, 'id'), userId: req.user!.userId },
-      select: { images: true, dailyEcho: true },
+      select: { id: true, images: true, dailyEcho: true, diaryDate: true },
     });
     const reason = queryString(req, 'reason') || 'deleted';
     const result = await prisma.diaryEntry.updateMany({
@@ -277,6 +289,10 @@ router.delete('/entries/:id', async (req: Request, res: Response) => {
     if (result.count === 0) {
       res.status(404).json({ error: '日记不存在' });
       return;
+    }
+    if (entry?.id) {
+      handleEntryDeletedForMonthlyEcho(req.user!.userId, entry.id, entry.diaryDate)
+        .catch(error => console.warn('[monthly-echo] enqueue after trash failed:', error));
     }
     res.json({ message: '已移入回收站' });
   } catch (err: any) {
@@ -300,6 +316,8 @@ router.post('/entries/:id/restore', async (req: Request, res: Response) => {
       res.status(404).json({ error: '日记不存在或不在回收站' });
       return;
     }
+    handleEntryChangedForMonthlyEcho({ userId: req.user!.userId, entryId: paramString(req, 'id') })
+      .catch(error => console.warn('[monthly-echo] enqueue after restore failed:', error));
     res.json({ message: '已恢复' });
   } catch (err: any) {
     console.error('恢复日记失败:', err);
@@ -312,7 +330,7 @@ router.delete('/entries/:id/permanent', async (req: Request, res: Response) => {
   try {
     const entry = await prisma.diaryEntry.findFirst({
       where: { id: paramString(req, 'id'), userId: req.user!.userId },
-      select: { images: true, dailyEcho: true },
+      select: { id: true, images: true, dailyEcho: true, diaryDate: true },
     });
     const result = await prisma.diaryEntry.deleteMany({
       where: { id: paramString(req, 'id'), userId: req.user!.userId },
@@ -325,6 +343,10 @@ router.delete('/entries/:id/permanent', async (req: Request, res: Response) => {
       ...(entry?.images ? JSON.parse(entry.images) : []),
       ...dailyEchoImageUrls(entry?.dailyEcho),
     ]);
+    if (entry?.id) {
+      handleEntryDeletedForMonthlyEcho(req.user!.userId, entry.id, entry.diaryDate)
+        .catch(error => console.warn('[monthly-echo] enqueue after permanent delete failed:', error));
+    }
     res.json({ message: '已永久删除' });
   } catch (err: any) {
     console.error('永久删除失败:', err);
@@ -337,7 +359,7 @@ router.post('/trash/clear', async (req: Request, res: Response) => {
   try {
     const trashedEntries = await prisma.diaryEntry.findMany({
       where: { userId: req.user!.userId, status: 'trashed' },
-      select: { images: true, dailyEcho: true },
+      select: { id: true, images: true, dailyEcho: true, diaryDate: true },
     });
     const result = await prisma.diaryEntry.deleteMany({
       where: { userId: req.user!.userId, status: 'trashed' },
@@ -346,6 +368,10 @@ router.post('/trash/clear', async (req: Request, res: Response) => {
       ...(entry.images ? JSON.parse(entry.images) : []),
       ...dailyEchoImageUrls(entry.dailyEcho),
     ]));
+    trashedEntries.forEach(entry => {
+      handleEntryDeletedForMonthlyEcho(req.user!.userId, entry.id, entry.diaryDate)
+        .catch(error => console.warn('[monthly-echo] enqueue after trash clear failed:', error));
+    });
     res.json({ message: `已清空 ${result.count} 条` });
   } catch (err: any) {
     console.error('清空回收站失败:', err);

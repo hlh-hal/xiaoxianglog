@@ -8,6 +8,7 @@ import { api, isAuthenticated, uploadImages } from './apiClient';
 import { localVaultService, VaultSyncResult } from './localVaultService';
 import { createClientId } from '../utils/id';
 import { compareDiaryDateDesc, getDiaryDateKey } from '../utils/diaryDate';
+import type { AnnualEchoDigest } from '../utils/annualEcho';
 
 /** 过滤掉 images 数组中的空字符串和无效值 */
 function filterValidImages(images?: string[] | null): string[] {
@@ -259,6 +260,10 @@ interface DiaryDB extends DBSchema {
     key: string;
     value: EchoMemorySnapshot;
     indexes: { 'by-created': string };
+  };
+  annualEchoDigests: {
+    key: string;
+    value: AnnualEchoDigest;
   };
 }
 
@@ -540,7 +545,7 @@ export function normalizeEchoMemorySnapshot(snapshot: EchoMemorySnapshot): EchoM
 
 export async function initDB() {
   if (!dbPromise) {
-    dbPromise = openDB<DiaryDB>('ethos-diary-db', 6, {
+    dbPromise = openDB<DiaryDB>('ethos-diary-db', 7, {
       upgrade(db) {
         if (!db.objectStoreNames.contains('entries')) {
           const store = db.createObjectStore('entries', { keyPath: 'id' });
@@ -570,6 +575,9 @@ export async function initDB() {
         if (!db.objectStoreNames.contains('echoMemorySnapshots')) {
           const snapshotStore = db.createObjectStore('echoMemorySnapshots', { keyPath: 'id' });
           snapshotStore.createIndex('by-created', 'createdAt');
+        }
+        if (!db.objectStoreNames.contains('annualEchoDigests')) {
+          db.createObjectStore('annualEchoDigests', { keyPath: 'id' });
         }
       },
     });
@@ -1050,6 +1058,17 @@ export const diaryService = {
     const normalized = normalizeEchoMemorySnapshot(snapshot);
     await db.put('echoMemorySnapshots', normalized);
     return normalized;
+  },
+
+  async getAnnualEchoDigest(year: number): Promise<AnnualEchoDigest | undefined> {
+    const db = await initDB();
+    return db.get('annualEchoDigests', `annual-echo:${year}`);
+  },
+
+  async saveAnnualEchoDigest(digest: AnnualEchoDigest): Promise<AnnualEchoDigest> {
+    const db = await initDB();
+    await db.put('annualEchoDigests', digest);
+    return digest;
   },
 
   startAutoSync(): void {

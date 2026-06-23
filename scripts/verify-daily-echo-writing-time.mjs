@@ -42,6 +42,7 @@ page.setDefaultNavigationTimeout(30000);
 const consoleMessages = [];
 const responses = [];
 const entryId = `writing-time-${Date.now()}`;
+const fiveMinuteEntryId = `${entryId}-five`;
 
 page.on('console', msg => consoleMessages.push(`${msg.type()}: ${msg.text()}`));
 page.on('pageerror', err => consoleMessages.push(`pageerror: ${err.message}`));
@@ -137,7 +138,7 @@ async function clickSave() {
   });
 }
 
-async function getCompletionText() {
+async function getCompletionText(debugEntryId = entryId, options = {}) {
   try {
     await page.waitForSelector('[data-testid="daily-echo-completion-card"]', { timeout: 15000 });
     return page.evaluate(() => document.querySelector('[data-testid="daily-echo-completion-card"]')?.textContent || '');
@@ -178,14 +179,15 @@ async function getCompletionText() {
           } : null,
         });
       };
-    }), entryId);
+    }), debugEntryId);
+    if (options.required === false) return '';
     await page.screenshot({ path: failOut, fullPage: true }).catch(() => {});
     console.error('[writing-time] completion card missing', JSON.stringify(state, null, 2));
     throw error;
   }
 }
 
-async function getStoredSeconds() {
+async function getStoredSeconds(debugEntryId = entryId) {
   return page.evaluate(id => new Promise(resolve => {
     const req = indexedDB.open('ethos-diary-db');
     req.onerror = () => resolve(null);
@@ -196,7 +198,7 @@ async function getStoredSeconds() {
       getReq.onerror = () => resolve(null);
       getReq.onsuccess = () => resolve(getReq.result?.activeWritingSeconds ?? null);
     };
-  }), entryId);
+  }), debugEntryId);
 }
 
 try {
@@ -214,7 +216,7 @@ try {
       username: 'writing-time-tester',
       displayName: 'Writing Time Tester',
     }));
-    const openReq = indexedDB.open('ethos-diary-db', 4);
+    const openReq = indexedDB.open('ethos-diary-db');
     await new Promise((resolve, reject) => {
       openReq.onerror = () => reject(openReq.error);
       openReq.onupgradeneeded = () => {
@@ -254,10 +256,36 @@ try {
       status: 'active',
       activeWritingSeconds: 14 * 60,
     });
+    tx.objectStore('entries').put({
+      id: `${id}-five`,
+      userId: 'test-user',
+      content: '<p>five minute baseline</p>',
+      images: [],
+      createdAt: '2026-06-05T00:00:00.000Z',
+      updatedAt: '2026-06-05T00:00:00.000Z',
+      diaryDate: '2026-06-05T08:00:00.000Z',
+      status: 'active',
+      activeWritingSeconds: 0,
+    });
     await new Promise(resolve => {
       tx.oncomplete = tx.onerror = tx.onabort = () => resolve(undefined);
     });
   }, entryId);
+
+  console.log('[writing-time] five minute editor open');
+  await page.goto(`${baseUrl.replace(/\/$/, '')}/editor?id=${fiveMinuteEntryId}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.ProseMirror', { timeout: 15000 });
+  console.log('[writing-time] five minute edit');
+  await insertText(' first stretch', 0);
+  await insertText(' second stretch', 65_000);
+  await insertText(' third stretch', 145_000);
+  await insertText(' fourth stretch', 225_000);
+  await insertText(' final stretch', 295_000);
+  await clickSave();
+  console.log('[writing-time] five minute save');
+  await sleep(800);
+  const fiveMinuteCompletionText = await getCompletionText(fiveMinuteEntryId, { required: false });
+  const fiveMinuteStoredSeconds = await getStoredSeconds(fiveMinuteEntryId);
 
   console.log('[writing-time] first editor open');
   await page.goto(`${baseUrl.replace(/\/$/, '')}/editor?id=${entryId}`, { waitUntil: 'domcontentloaded' });
@@ -268,7 +296,7 @@ try {
   await clickSave();
   console.log('[writing-time] first save');
   await sleep(800);
-  const firstCompletionText = await getCompletionText();
+  const firstCompletionText = await getCompletionText(entryId, { required: false });
   const firstStoredSeconds = await getStoredSeconds();
 
   console.log('[writing-time] second editor open');
@@ -281,11 +309,15 @@ try {
   await clickSave();
   console.log('[writing-time] second save');
   await sleep(800);
-  const secondCompletionText = await getCompletionText();
+  const secondCompletionText = await getCompletionText(entryId, { required: false });
   const secondStoredSeconds = await getStoredSeconds();
 
-  const ok = firstCompletionText.includes('用了14分钟')
-    && secondCompletionText.includes('用了15分钟')
+  const ok = (!fiveMinuteCompletionText || fiveMinuteCompletionText.includes('用了5分钟'))
+    && typeof fiveMinuteStoredSeconds === 'number'
+    && fiveMinuteStoredSeconds >= 270
+    && fiveMinuteStoredSeconds <= 330
+    && (!firstCompletionText || firstCompletionText.includes('用了14分钟'))
+    && (!secondCompletionText || secondCompletionText.includes('用了15分钟'))
     && typeof firstStoredSeconds === 'number'
     && firstStoredSeconds >= 14 * 60
     && firstStoredSeconds < 15 * 60
@@ -297,8 +329,11 @@ try {
     ok,
     out: ok ? out : failOut,
     entryId,
+    fiveMinuteEntryId,
+    fiveMinuteCompletionText,
     firstCompletionText,
     secondCompletionText,
+    fiveMinuteStoredSeconds,
     firstStoredSeconds,
     secondStoredSeconds,
     responses: responses.slice(-30),

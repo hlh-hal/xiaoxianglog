@@ -1,5 +1,7 @@
 # TODO
 
+- [ ] 月度回声上线前执行 `server npm run db:push` 同步目标数据库，确认后端 scheduler 已启动，并用真实账号验证 `/api/monthly-echo`、月末推送偏好、backfill 草稿和 `MonthlyEchoJobLog` 失败落库。
+
 - [ ] 2026-06-09 APK 下载源已临时切到 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk`，当前实际文件放在服务器 `/dist/download/xiaoxiang-log-latest.apk`。后续可在宝塔/Nginx 增加 `/download/` alias 指向 `C:\wwwroot\xiaoxiang-download\`，并为 `.apk` 设置 `application/vnd.android.package-archive` MIME；当前 `application/octet-stream` 下载可用。
 
 这个文件记录跨会话仍然有价值的待办和阻塞项。临时聊天里的小步骤不用写进来。

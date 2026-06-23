@@ -742,7 +742,7 @@ function createTextBreakFragment(text: string): DocumentFragment | null {
         fragment.appendChild(document.createTextNode(buffer));
         buffer = '';
       }
-      fragment.appendChild(document.createElement('wbr'));
+      fragment.appendChild(document.createTextNode('\u200B'));
       hasBreak = true;
     }
     buffer += char;

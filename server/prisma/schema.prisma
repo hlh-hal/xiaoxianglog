@@ -50,6 +50,10 @@ model User {
   sentNotifications Notification[] @relation("NotifSender")
   pushSubscriptions PushSubscription[]
   notificationPreference NotificationPreference?
+  dailyTraceNodes DailyTraceNode[]
+  monthlyArcDrafts MonthlyArcDraft[]
+  monthlyEchoes MonthlyEcho[]
+  monthlyEchoJobLogs MonthlyEchoJobLog[]
 
   @@map("users")
 }
@@ -83,6 +87,7 @@ model DiaryEntry {
   user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   histories EditHistory[]
   posts     CommunityPost[]
+  dailyTraceNode DailyTraceNode?
 
   @@index([userId, status])
   @@index([userId, diaryDate])
@@ -312,6 +317,10 @@ model NotificationPreference {
   dailyReminderTime          String   @default("21:00") @map("daily_reminder_time")
   dailyReminderTimezone      String   @default("Asia/Shanghai") @map("daily_reminder_timezone")
   lastDailyReminderDate      String?  @map("last_daily_reminder_date")
+  monthlyEchoEnabled         Boolean  @default(true) @map("monthly_echo_enabled")
+  monthlyEchoPushEnabled     Boolean  @default(true) @map("monthly_echo_push_enabled")
+  monthlyEchoPushTime        String   @default("20:00") @map("monthly_echo_push_time")
+  monthlyEchoTimezone        String   @default("Asia/Shanghai") @map("monthly_echo_timezone")
   socialNotifyEnabled        Boolean  @default(true) @map("social_notify_enabled")
   friendRequestNotifyEnabled Boolean  @default(true) @map("friend_request_notify_enabled")
   createdAt                  DateTime @default(now()) @map("created_at")
@@ -351,4 +360,157 @@ model LeaderboardLike {
 
   @@unique([userId, fromUserId]) // 同一人对另一人只能点赞一次
   @@map("leaderboard_likes")
+}
+
+// ============================================
+// 16. 月度回声：每日轨迹节点
+// ============================================
+model DailyTraceNode {
+  id                   String    @id @default(uuid())
+  userId               String    @map("user_id")
+  entryId              String    @unique @map("entry_id")
+  date                 String
+  timezone             String    @default("Asia/Shanghai")
+  monthKey             String    @map("month_key")
+  sourceEntryCreatedAt DateTime? @map("source_entry_created_at")
+  sourceEntryUpdatedAt DateTime  @map("source_entry_updated_at")
+  sourceEntryHash      String    @map("source_entry_hash")
+  importantEvents      String    @default("[]") @map("important_events")
+  realActions          String    @default("[]") @map("real_actions")
+  emotionStates        String    @default("[]") @map("emotion_states")
+  relationshipSignals  String    @default("[]") @map("relationship_signals")
+  energySources        String    @default("[]") @map("energy_sources")
+  energyDrains         String    @default("[]") @map("energy_drains")
+  repeatedTensions     String    @default("[]") @map("repeated_tensions")
+  unfinishedQuestions  String    @default("[]") @map("unfinished_questions")
+  changeSignals        String    @default("[]") @map("change_signals")
+  evidenceQuotes       String    @default("[]") @map("evidence_quotes")
+  confidence           Float     @default(0)
+  aiModel              String?   @map("ai_model")
+  promptVersion        String    @default("daily_trace_v1") @map("prompt_version")
+  status               String    @default("pending") // pending | generated | failed | stale | invalid
+  errorMessage         String?   @map("error_message")
+  generatedAt          DateTime? @map("generated_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entry DiaryEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, entryId])
+  @@index([userId, monthKey, status])
+  @@map("daily_trace_nodes")
+}
+
+// ============================================
+// 17. 月度回声：内部月度轨迹草稿
+// ============================================
+model MonthlyArcDraft {
+  id                     String    @id @default(uuid())
+  userId                 String    @map("user_id")
+  monthKey               String    @map("month_key")
+  timezone               String    @default("Asia/Shanghai")
+  startDate              String    @map("start_date")
+  endDate                String    @map("end_date")
+  traceNodeIds           String    @default("[]") @map("trace_node_ids")
+  entryCount             Int       @default(0) @map("entry_count")
+  mainArc                String    @default("") @map("main_arc")
+  keyEvents              String    @default("[]") @map("key_events")
+  actionTrajectory       String    @default("") @map("action_trajectory")
+  emotionTrajectory      String    @default("") @map("emotion_trajectory")
+  repeatedTensions       String    @default("[]") @map("repeated_tensions")
+  sideThemes             String    @default("[]") @map("side_themes")
+  keyTurningPoint        String    @default("{}") @map("key_turning_point")
+  hiddenNeed             String    @default("") @map("hidden_need")
+  unfinishedQuestions    String    @default("[]") @map("unfinished_questions")
+  growthDirection        String    @default("") @map("growth_direction")
+  monthlyInsightSentence String    @default("") @map("monthly_insight_sentence")
+  evidenceMap            String    @default("[]") @map("evidence_map")
+  confidence             Float     @default(0)
+  aiModel                String?   @map("ai_model")
+  promptVersion          String    @default("monthly_arc_v1") @map("prompt_version")
+  status                 String    @default("pending") // pending | generated | failed | stale
+  errorMessage           String?   @map("error_message")
+  generatedAt            DateTime? @map("generated_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  monthlyEcho MonthlyEcho?
+
+  @@unique([userId, monthKey])
+  @@index([userId, status])
+  @@map("monthly_arc_drafts")
+}
+
+// ============================================
+// 18. 月度回声：用户可见内容
+// ============================================
+model MonthlyEcho {
+  id                       String    @id @default(uuid())
+  userId                   String    @map("user_id")
+  monthKey                 String    @map("month_key")
+  monthlyArcDraftId        String?   @unique @map("monthly_arc_draft_id")
+  title                    String    @default("")
+  opening                  String    @default("")
+  mainArcSection           String    @default("") @map("main_arc_section")
+  keyMomentsSection        String    @default("") @map("key_moments_section")
+  actionTrajectorySection  String    @default("") @map("action_trajectory_section")
+  repeatedThemeSection     String    @default("") @map("repeated_theme_section")
+  unfinishedSection        String    @default("") @map("unfinished_section")
+  nextMonthQuestion        String    @default("") @map("next_month_question")
+  finalInsightSentence     String    @default("") @map("final_insight_sentence")
+  fullText                 String    @default("") @map("full_text")
+  posterQuote              String?   @map("poster_quote")
+  posterThemeLine          String?   @map("poster_theme_line")
+  pushTitle                String?   @map("push_title")
+  pushBody                 String?   @map("push_body")
+  status                   String    @default("draft") // draft | ready | pushed | failed | stale
+  pushedAt                 DateTime? @map("pushed_at")
+  viewedAt                 DateTime? @map("viewed_at")
+  firstGeneratedAt         DateTime? @map("first_generated_at")
+  lastRegeneratedAt        DateTime? @map("last_regenerated_at")
+  regenerateReason         String?   @map("regenerate_reason")
+  aiModel                  String?   @map("ai_model")
+  promptVersion            String    @default("monthly_echo_v1") @map("prompt_version")
+  errorMessage             String?   @map("error_message")
+  generatedAt              DateTime? @map("generated_at")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  monthlyArcDraft MonthlyArcDraft? @relation(fields: [monthlyArcDraftId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, monthKey])
+  @@index([userId, status])
+  @@map("monthly_echoes")
+}
+
+// ============================================
+// 19. 月度回声：轻量任务与运行锁
+// ============================================
+model MonthlyEchoJobLog {
+  id                    String    @id @default(uuid())
+  userId                String    @map("user_id")
+  monthKey              String    @map("month_key")
+  jobType               String    @map("job_type") // trace | monthly_arc | monthly_echo | month_end | backfill | regenerate
+  status                String    @default("pending") // pending | running | success | failed | cancelled
+  lockToken             String?   @map("lock_token")
+  lockedUntil           DateTime? @map("locked_until")
+  attemptCount          Int       @default(0) @map("attempt_count")
+  totalEntries          Int       @default(0) @map("total_entries")
+  generatedTraceNodes   Int       @default(0) @map("generated_trace_nodes")
+  monthlyArcDraftStatus String?   @map("monthly_arc_draft_status")
+  monthlyEchoStatus     String?   @map("monthly_echo_status")
+  lastError             String?   @map("last_error")
+  startedAt             DateTime? @map("started_at")
+  finishedAt            DateTime? @map("finished_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, monthKey, jobType])
+  @@index([status, lockedUntil])
+  @@map("monthly_echo_job_logs")
 }

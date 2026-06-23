@@ -22,6 +22,8 @@
     "test:insight-draft-write-flow": "tsx tests/insight-draft-write-flow.test.ts",
     "test:echo-hot-memory": "tsx tests/echo-hot-memory.test.ts",
     "test:echo-memory-eval": "tsx tests/echo-memory-eval.test.ts",
+    "test:annual-echo": "tsx tests/annual-echo.test.ts",
+    "test:monthly-echo": "tsx tests/monthly-echo.test.ts",
     "eval:daily-echo-prompt:quick": "tsx scripts/eval-daily-echo-prompts.mjs --quick",
     "eval:daily-echo-prompt": "tsx scripts/eval-daily-echo-prompts.mjs",
     "research:echo-prompt:quick": "tsx scripts/echo-prompt-research/run.mjs --dataset=quick --rounds=5 --limit=3",
