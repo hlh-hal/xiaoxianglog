@@ -9,6 +9,39 @@ import { localVaultService, VaultSyncResult } from './localVaultService';
 import { createClientId } from '../utils/id';
 import { compareDiaryDateDesc, getDiaryDateKey } from '../utils/diaryDate';
 import type { AnnualEchoDigest } from '../utils/annualEcho';
+import type {
+  ChatSession,
+  DailyEcho,
+  DiaryEntry,
+  DiaryEntryCreateInput,
+  DiaryEntrySaveOptions,
+  DiaryTemplate,
+  EditHistory,
+  EntryStatus,
+  StoredFont,
+} from '../features/diary/model';
+import { toDiarySyncEntryDto, type DiarySyncEntryDto } from '../features/diary/syncContract';
+import {
+  DiaryPostCommitCoordinator,
+  type DiaryChangeKind,
+  type DiaryPostCommitEffect,
+} from '../features/diary/postCommitCoordinator';
+import { createIndexedDbDiaryRepository } from '../features/diary/indexedDbDiaryRepository';
+
+export type {
+  ChatMessage,
+  ChatSession,
+  DailyEcho,
+  DailyEchoStatus,
+  DiaryEntry,
+  DiaryEntryCreateInput,
+  DiaryEntrySaveOptions,
+  DiaryEntryWriter,
+  DiaryTemplate,
+  EditHistory,
+  EntryStatus,
+  StoredFont,
+} from '../features/diary/model';
 
 /** 过滤掉 images 数组中的空字符串和无效值 */
 function filterValidImages(images?: string[] | null): string[] {
@@ -42,26 +75,6 @@ function stripHistoryImagesAndTags(content: string): string {
 function makeHistorySummary(content: string): string {
   const summary = stripHistoryImagesAndTags(content);
   return summary.substring(0, 50) + (summary.length > 50 ? '...' : '');
-}
-
-export type EntryStatus = 'active' | 'draft' | 'trashed';
-
-export type DailyEchoStatus = 'draft' | 'saved' | 'dismissed' | 'failed';
-
-export interface DailyEcho {
-  status: DailyEchoStatus;
-  content: string;
-  styleId: 'gentle';
-  generatedAt: string;
-  sourceEntryUpdatedAt: string;
-  regenerateCount: number;
-  card?: {
-    imageUrl?: string;
-    localDataUrl?: string;
-    width: number;
-    height: number;
-    renderedAt: string;
-  };
 }
 
 export interface InsightDraft {
@@ -149,79 +162,6 @@ interface StoredInsightDraft extends Omit<InsightDraft, 'meta'> {
 
 interface StoredEchoHotMemory extends EchoHotMemory {
   id: string;
-}
-
-export interface DiaryEntry {
-  id: string;
-  userId?: string;
-  title?: string;
-  content: string;
-  images: string[];
-  createdAt: string;
-  updatedAt: string;
-  diaryDate: string;
-  status: EntryStatus;
-  trashReason?: 'deleted' | 'abandoned';
-  trashedAt?: string;
-  isPinned?: boolean;
-  isHidden?: boolean;
-  mood?: string;
-  weather?: string;
-  tags?: string[];
-  blocks?: { title: string; content: string }[];
-  prompts?: any;
-  backgroundId?: string;
-  themeId?: string | null;
-  dailyEcho?: DailyEcho;
-  activeWritingSeconds?: number;
-  syncVersion?: number;
-  vaultPath?: string;
-  vaultTrashPath?: string;
-  attachmentPaths?: string[];
-}
-
-export interface DiaryTemplate {
-  id: string;
-  title: string;
-  content: string;
-  isSystem?: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface EditHistory {
-  id: string;
-  entryId: string;
-  content: string;
-  images: string[];
-  savedAt: string;
-  summary: string;
-}
-
-export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  rawText?: string;
-}
-
-export interface ChatSession {
-  id: string;
-  title: string;
-  styleId?: string;
-  pinned?: boolean;
-  messages: ChatMessage[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface StoredFont {
-  id: string;
-  label: string;
-  fontFamily: string;
-  fileData: ArrayBuffer;
-  fileName: string;
-  fileSize: number;
-  createdAt: string;
 }
 
 interface DiaryDB extends DBSchema {
@@ -585,6 +525,8 @@ export async function initDB() {
   return dbPromise;
 }
 
+const entryRepository = createIndexedDbDiaryRepository(initDB);
+
 function useApi(): boolean {
   return isAuthenticated();
 }
@@ -609,6 +551,7 @@ let activeEntriesCache: DiaryEntry[] | null = null;
 let syncTimeout: any = null;
 let autoSyncStarted = false;
 let syncInFlight: Promise<void> | null = null;
+const diaryPostCommitCoordinator = new DiaryPostCommitCoordinator();
 
 export const DIARY_SYNC_EVENT = 'xiang-diary-sync-complete';
 
@@ -616,12 +559,6 @@ type SyncOptions = {
   forceFullPull?: boolean;
   pushAll?: boolean;
   immediate?: boolean;
-};
-
-type EntrySaveOptions = {
-  saveHistory?: boolean;
-  triggerSync?: boolean;
-  immediateSync?: boolean;
 };
 
 type VaultSyncAllOptions = {
@@ -810,14 +747,17 @@ function getEntryChangeTime(entry: DiaryEntry): number {
 async function applyVaultSyncResult(entry: DiaryEntry, result: VaultSyncResult | null): Promise<DiaryEntry> {
   if (!result) return entry;
 
+  const db = await initDB();
+  const latestEntry = await db.get('entries', entry.id);
+  if (!latestEntry) return entry;
   const syncedEntry: DiaryEntry = {
-    ...entry,
+    ...latestEntry,
     vaultPath: result.vaultPath,
     vaultTrashPath: result.vaultTrashPath,
     attachmentPaths: result.attachmentPaths,
   };
-  const db = await initDB();
   await db.put('entries', syncedEntry);
+  activeEntriesCache = null;
   return syncedEntry;
 }
 
@@ -826,24 +766,6 @@ async function syncEntryToVault(entry: DiaryEntry): Promise<DiaryEntry> {
     return await applyVaultSyncResult(entry, await localVaultService.syncEntry(entry));
   } catch (error) {
     console.warn('Sync entry to local vault failed:', error);
-    return entry;
-  }
-}
-
-async function moveVaultEntryToTrash(entry: DiaryEntry): Promise<DiaryEntry> {
-  try {
-    return await applyVaultSyncResult(entry, await localVaultService.moveEntryToTrash(entry));
-  } catch (error) {
-    console.warn('Move local vault entry to trash failed:', error);
-    return entry;
-  }
-}
-
-async function restoreVaultEntry(entry: DiaryEntry): Promise<DiaryEntry> {
-  try {
-    return await applyVaultSyncResult(entry, await localVaultService.restoreEntry(entry));
-  } catch (error) {
-    console.warn('Restore local vault entry failed:', error);
     return entry;
   }
 }
@@ -886,6 +808,51 @@ async function uploadEntryImagesForSync(db: IDBPDatabase<DiaryDB>, entry: DiaryE
   return { entry: echoPrepared.entry, changed: true };
 }
 
+async function mirrorEntryToVault(entry: DiaryEntry): Promise<void> {
+  const result = await localVaultService.syncEntry(entry);
+  await applyVaultSyncResult(entry, result);
+}
+
+async function mirrorEntryToVaultTrash(entry: DiaryEntry): Promise<void> {
+  const result = await localVaultService.moveEntryToTrash(entry);
+  await applyVaultSyncResult(entry, result);
+}
+
+async function mirrorEntryToVaultRestore(entry: DiaryEntry): Promise<void> {
+  const result = await localVaultService.restoreEntry(entry);
+  await applyVaultSyncResult(entry, result);
+}
+
+function scheduleEntryPostCommit(
+  kind: DiaryChangeKind,
+  entry: DiaryEntry,
+  previousEntry: DiaryEntry | undefined,
+  options: DiaryEntrySaveOptions,
+  vaultEffect: (entry: DiaryEntry) => Promise<void> = mirrorEntryToVault,
+): void {
+  const effects: DiaryPostCommitEffect[] = [
+    {
+      name: 'local-vault',
+      run: async () => vaultEffect(entry),
+    },
+  ];
+
+  if (options.triggerSync !== false && useApi()) {
+    effects.push({
+      name: 'cloud-sync',
+      run: async () => {
+        if (options.immediateSync) {
+          await diaryService.syncWithServer({ immediate: true });
+          return;
+        }
+        diaryService.triggerSync();
+      },
+    });
+  }
+
+  diaryPostCommitCoordinator.schedule({ kind, entry, previousEntry }, effects);
+}
+
 async function uploadDailyEchoCardForSync(entry: DiaryEntry): Promise<{ entry: DiaryEntry; changed: boolean }> {
   const echo = entry.dailyEcho;
   const localDataUrl = echo?.card?.localDataUrl;
@@ -912,48 +879,8 @@ async function uploadDailyEchoCardForSync(entry: DiaryEntry): Promise<{ entry: D
   };
 }
 
-function toSyncPayload(entry: DiaryEntry): DiaryEntry {
-  const payload: DiaryEntry = {
-    id: entry.id,
-    title: entry.title,
-    content: entry.content || '',
-    images: filterValidImages(entry.images),
-    createdAt: entry.createdAt,
-    updatedAt: entry.updatedAt,
-    diaryDate: getDiaryDateKey(entry.diaryDate, new Date()),
-    status: entry.status,
-  };
-
-  if (entry.trashReason !== undefined) payload.trashReason = entry.trashReason;
-  if (entry.trashedAt !== undefined) payload.trashedAt = entry.trashedAt;
-  if (entry.isPinned !== undefined) payload.isPinned = entry.isPinned;
-  if (entry.isHidden !== undefined) payload.isHidden = entry.isHidden;
-  if (entry.mood !== undefined) payload.mood = entry.mood;
-  if (entry.weather !== undefined) payload.weather = entry.weather;
-  if (entry.tags !== undefined) payload.tags = entry.tags;
-  if (entry.blocks !== undefined) payload.blocks = entry.blocks;
-  if (entry.prompts !== undefined) payload.prompts = entry.prompts;
-  if (entry.backgroundId !== undefined) payload.backgroundId = entry.backgroundId;
-  if (entry.themeId !== undefined) payload.themeId = entry.themeId;
-  if (entry.activeWritingSeconds !== undefined) payload.activeWritingSeconds = entry.activeWritingSeconds;
-
-  if (entry.dailyEcho != null) {
-    payload.dailyEcho = entry.dailyEcho.card
-      ? {
-          ...entry.dailyEcho,
-          card: {
-            ...entry.dailyEcho.card,
-            localDataUrl: undefined,
-          },
-        }
-      : entry.dailyEcho;
-  }
-
-  return payload;
-}
-
-export function buildSyncPushPayload(entries: DiaryEntry[]): { entries: DiaryEntry[] } {
-  return { entries: entries.map(toSyncPayload) };
+export function buildSyncPushPayload(entries: DiaryEntry[]): { entries: DiarySyncEntryDto[] } {
+  return { entries: entries.map(toDiarySyncEntryDto) };
 }
 
 async function saveLocalHistorySnapshot(history: Omit<EditHistory, 'id' | 'summary'>): Promise<void> {
@@ -1008,6 +935,14 @@ export const diaryService = {
       lastPushAt: localStorage.getItem(syncStorageKey(LAST_PUSH_KEY, userId)),
       lastError: localStorage.getItem(syncStorageKey(LAST_SYNC_ERROR_KEY, userId)),
     };
+  },
+
+  getPostCommitStatus() {
+    return diaryPostCommitCoordinator.getStatus();
+  },
+
+  async flushPostCommitEffects() {
+    return diaryPostCommitCoordinator.flush();
   },
 
   async init(): Promise<void> {
@@ -1314,14 +1249,12 @@ export const diaryService = {
   },
 
   async getAllEntries(): Promise<DiaryEntry[]> {
-    const db = await initDB();
-    const entries = await db.getAllFromIndex('entries', 'by-date');
+    const entries = await entryRepository.getAllByDate();
     return entries.filter(entry => isEntryForCurrentUser(entry));
   },
 
   async getActiveEntries(): Promise<DiaryEntry[]> {
-    const db = await initDB();
-    const entries = await db.getAllFromIndex('entries', 'by-status', 'active');
+    const entries = await entryRepository.getByStatus('active');
     const result = entries.filter((e: DiaryEntry) => isEntryForCurrentUser(e) && !e.isHidden).sort((a: DiaryEntry, b: DiaryEntry) => {
       if (a.isPinned && !b.isPinned) return -1;
       if (!a.isPinned && b.isPinned) return 1;
@@ -1334,38 +1267,32 @@ export const diaryService = {
   },
 
   async getDraftEntries(): Promise<DiaryEntry[]> {
-    const db = await initDB();
-    const entries = await db.getAllFromIndex('entries', 'by-status', 'draft');
+    const entries = await entryRepository.getByStatus('draft');
     return entries.filter(entry => isEntryForCurrentUser(entry)).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   },
 
   async getTrashEntries(): Promise<DiaryEntry[]> {
-    const db = await initDB();
-    const entries = await db.getAllFromIndex('entries', 'by-status', 'trashed');
+    const entries = await entryRepository.getByStatus('trashed');
     return entries.filter(entry => isEntryForCurrentUser(entry)).sort((a, b) => new Date(b.trashedAt || b.updatedAt).getTime() - new Date(a.trashedAt || a.updatedAt).getTime());
   },
 
   async searchEntries(keyword: string): Promise<DiaryEntry[]> {
-    const db = await initDB();
-    const entries = await db.getAllFromIndex('entries', 'by-status', 'active');
+    const entries = await entryRepository.getByStatus('active');
     const lk = keyword.toLowerCase();
     return entries.filter((e: DiaryEntry) => isEntryForCurrentUser(e) && !e.isHidden && ((e.title && e.title.toLowerCase().includes(lk)) || (e.content && e.content.toLowerCase().includes(lk)) || (e.blocks && e.blocks.some((b: any) => (b.title && b.title.toLowerCase().includes(lk)) || (b.content && b.content.toLowerCase().includes(lk)))))).sort((a: DiaryEntry, b: DiaryEntry) => compareDiaryDateDesc(a.diaryDate, b.diaryDate));
   },
 
   async getEntryById(id: string): Promise<DiaryEntry | undefined> {
-    const db = await initDB();
-    const entry = await db.get('entries', id);
+    const entry = await entryRepository.getById(id);
     if (entry && !isEntryForCurrentUser(entry)) return undefined;
     if (entry) entry.images = filterValidImages(entry.images);
     return entry;
   },
 
-  async createEntry(data: Omit<DiaryEntry, 'id' | 'createdAt' | 'updatedAt' | 'status'> & { id?: string; status?: EntryStatus; createdAt?: string; updatedAt?: string }, options: EntrySaveOptions = {}): Promise<DiaryEntry> {
+  async createEntry(data: DiaryEntryCreateInput, options: DiaryEntrySaveOptions = {}): Promise<DiaryEntry> {
     const now = new Date().toISOString();
     let entry: DiaryEntry = stampEntryUser({ ...data, images: filterValidImages(data.images), id: data.id || createClientId(), createdAt: data.createdAt || now, updatedAt: data.updatedAt || now, status: data.status || 'active' });
-    const db = await initDB(); 
-    await db.put('entries', entry);
-    entry = await syncEntryToVault(entry);
+    await entryRepository.put(entry);
     if (options.saveHistory !== false) {
       await saveLocalHistorySnapshot({
         entryId: entry.id,
@@ -1374,16 +1301,13 @@ export const diaryService = {
         savedAt: entry.updatedAt || now,
       });
     }
-    activeEntriesCache = null; 
-    if (options.triggerSync !== false) {
-      this.triggerSync({ immediate: options.immediateSync });
-    }
+    activeEntriesCache = null;
+    scheduleEntryPostCommit('created', entry, undefined, options);
     return entry;
   },
 
-  async updateEntry(id: string, patch: Partial<DiaryEntry>, options: EntrySaveOptions = {}): Promise<DiaryEntry | undefined> {
-    const db = await initDB();
-    const entry = await db.get('entries', id);
+  async updateEntry(id: string, patch: Partial<DiaryEntry>, options: DiaryEntrySaveOptions = {}): Promise<DiaryEntry | undefined> {
+    const entry = await entryRepository.getById(id);
     if (!entry) return undefined;
     if (!isEntryForCurrentUser(entry)) return undefined;
     if (patch.images !== undefined) {
@@ -1400,28 +1324,23 @@ export const diaryService = {
       });
     }
     let updatedEntry = stampEntryUser({ ...entry, ...patch, updatedAt: new Date().toISOString() });
-    await db.put('entries', updatedEntry);
-    updatedEntry = await syncEntryToVault(updatedEntry);
-    activeEntriesCache = null; 
-    if (options.triggerSync !== false) {
-      this.triggerSync({ immediate: options.immediateSync });
-    }
+    await entryRepository.put(updatedEntry);
+    activeEntriesCache = null;
+    scheduleEntryPostCommit('updated', updatedEntry, entry, options);
     return updatedEntry;
   },
 
   async moveToTrash(id: string, reason: 'deleted' | 'abandoned'): Promise<void> {
-    const db = await initDB();
-    const entry = await db.get('entries', id);
+    const entry = await entryRepository.getById(id);
     if (entry && isEntryForCurrentUser(entry)) {
       const now = new Date().toISOString();
       entry.status = 'trashed'; 
       entry.trashReason = reason; 
       entry.trashedAt = now; 
       entry.updatedAt = now;
-      await db.put('entries', entry); 
-      await moveVaultEntryToTrash(entry);
-      activeEntriesCache = null; 
-      this.triggerSync();
+      await entryRepository.put(entry);
+      activeEntriesCache = null;
+      scheduleEntryPostCommit('trashed', entry, undefined, {}, mirrorEntryToVaultTrash);
     }
   },
 
@@ -1456,40 +1375,37 @@ export const diaryService = {
     activeEntriesCache = null;
     emitDiarySyncEvent(true, { reason: 'bulk-trash', count: trashedEntries.length });
     this.triggerSync();
-
-    await Promise.allSettled(trashedEntries.map(entry => moveVaultEntryToTrash(entry)));
+    trashedEntries.forEach(entry => {
+      scheduleEntryPostCommit('trashed', entry, undefined, { triggerSync: false }, mirrorEntryToVaultTrash);
+    });
     return trashedEntries.length;
   },
 
   async restoreEntry(id: string): Promise<void> {
-    const db = await initDB();
-    const entry = await db.get('entries', id);
+    const entry = await entryRepository.getById(id);
     if (entry && isEntryForCurrentUser(entry)) {
       entry.status = 'active'; 
       delete entry.trashReason; 
       delete entry.trashedAt; 
       entry.updatedAt = new Date().toISOString(); // Update timestamp to trigger push
-      await db.put('entries', entry); 
-      await restoreVaultEntry(entry);
-      activeEntriesCache = null; 
-      this.triggerSync();
+      await entryRepository.put(entry);
+      activeEntriesCache = null;
+      scheduleEntryPostCommit('restored', entry, undefined, {}, mirrorEntryToVaultRestore);
     }
   },
 
   async permanentlyDeleteEntry(id: string): Promise<void> {
     if (useApi()) { try { await api.delete(`/diary/entries/${id}/permanent`); } catch (e) { console.warn('后端永久删除失败:', e); } }
     await localVaultService.deleteEntryFiles(id).catch(error => console.warn('Delete local vault entry failed:', error));
-    const db = await initDB();
-    const entry = await db.get('entries', id);
-    if (!entry || isEntryForCurrentUser(entry)) await db.delete('entries', id);
+    const entry = await entryRepository.getById(id);
+    if (!entry || isEntryForCurrentUser(entry)) await entryRepository.delete(id);
   },
 
   async clearTrash(): Promise<void> {
     if (useApi()) { try { await api.post('/diary/trash/clear'); } catch (e) { console.warn('后端清空回收站失败:', e); } }
-    const db = await initDB();
-    const trashedEntries = (await db.getAllFromIndex('entries', 'by-status', 'trashed')).filter(entry => isEntryForCurrentUser(entry));
+    const trashedEntries = (await entryRepository.getByStatus('trashed')).filter(entry => isEntryForCurrentUser(entry));
     await Promise.all(trashedEntries.map(entry => localVaultService.deleteEntryFiles(entry.id).catch(error => console.warn('Delete local vault trash entry failed:', error))));
-    await Promise.all(trashedEntries.map(entry => db.delete('entries', entry.id)));
+    await Promise.all(trashedEntries.map(entry => entryRepository.delete(entry.id)));
   },
 
   // 模板

@@ -1,7 +1,7 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { format } from 'date-fns';
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { DiaryEntry, EntryStatus } from './diaryService';
+import type { DiaryEntry, EntryStatus } from '../features/diary/model';
 import { htmlToMarkdown } from '../utils/htmlToMarkdown';
 import { parseDiaryDateKey, toDiaryDateKey } from '../utils/diaryDate';
 

@@ -2,91 +2,25 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { stringArray } from '../utils/request.js';
-import { repairLegacyImageUrls } from '../lib/imageRepair.js';
 import { areStringArraysEqual, parseStoredStringArray, saveEditHistorySnapshot } from '../lib/editHistory.js';
-import { handleEntryChangedForMonthlyEcho } from '../lib/monthlyEchoService.js';
+import {
+  dateOrNull,
+  formatDiaryEntry,
+  normalizeActiveWritingSeconds,
+  normalizeDailyEcho,
+  normalizeDiaryDate,
+  normalizeStatus,
+  normalizeTrashReason,
+  nullableString,
+  syncImageArray,
+} from '../modules/diary/diaryEntryCodec.js';
+import { projectDiaryChange } from '../modules/diary/diaryChangeProjector.js';
 
 const router = Router();
 router.use(requireAuth);
 
 type SyncResultStatus = 'created' | 'updated' | 'conflict' | 'skipped';
 type SyncResult = { id: string; status: SyncResultStatus; reason?: string };
-
-function parseJsonArray(value?: string | null): string[] {
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string' && item.trim() !== '') : [];
-  } catch {
-    return [];
-  }
-}
-
-function parseJsonObject(value?: string | null): Record<string, unknown> | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function normalizeDailyEcho(value: unknown): string | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const raw = JSON.stringify(value);
-  return raw.length <= 200000 ? raw : null;
-}
-
-function normalizeActiveWritingSeconds(value: unknown, fallback = 0): number {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return fallback;
-  return Math.max(0, Math.floor(numeric));
-}
-
-function syncImageArray(value: unknown): string[] {
-  return stringArray(value, 20, 4096)
-    .filter(item => !item.trim().startsWith('data:image/'));
-}
-
-function toLocalDateKey(date = new Date()): string {
-  return [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, '0'),
-    String(date.getDate()).padStart(2, '0'),
-  ].join('-');
-}
-
-function normalizeDiaryDate(value: unknown): string {
-  const raw = typeof value === 'string' ? value.trim() : '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw.slice(0, 10);
-
-  const parsed = raw ? new Date(raw) : new Date();
-  if (!Number.isNaN(parsed.getTime())) {
-    return toLocalDateKey(parsed);
-  }
-
-  return toLocalDateKey();
-}
-
-function normalizeStatus(value: unknown): 'active' | 'draft' | 'trashed' {
-  return value === 'draft' || value === 'trashed' ? value : 'active';
-}
-
-function nullableString(value: unknown): string | null {
-  return typeof value === 'string' ? value : null;
-}
-
-function dateOrNull(value: unknown): Date | null {
-  if (!value) return null;
-  const date = new Date(String(value));
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function normalizeTrashReason(value: unknown): 'deleted' | 'abandoned' | null {
-  return value === 'deleted' || value === 'abandoned' ? value : null;
-}
 
 function isDuplicateIdError(error: any): boolean {
   return error?.code === 'P2002'
@@ -162,15 +96,6 @@ async function saveSyncHistorySnapshot(params: {
   }
 }
 
-async function formatSyncEntry(entry: any) {
-  return {
-    ...entry,
-    tags: entry.tags ? JSON.parse(entry.tags) : [],
-    images: await repairLegacyImageUrls(parseJsonArray(entry.images)),
-    dailyEcho: parseJsonObject(entry.dailyEcho),
-  };
-}
-
 router.get('/pull', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
@@ -193,7 +118,7 @@ router.get('/pull', async (req: Request, res: Response) => {
     });
 
     res.json({
-      entries: await Promise.all(entries.map(formatSyncEntry)),
+      entries: await Promise.all(entries.map(formatDiaryEntry)),
       serverTime: new Date().toISOString(),
     });
   } catch (err: any) {
@@ -224,6 +149,7 @@ router.post('/push', async (req: Request, res: Response) => {
     }
 
     const results: SyncResult[] = [];
+    const projectionTasks: Promise<unknown>[] = [];
 
     for (const entry of entries) {
       const id = String(entry.id || '');
@@ -286,11 +212,12 @@ router.post('/push', async (req: Request, res: Response) => {
           };
 
           await updateDiaryEntryCompat({ id: existing.id }, updateData);
-          handleEntryChangedForMonthlyEcho({
+          projectionTasks.push(projectDiaryChange({
+            type: 'changed',
             userId,
             entryId: existing.id,
             previousDiaryDate: existing.diaryDate,
-          }).catch(error => console.warn('[monthly-echo] enqueue after sync update failed:', error));
+          }));
 
           return { id, status: 'updated' };
         };
@@ -345,8 +272,7 @@ router.post('/push', async (req: Request, res: Response) => {
             content: created.content,
             images: parseStoredStringArray(created.images),
           });
-          handleEntryChangedForMonthlyEcho({ userId, entryId: created.id })
-            .catch(error => console.warn('[monthly-echo] enqueue after sync create failed:', error));
+          projectionTasks.push(projectDiaryChange({ type: 'changed', userId, entryId: created.id }));
           results.push({ id, status: 'created' });
         }
       } catch (err: any) {
@@ -369,6 +295,7 @@ router.post('/push', async (req: Request, res: Response) => {
       }
     }
 
+    await Promise.all(projectionTasks);
     res.json({ results, serverTime: new Date().toISOString() });
   } catch (err: any) {
     console.error('推送同步数据失败:', err);

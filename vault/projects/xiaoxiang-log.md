@@ -1,5 +1,13 @@
 # 小象日志
 
+## 2026-06-30 MVP 架构最小重构
+
+- 日记模型、同步 DTO、IndexedDB Repository 和提交后副作用协调器已从 `diaryService` 拆出，旧 API 保持兼容；日记本地提交不再被 Vault、云同步等可选功能失败阻断。
+- 后端日记 CRUD/同步共用 codec，月度回声改走可等待且失败隔离的 projector；同步回归不再产生请求结束后的月度回声外键错误。
+- Editor 保存/生命周期 autosave/回声/社区发布已形成独立协作者，App 启动与通知轮询移出路由 Shell；通知、好友关系和 Editor 偏好键已集中。
+- 验证通过：前后端 build、`npm run lint`、统一 `npm test`、同步回归、8 项编辑器退出保存 E2E，以及 390×844 首页/Editor 浏览器冒烟。详细记录见 `vault/notes/daily/2026-06-30.md`。
+- 本轮未改数据库 schema、线上 API 路径或部署配置，尚未部署。
+
 ## 2026-06-21 月度回声上线版
 
 - 已实现持久化后端月度回声链路：`DailyTraceNode -> MonthlyArcDraft -> MonthlyEcho`，通过 `MonthlyEchoJobLog` 做轻量 job、失败落库和 `userId + monthKey + jobType` 运行锁。保存/同步/删除日记只标记 trace pending/stale/invalid 并入队，不在请求链路调用 AI。
@@ -263,3 +271,12 @@
 - 更新公告三项：修复编辑页顶部正文滑动压住日期和按钮；追补 Android App 选中文字和光标附近白色方块；关闭 Android WebView 强制深色合成，降低原生选区层冒白底概率。
 - 线上 `app-update.json` 已返回 `1.0.19 / 21`，公网 APK 与本地正式签名包 SHA256 一致：`9EE01434526D0A721BB85AFB6862CC798B1B40176CABC0A4FB5A0DF275F0EAA8`。
 - 本次未同步 GitHub Pages / GitHub Release；验证详情见 `vault/notes/daily/2026-06-24-android-v119-release.md`。
+## 2026-06-30 导出图片重叠回归最终修复
+
+- 这次确认旧的 `<wbr>` / `\u200B` 边界补丁不是根因修复；真正的问题是 `html2canvas@1.4.1` 的文本测量会和浏览器 / Android WebView 的最终 fallback 字体排版漂移，导致中英混排偶发重叠。
+- 日记导出 PNG 已从 `html2canvas` 切到 `html-to-image` 的 browser-native `foreignObject` 渲染；导出前会等待字体加载、图片解码和文字几何稳定，并把当前自定义字体内嵌到导出 DOM。
+- 日记导出时统一强制 `text-size-adjust: none`、`white-space: pre-wrap`、`word-break: normal`、`overflow-wrap: anywhere`、`hyphens: none` 和最小 `line-height: 1.5`，避免不同 Android 机型 / 系统字号下再出现压字。
+- 已删除旧的 `insertExportTextBreaks()` / `<wbr>` / `\u200B` 注入路径；后续如果回滚或重写导出链路，优先检查是否有人重新把这些逻辑带回来了。
+- 回归验证命令：`npm run lint`、`npm run build`、`npx tsx src/utils/exportImage.test.ts`、`npm run test:exploration`、`npm run test:export-typography`、`npm run test:export-mojibake`、`npm run test:preservation`、`npm run test:preservation:verify`。
+- Android APK 实测证据：当前代码构建并安装 `D:\小象日志\android\app\build\outputs\apk\debug\app-debug.apk` 到 `Pixel_8` 模拟器；真实导出文件包括 `小象日志_2026-05-20 (1).png`、`小象日志_2026-06-29 (2).png`、`小象日志_2026-06-29 (3).png`。其中 `(3)` 是 `font_scale=1.3` 下导出，换行改变但无重叠。
+- 相关详细记录：`vault/notes/daily/2026-06-21-diary-export-overlap-fix.md`。

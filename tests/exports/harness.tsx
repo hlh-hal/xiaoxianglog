@@ -1,32 +1,25 @@
 /**
  * Export harness —— 在真实浏览器（Vite dev server）里复现 saveToLocal 的
- * html2canvas 链路，供 Puppeteer 通过 window.__runExportHarness /
+ * 浏览器原生排版导出链路，供 Puppeteer 通过 window.__runExportHarness /
  * window.__runPreservationCase 调用。
  *
- * - `__runExportHarness(H1..H4)` 服务于 Task 1 exploration test：
- *   在**未修复**代码上确认 oklch 命中、html2canvas 抛错。
- * - `__runPreservationCase(P1..P5)` 服务于 Task 2 preservation baseline：
- *   在**未修复**代码上，用 ¬isBugCondition 的输入生成 baseline PNG，
- *   供 Task 3.6 作像素一致性比对。
+ * - `__runExportHarness(H1..H8)` 覆盖结构、混排和超长正文。
+ * - `__runPreservationCase(P1..P5)` 保留主题、图片和尺寸基线能力。
  *
  * 注意：此文件仅用于 bugfix 测试支持代码，不会被引入生产构建；
- * 不允许在这里重写业务逻辑（比如绕开 html2canvas 或做颜色预处理）。
+ * 导出必须调用生产代码中的 renderExportPng，避免测试与真实流程漂移。
  */
 
 import { createRoot, type Root } from 'react-dom/client';
-import html2canvas from 'html2canvas';
+import * as htmlToImage from 'html-to-image';
 import { DiaryExportCard } from '../../src/pages/Editor';
 import { allThemes, type DiaryTheme } from '../../src/types/theme';
-// Task 3.5: 与 saveToLocal 的最新实现保持同步 —— 把 oklch/oklab/lab/lch 归一化成 rgb，
-// 按卡片高度挑 html2canvas 的 scale。harness 不是在"重写业务逻辑"，而是在"如实镜像
-// saveToLocal 的导出链路"；saveToLocal 在 Task 3.2 接入了这两个工具，harness 也必须
-// 接入，否则再跑这个 exploration test 实际测的是未修复路径，会永远失败。
 import {
-  sanitizeModernColors,
   measureExportCard,
   pickExportScale,
   waitForExportRenderReady,
-  renderExportCanvas,
+  renderExportPng,
+  type ExportPngResult,
 } from '../../src/utils/exportImage';
 
 // 引入全局样式，保证 Tailwind v4 + @tailwindcss/typography 的 prose / preflight
@@ -35,7 +28,7 @@ import '../../src/index.css';
 
 // ========== Exploration (Task 1) ==========
 
-type ExplorationCaseId = 'H1' | 'H2' | 'H3' | 'H4' | 'H5' | 'H6';
+type ExplorationCaseId = 'H1' | 'H2' | 'H3' | 'H4' | 'H5' | 'H6' | 'H7' | 'H8';
 
 interface ExplorationResult {
   caseId: ExplorationCaseId;
@@ -86,6 +79,18 @@ const H6_HTML = `
 <p>思考：明天要改论文，还有象友杯的辩论赛。今天晚上想了一下暑假干什么，然后做面试模拟skill和日程安排APP。</p>
 `.trim();
 
+const H7_HTML = `
+<p>2026.6.29</p>
+<p>开心：中文 English 123 都要清楚，AI中文、中文AI、版本v1.0.20都不能挤压。</p>
+<p>感谢：所有跟我<span data-export-probe="mixed">聊天UU以及</span>坚强的老己。</p>
+<p>思考：长单词 Supercalifragilisticexpialidocious需要正常换行，数字20260629也不能覆盖中文。</p>
+<p>换行验证第一行<br>第二行 mixed中英123混排<br>第三行保持完整。</p>
+`.trim();
+
+const H8_HTML = Array.from({ length: 36 }, (_, index) => `
+<p>${index + 1}. 长段落验证：中文English${index + 100}混排，聊天UU以及数字20260629都应保持正常字距、换行和行高。ThisIsAVeryLongUnbrokenEnglishTokenForWrapping${index}。</p>
+`).join('');
+
 const EXPLORATION_CASE_MAP: Record<ExplorationCaseId, string> = {
   H1: H1_HTML,
   H2: H2_HTML,
@@ -93,6 +98,8 @@ const EXPLORATION_CASE_MAP: Record<ExplorationCaseId, string> = {
   H4: H4_HTML,
   H5: H5_HTML,
   H6: H6_HTML,
+  H7: H7_HTML,
+  H8: H8_HTML,
 };
 
 // ========== Preservation (Task 2) ==========
@@ -192,50 +199,6 @@ const PRESERVATION_CASE_MAP: Record<PreservationCaseId, PreservationCaseSpec> = 
   },
 };
 
-// 需要检查的 CSS 属性集 —— 与 design.md 中 isBugCondition(el) 的属性清单对齐。
-const MODERN_COLOR_PROPS: string[] = [
-  'color',
-  'background-color',
-  'background-image',
-  'border-top-color',
-  'border-right-color',
-  'border-bottom-color',
-  'border-left-color',
-  'outline-color',
-  'text-decoration-color',
-  'caret-color',
-  'fill',
-  'stroke',
-  'column-rule-color',
-  'box-shadow',
-];
-
-const MODERN_COLOR_PATTERN = /oklch\(|oklab\(|lab\(|lch\(/i;
-
-/**
- * 遍历 root 子树，若任一节点的任一 MODERN_COLOR_PROPS 属性 computed 值命中
- * `oklch(|oklab(|lab(|lch(`，返回描述字符串；否则返回 null。
- */
-function findModernColorHit(root: HTMLElement): string | null {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-  // 根节点本身也要检查
-  let node: Element | null = root;
-  while (node) {
-    const cs = getComputedStyle(node as HTMLElement);
-    for (const prop of MODERN_COLOR_PROPS) {
-      const v = cs.getPropertyValue(prop);
-      if (v && MODERN_COLOR_PATTERN.test(v)) {
-        const tag = (node as HTMLElement).tagName;
-        const cls = (node as HTMLElement).className || '';
-        const trimmedCls = typeof cls === 'string' && cls.length > 60 ? cls.slice(0, 60) + '…' : cls;
-        return `意外命中 oklch: <${tag}${trimmedCls ? ` class="${trimmedCls}"` : ''}>.${prop} = ${v.trim()}`;
-      }
-    }
-    node = walker.nextNode() as Element | null;
-  }
-  return null;
-}
-
 async function sha256HexFromBase64(base64: string): Promise<string> {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -301,33 +264,21 @@ async function runExplorationCase(caseId: ExplorationCaseId): Promise<Exploratio
     await waitForDataReady(el, 20, 50);
     await waitForExportRenderReady(el);
 
-    // Task 3.5: 镜像 saveToLocal 在 Editor.tsx 里的最新导出链路：
-    //   1) measureExportCard → pickExportScale（次级防线，默认 2）
-    //   2) sanitizeModernColors（主修，把 oklch/oklab/lab/lch 归一化成 rgb）
-    //   3) html2canvas 用 try/finally 确保 restoreColors() 被调用
+    // 镜像 saveToLocal：按卡片高度选倍率，再由浏览器原生排版生成 PNG。
     const { cardH } = measureExportCard(el);
     const scale = pickExportScale(cardH);
-    const restoreColors = sanitizeModernColors(el);
-
-    let canvas: HTMLCanvasElement;
-    try {
-      canvas = await renderExportCanvas(el, html2canvas, scale);
-    } finally {
-      restoreColors();
-    }
-
-    const dataUrl = canvas.toDataURL('image/png');
+    const { dataUrl, width, height } = await renderExportPng(el, htmlToImage.toPng, scale);
     const ok =
-      canvas.width > 0 &&
-      canvas.height > 0 &&
+      width > 0 &&
+      height > 0 &&
       dataUrl.startsWith('data:image/png;base64,') &&
       !dataUrl.startsWith('data:,');
 
     return {
       caseId,
       ok,
-      width: canvas.width,
-      height: canvas.height,
+      width,
+      height,
       dataUrlPrefix: dataUrl.slice(0, 40),
       elapsedMs: performance.now() - startedAt,
     };
@@ -424,30 +375,17 @@ async function runPreservationCaseImpl(caseId: PreservationCaseId): Promise<Pres
     // 再稳一点布局
     await waitForExportRenderReady(el);
 
-    // **前置断言**：在调用 html2canvas 之前验证 ¬isBugCondition。
-    const hit = findModernColorHit(el);
-    if (hit) {
-      return {
-        caseId,
-        ok: false,
-        assertion: `${caseId} ${hit}`,
-        elapsedMs: performance.now() - startedAt,
-      };
-    }
-
-    const canvas = await renderExportCanvas(el, html2canvas, 2);
-
-    const dataUrl = canvas.toDataURL('image/png');
+    const { dataUrl, width, height } = await renderExportPng(el, htmlToImage.toPng, 2);
     if (
-      canvas.width <= 0 ||
-      canvas.height <= 0 ||
+      width <= 0 ||
+      height <= 0 ||
       !dataUrl.startsWith('data:image/png;base64,') ||
       dataUrl === 'data:,'
     ) {
       return {
         caseId,
         ok: false,
-        errorMessage: `invalid canvas / dataUrl (width=${canvas.width}, height=${canvas.height}, dataUrlPrefix=${dataUrl.slice(0, 24)})`,
+        errorMessage: `invalid PNG data (width=${width}, height=${height}, dataUrlPrefix=${dataUrl.slice(0, 24)})`,
         elapsedMs: performance.now() - startedAt,
       };
     }
@@ -458,8 +396,8 @@ async function runPreservationCaseImpl(caseId: PreservationCaseId): Promise<Pres
     return {
       caseId,
       ok: true,
-      width: canvas.width,
-      height: canvas.height,
+      width,
+      height,
       dataUrlBase64: base64,
       sha256,
       elapsedMs: performance.now() - startedAt,
@@ -503,19 +441,40 @@ async function runPreservationCase(caseId: PreservationCaseId): Promise<Preserva
   }
 }
 
-async function renderExportPreview(caseId: ExplorationCaseId): Promise<void> {
+interface TypographyPreviewOptions {
+  fontSize?: number;
+  lineHeight?: number;
+  fontFamily?: string;
+}
+
+let previewRoot: Root | null = null;
+
+async function renderExportPreview(
+  caseId: ExplorationCaseId,
+  typography: TypographyPreviewOptions = {},
+): Promise<void> {
   const rootEl = document.getElementById('harness-root');
   if (!rootEl) throw new Error('#harness-root missing');
 
+  previewRoot?.unmount();
+  previewRoot = null;
   rootEl.innerHTML = '';
   rootEl.style.cssText = 'padding: 24px; background: #e9e7df; min-height: 100vh;';
+
+  const documentStyle = document.documentElement.style;
+  documentStyle.setProperty('--diary-font-size', `${typography.fontSize ?? 16}px`);
+  documentStyle.setProperty('--diary-line-height', String(typography.lineHeight ?? 1.7));
+  documentStyle.setProperty(
+    '--diary-font-family',
+    typography.fontFamily ?? '"Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif',
+  );
 
   const preview = document.createElement('div');
   preview.style.cssText = 'width:375px;margin:0 auto;background:#faf9f5;';
   rootEl.appendChild(preview);
 
-  const root = createRoot(preview);
-  root.render(
+  previewRoot = createRoot(preview);
+  previewRoot.render(
     <DiaryExportCard
       entry={{ diaryDate: Date.UTC(2026, 4, 28) }}
       theme={pickWarmWhiteTheme()}
@@ -531,13 +490,20 @@ async function renderExportPreview(caseId: ExplorationCaseId): Promise<void> {
   await waitForExportRenderReady(el);
 }
 
+async function exportCurrentPreview(scale: 1 | 1.5 | 2 = 2): Promise<ExportPngResult> {
+  const el = document.querySelector<HTMLElement>('#diary-export-card');
+  if (!el) throw new Error('#diary-export-card missing');
+  return renderExportPng(el, htmlToImage.toPng, scale);
+}
+
 // ========== Global registration ==========
 
 declare global {
   interface Window {
     __runExportHarness?: (caseId: ExplorationCaseId) => Promise<ExplorationResult>;
     __runPreservationCase?: (caseId: PreservationCaseId) => Promise<PreservationResult>;
-    __renderExportPreview?: (caseId: ExplorationCaseId) => Promise<void>;
+    __renderExportPreview?: (caseId: ExplorationCaseId, typography?: TypographyPreviewOptions) => Promise<void>;
+    __exportCurrentPreview?: (scale?: 1 | 1.5 | 2) => Promise<ExportPngResult>;
     __harnessReady?: boolean;
   }
 }
@@ -545,12 +511,13 @@ declare global {
 window.__runExportHarness = runExportHarness;
 window.__runPreservationCase = runPreservationCase;
 window.__renderExportPreview = renderExportPreview;
+window.__exportCurrentPreview = exportCurrentPreview;
 window.__harnessReady = true;
 
 // 页面里一个最小可见提示，便于手动打开 harness.html 时看状态。
 const rootEl = document.getElementById('harness-root');
 if (rootEl) {
   rootEl.textContent =
-    'export harness ready (use window.__runExportHarness("H1"|"H2"|"H3"|"H4"|"H5") or window.__runPreservationCase("P1"..."P5"))';
+    'export harness ready (use window.__runExportHarness("H1"..."H8") or window.__runPreservationCase("P1"..."P5"))';
   rootEl.style.cssText = 'font-family: monospace; padding: 16px;';
 }

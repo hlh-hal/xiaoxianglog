@@ -29,6 +29,12 @@ import {
   scheduleDailyReminder,
   updateServerNotificationPreferences,
 } from '../utils/notify';
+import {
+  clearTodayLocalReminderState,
+  NOTIFICATION_STORAGE_KEYS,
+  notificationPreferenceStore,
+  type NotificationStorageKey,
+} from '../features/notifications/notificationPreferences';
 
 type PendingNotificationToggle =
   | { type: 'reminder' }
@@ -37,21 +43,6 @@ type PendingNotificationToggle =
   | { type: 'monthlyEchoPush' };
 
 const REMINDER_NOTIFICATION_TITLE = '小象日志';
-
-function getTodayReminderStorageKey(reminderTime: string): string {
-  const now = new Date();
-  const today = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-  ].join('-');
-  return `xiang_last_remind_${today}_${reminderTime}`;
-}
-
-function clearTodayLocalReminderState(reminderTime: string): void {
-  localStorage.removeItem('last_remind_date');
-  localStorage.removeItem(getTodayReminderStorageKey(reminderTime));
-}
 
 export default function Settings() {
   const navigate = useNavigate();
@@ -72,14 +63,14 @@ export default function Settings() {
   const [pendingNotificationToggle, setPendingNotificationToggle] = useState<PendingNotificationToggle | null>(null);
   const [notificationBusyType, setNotificationBusyType] = useState<PendingNotificationToggle['type'] | null>(null);
   const [notifyEnabled, setNotifyEnabled] = useState(
-    () => localStorage.getItem('setting_notify_enabled') !== 'false' && getBrowserNotificationPermission() === 'granted',
+    () => notificationPreferenceStore.isEnabled(NOTIFICATION_STORAGE_KEYS.social) && getBrowserNotificationPermission() === 'granted',
   );
   const [friendRequestEnabled, setFriendRequestEnabled] = useState(
-    () => localStorage.getItem('setting_friend_request_enabled') !== 'false' && getBrowserNotificationPermission() === 'granted',
+    () => notificationPreferenceStore.isEnabled(NOTIFICATION_STORAGE_KEYS.friendRequest) && getBrowserNotificationPermission() === 'granted',
   );
   const [monthlyEchoEnabled, setMonthlyEchoEnabled] = useState(true);
   const [monthlyEchoPushEnabled, setMonthlyEchoPushEnabled] = useState(
-    () => localStorage.getItem('setting_monthly_echo_push_enabled') !== 'false' && getBrowserNotificationPermission() === 'granted',
+    () => notificationPreferenceStore.isEnabled(NOTIFICATION_STORAGE_KEYS.monthlyEchoPush) && getBrowserNotificationPermission() === 'granted',
   );
   const [monthlyEchoPushTime, setMonthlyEchoPushTime] = useState('20:00');
 
@@ -100,12 +91,12 @@ export default function Settings() {
   };
 
   const updateLocalNotificationSetting = (
-    key: string,
+    key: NotificationStorageKey,
     setter: React.Dispatch<React.SetStateAction<boolean>>,
     enabled: boolean,
   ) => {
     setter(enabled);
-    localStorage.setItem(key, String(enabled));
+    notificationPreferenceStore.setEnabled(key, enabled);
   };
 
   const syncPushSubscription = async () => {
@@ -128,17 +119,17 @@ export default function Settings() {
   useEffect(() => {
     checkBrowserNotificationPermission().then((permission) => {
       const granted = permission === 'granted';
-      setNotifyEnabled(localStorage.getItem('setting_notify_enabled') !== 'false' && granted);
-      setFriendRequestEnabled(localStorage.getItem('setting_friend_request_enabled') !== 'false' && granted);
-      setMonthlyEchoPushEnabled(localStorage.getItem('setting_monthly_echo_push_enabled') !== 'false' && granted);
+      setNotifyEnabled(notificationPreferenceStore.isEnabled(NOTIFICATION_STORAGE_KEYS.social) && granted);
+      setFriendRequestEnabled(notificationPreferenceStore.isEnabled(NOTIFICATION_STORAGE_KEYS.friendRequest) && granted);
+      setMonthlyEchoPushEnabled(notificationPreferenceStore.isEnabled(NOTIFICATION_STORAGE_KEYS.monthlyEchoPush) && granted);
 
       if (permission === 'denied' || permission === 'unsupported' || permission === 'insecure') {
         if (settingsService.getSettings().reminderEnabled) {
           setSettings(settingsService.saveSettings({ reminderEnabled: false }));
         }
-        updateLocalNotificationSetting('setting_notify_enabled', setNotifyEnabled, false);
-        updateLocalNotificationSetting('setting_friend_request_enabled', setFriendRequestEnabled, false);
-        updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, false);
+        updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.social, setNotifyEnabled, false);
+        updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.friendRequest, setFriendRequestEnabled, false);
+        updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.monthlyEchoPush, setMonthlyEchoPushEnabled, false);
       }
     }).catch(error => console.warn('Failed to check notification permission:', error));
   }, []);
@@ -166,12 +157,12 @@ export default function Settings() {
           reminderTime: preference.dailyReminderTime,
         }));
       }
-      updateLocalNotificationSetting('setting_notify_enabled', setNotifyEnabled, preference.socialNotifyEnabled && notificationAllowed);
-      updateLocalNotificationSetting('setting_friend_request_enabled', setFriendRequestEnabled, preference.friendRequestNotifyEnabled && notificationAllowed);
+      updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.social, setNotifyEnabled, preference.socialNotifyEnabled && notificationAllowed);
+      updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.friendRequest, setFriendRequestEnabled, preference.friendRequestNotifyEnabled && notificationAllowed);
       setMonthlyEchoEnabled(preference.monthlyEchoEnabled !== false);
       setMonthlyEchoPushTime(preference.monthlyEchoPushTime || '20:00');
       updateLocalNotificationSetting(
-        'setting_monthly_echo_push_enabled',
+        NOTIFICATION_STORAGE_KEYS.monthlyEchoPush,
         setMonthlyEchoPushEnabled,
         preference.monthlyEchoPushEnabled !== false && notificationAllowed,
       );
@@ -199,14 +190,14 @@ export default function Settings() {
     }
 
     if (pending.type === 'notify') {
-      updateLocalNotificationSetting('setting_notify_enabled', setNotifyEnabled, true);
+      updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.social, setNotifyEnabled, true);
       updateServerNotificationPreferences({ socialNotifyEnabled: true })
         .catch(error => console.warn('Failed to sync notification preference:', error));
       return;
     }
 
     if (pending.type === 'monthlyEchoPush') {
-      updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, true);
+      updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.monthlyEchoPush, setMonthlyEchoPushEnabled, true);
       updateServerNotificationPreferences({
         monthlyEchoEnabled: true,
         monthlyEchoPushEnabled: true,
@@ -215,7 +206,7 @@ export default function Settings() {
       return;
     }
 
-    updateLocalNotificationSetting('setting_friend_request_enabled', setFriendRequestEnabled, true);
+    updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.friendRequest, setFriendRequestEnabled, true);
     updateServerNotificationPreferences({ friendRequestNotifyEnabled: true })
       .catch(error => console.warn('Failed to sync friend request preference:', error));
   };
@@ -345,17 +336,17 @@ export default function Settings() {
   const handleNotificationToggle = async (
     enabled: boolean,
     featureName: string,
-    storageKey: string,
+    storageKey: NotificationStorageKey,
     setter: React.Dispatch<React.SetStateAction<boolean>>,
   ) => {
-    const busyType = storageKey === 'setting_notify_enabled' ? 'notify' : 'friendRequest';
+    const busyType = storageKey === NOTIFICATION_STORAGE_KEYS.social ? 'notify' : 'friendRequest';
     if (notificationBusyType) return;
     setNotificationBusyType(busyType);
     try {
     if (!enabled) {
       updateLocalNotificationSetting(storageKey, setter, false);
       await updateServerNotificationPreferences(
-        storageKey === 'setting_notify_enabled'
+        storageKey === NOTIFICATION_STORAGE_KEYS.social
           ? { socialNotifyEnabled: false }
           : { friendRequestNotifyEnabled: false },
       ).catch(error => console.warn('Failed to sync notification preference:', error));
@@ -364,13 +355,13 @@ export default function Settings() {
 
     const allowed = await ensureNotificationPermission(
       featureName,
-      storageKey === 'setting_notify_enabled' ? { type: 'notify' } : { type: 'friendRequest' },
+      storageKey === NOTIFICATION_STORAGE_KEYS.social ? { type: 'notify' } : { type: 'friendRequest' },
     );
     const pushReady = allowed ? await syncPushSubscription() : false;
     updateLocalNotificationSetting(storageKey, setter, allowed && pushReady);
     if (allowed && pushReady) {
       await updateServerNotificationPreferences(
-        storageKey === 'setting_notify_enabled'
+        storageKey === NOTIFICATION_STORAGE_KEYS.social
           ? { socialNotifyEnabled: true }
           : { friendRequestNotifyEnabled: true },
       ).catch(error => console.warn('Failed to sync notification preference:', error));
@@ -389,7 +380,7 @@ export default function Settings() {
     if (notificationBusyType) return;
     setMonthlyEchoEnabled(enabled);
     if (!enabled) {
-      updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, false);
+      updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.monthlyEchoPush, setMonthlyEchoPushEnabled, false);
     }
     await updateServerNotificationPreferences({
       monthlyEchoEnabled: enabled,
@@ -404,7 +395,7 @@ export default function Settings() {
     setNotificationBusyType('monthlyEchoPush');
     try {
       if (!enabled) {
-        updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, false);
+        updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.monthlyEchoPush, setMonthlyEchoPushEnabled, false);
         await updateServerNotificationPreferences({
           monthlyEchoPushEnabled: false,
           monthlyEchoPushTime,
@@ -414,7 +405,7 @@ export default function Settings() {
 
       const allowed = await ensureNotificationPermission('月末回声提醒', { type: 'monthlyEchoPush' });
       const pushReady = allowed ? await syncPushSubscription() : false;
-      updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, allowed && pushReady);
+      updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.monthlyEchoPush, setMonthlyEchoPushEnabled, allowed && pushReady);
       if (allowed && pushReady) {
         setMonthlyEchoEnabled(true);
         await updateServerNotificationPreferences({
@@ -426,7 +417,7 @@ export default function Settings() {
       }
     } catch (error: any) {
       console.warn('Failed to toggle monthly echo push preference:', error);
-      updateLocalNotificationSetting('setting_monthly_echo_push_enabled', setMonthlyEchoPushEnabled, false);
+      updateLocalNotificationSetting(NOTIFICATION_STORAGE_KEYS.monthlyEchoPush, setMonthlyEchoPushEnabled, false);
       showToast(error?.message || '月末回声提醒开启失败，请稍后再试');
     } finally {
       setNotificationBusyType(null);
@@ -894,7 +885,7 @@ export default function Settings() {
               </div>
               <Toggle
                 checked={notifyEnabled}
-                onChange={(value) => handleNotificationToggle(value, '通知提示', 'setting_notify_enabled', setNotifyEnabled)}
+                onChange={(value) => handleNotificationToggle(value, '通知提示', NOTIFICATION_STORAGE_KEYS.social, setNotifyEnabled)}
                 loading={notificationBusyType === 'notify'}
                 disabled={notificationBusyType !== null && notificationBusyType !== 'notify'}
               />
@@ -908,7 +899,7 @@ export default function Settings() {
               </div>
               <Toggle
                 checked={friendRequestEnabled}
-                onChange={(value) => handleNotificationToggle(value, '好友申请提示', 'setting_friend_request_enabled', setFriendRequestEnabled)}
+                onChange={(value) => handleNotificationToggle(value, '好友申请提示', NOTIFICATION_STORAGE_KEYS.friendRequest, setFriendRequestEnabled)}
                 loading={notificationBusyType === 'friendRequest'}
                 disabled={notificationBusyType !== null && notificationBusyType !== 'friendRequest'}
               />

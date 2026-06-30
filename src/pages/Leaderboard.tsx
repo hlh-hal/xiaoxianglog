@@ -8,6 +8,7 @@ import { api } from '../services/apiClient';
 import { AppToast } from '../components/AppToast';
 import { UserAvatar } from '../components/UserAvatar';
 import { getDiaryDateKey, parseDiaryDateKey } from '../utils/diaryDate';
+import { friendRelations } from '../features/social/friendRelations';
 
 interface LeaderboardUser {
   id: string;
@@ -28,17 +29,6 @@ interface User {
   bio: string;
   friendStatus?: 'none' | 'pending' | 'accepted' | 'declined';
 }
-
-const getFriendStatus = (userId: string): 'none' | 'pending' | 'accepted' | 'declined' => {
-  const relations = JSON.parse(localStorage.getItem('xiang_friend_relations') || '{}');
-  return relations[userId] || 'none';
-};
-
-const setFriendStatus = (userId: string, status: string) => {
-  const relations = JSON.parse(localStorage.getItem('xiang_friend_relations') || '{}');
-  relations[userId] = status;
-  localStorage.setItem('xiang_friend_relations', JSON.stringify(relations));
-};
 
 const getDiaryDayKey = (diaryDate: string) => {
   return getDiaryDateKey(diaryDate) || null;
@@ -162,7 +152,7 @@ export default function Leaderboard() {
         addresseeId: friendRequestTarget.id,
         note: friendRequestNote.trim()
       });
-      setFriendStatus(friendRequestTarget.id, 'pending');
+      friendRelations.set(friendRequestTarget.id, 'pending');
       setSearchResults(prev => prev.map(item =>
         item.id === friendRequestTarget.id ? { ...item, friendStatus: 'pending' } : item
       ));
@@ -574,7 +564,7 @@ export default function Leaderboard() {
 
             {/* 搜索结果 */}
             {searchResults.map(u => {
-              const status = u.friendStatus || getFriendStatus(u.id);
+              const status = u.friendStatus || friendRelations.get(u.id);
               return (
                 <div key={u.id} style={{
                   display: 'flex', alignItems: 'center',

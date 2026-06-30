@@ -54,7 +54,7 @@ async function waitFor(
 const DB_HELPER_SOURCE = String.raw`
 (() => {
   const DB_NAME = 'ethos-diary-db';
-  const DB_VERSION = 4;
+  const DB_VERSION = 7;
 
   function ensureStores(db) {
     if (!db.objectStoreNames.contains('entries')) {
@@ -75,6 +75,19 @@ const DB_HELPER_SOURCE = String.raw`
     }
     if (!db.objectStoreNames.contains('customFonts')) {
       db.createObjectStore('customFonts', { keyPath: 'id' });
+    }
+    if (!db.objectStoreNames.contains('insightDrafts')) {
+      db.createObjectStore('insightDrafts', { keyPath: 'id' });
+    }
+    if (!db.objectStoreNames.contains('echoHotMemories')) {
+      db.createObjectStore('echoHotMemories', { keyPath: 'id' });
+    }
+    if (!db.objectStoreNames.contains('echoMemorySnapshots')) {
+      const snapshotStore = db.createObjectStore('echoMemorySnapshots', { keyPath: 'id' });
+      snapshotStore.createIndex('by-created', 'createdAt');
+    }
+    if (!db.objectStoreNames.contains('annualEchoDigests')) {
+      db.createObjectStore('annualEchoDigests', { keyPath: 'id' });
     }
   }
 
@@ -106,6 +119,8 @@ const DB_HELPER_SOURCE = String.raw`
     async clear() {
       localStorage.clear();
       sessionStorage.clear();
+      localStorage.setItem('xiang_first_install_vault_onboarding_state', 'skipped');
+      localStorage.setItem('xiang_welcome_created', 'true');
       const db = await openDb();
       const stores = Array.from(db.objectStoreNames);
       if (stores.length > 0) {

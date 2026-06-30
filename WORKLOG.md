@@ -113,3 +113,9 @@
 - 后续如果再次修改导出链路，需要回看 `.kiro/specs/diary-export-long-text-fails/`，不要重新纠结“长文失败是不是 canvas 超限”这个已判断过的问题。
 - 如果未来打包 Android 后出现超长日志导出失败，再单独验证 Android WebView 的 canvas 尺寸、内存和 Capacitor 文件写入限制；当前浏览器问题的主因是 `oklch`。
 - 现有工作区有多处源码改动，更新本文档时不要顺手格式化或重写无关代码。
+# 2026-06-30 导出图片重叠回归最终修复
+
+- 旧方案把重点放在中英边界断行补丁（`<wbr>` / `\u200B`），但回归说明它没有命中根因。真正的问题是 `html2canvas@1.4.1` 的文本测量会和浏览器 / Android WebView 的最终 fallback 字体排版漂移。
+- 日记导出 PNG 现已改成 `html-to-image` 的 browser-native `foreignObject` 渲染；导出前等待字体和布局稳定，导出时内嵌当前自定义字体，并显式固定 `text-size-adjust`、换行和最小行高规则。
+- 自动化新增 / 更新了 H7-H8 混排场景、typography 对比测试和 preservation 基线，命令集为：`npm run lint`、`npm run build`、`npx tsx src/utils/exportImage.test.ts`、`npm run test:exploration`、`npm run test:export-typography`、`npm run test:export-mojibake`、`npm run test:preservation`、`npm run test:preservation:verify`。
+- Android APK 实测不是只看浏览器预览：用当前代码构建 `android/app/build/outputs/apk/debug/app-debug.apk`，在 `Pixel_8` 模拟器里通过正式“分享 → 保存到本地”导出，图库里生成了 `小象日志_2026-05-20 (1).png`、`小象日志_2026-06-29 (2).png` 和 `font_scale=1.3` 下的 `小象日志_2026-06-29 (3).png`。人工验图确认长中文段落和中英同线混排都无重叠、无裁切、无错位。

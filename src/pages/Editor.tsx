@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { stripAllMarkdown } from '../lib/utils';
 import { Check, Share, Copy, MoreVertical, Image as ImageIcon, Undo, Redo, Highlighter, Bold, Quote, List, ListOrdered, X, ArrowLeft, Trash2, History, FileText, XCircle, ChevronRight, Plus, Star, Download, Palette, Minimize2, Maximize2 } from 'lucide-react';
-import { diaryService, DiaryEntry, DiaryTemplate, EditHistory, DailyEcho, isEmptyInsightDraft } from '../services/diaryService';
+import { diaryService } from '../services/diaryService';
+import type { DailyEcho, DiaryEntry, DiaryTemplate, EditHistory } from '../features/diary/model';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -20,10 +21,10 @@ import html2canvas from 'html2canvas';
 import { useTheme } from '../contexts/ThemeContext';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
 import { useAuth } from '../contexts/AuthContext';
-import { sanitizeModernColors, measureExportCard, pickExportScale, decodeErrorReason, waitForExportRenderReady, renderExportCanvas } from '../utils/exportImage';
+import { buildExportFontEmbedCss, sanitizeModernColors, measureExportCard, pickExportScale, decodeErrorReason, renderExportPng } from '../utils/exportImage';
 import { canUseAndroidImageSaver, savePngDataUrlToAndroidGallery } from '../services/androidImageSaver';
 import { DiaryTheme, allThemes } from '../types/theme';
-import { api, getAccessToken, isAuthenticated } from '../services/apiClient';
+import { getAccessToken, isAuthenticated } from '../services/apiClient';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
@@ -32,7 +33,6 @@ import { AppToast } from '../components/AppToast';
 import { SafeImage } from '../components/SafeImage';
 import { settingsService } from '../services/settingsService';
 import { createClientId } from '../utils/id';
-import { ensureEchoHotMemoryUpdated, ensureInsightDraftUpdated, generateDiaryEcho } from '../services/aiService';
 import { DailyEchoExportCard, DailyEchoFloatingCard } from '../components/DailyEchoCard';
 import {
   type DailyEchoCompletionStats,
@@ -45,6 +45,22 @@ import {
 } from '../utils/dailyEchoCompletionStats';
 import { parseDailyEchoContent } from '../utils/dailyEchoQuote';
 import { createAdjustedDiaryDateKey, parseDiaryDateKey } from '../utils/diaryDate';
+import {
+  makeEntrySignature,
+  persistDiaryDraft,
+  type PersistCurrentEntryOptions,
+} from '../features/editor/diaryPersistence';
+import { useDiaryLifecycleAutosave } from '../features/editor/useDiaryLifecycleAutosave';
+import {
+  generateDailyEchoForEntry,
+  getDiaryPlainText,
+  refreshDailyEchoMemory,
+} from '../features/daily-echo/dailyEchoCoordinator';
+import { publishDiaryPost } from '../features/share/communityPublisher';
+import {
+  DAILY_ECHO_MUTED_DATE_KEY,
+  editorPreferences,
+} from '../features/editor/editorPreferences';
 
 const DiaryInlineImage = TiptapNode.create({
   name: 'diaryInlineImage',
@@ -358,6 +374,8 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
         fontFamily: 'inherit',
         display: 'flex',
         flexDirection: 'column',
+        WebkitTextSizeAdjust: 'none',
+        textSizeAdjust: 'none',
       }}
     >
       {/* 鍒嗙寮忕殑鍜岃皭鑳屾櫙灞傛瀯寤猴紝纭繚涓嶄細鍥犳媺浼镐骇鐢熷壊瑁傛劅 */}
@@ -476,9 +494,11 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
             style={{ 
                fontFamily: 'var(--diary-font-family)',
                color: 'inherit',
-               lineHeight: 'var(--diary-line-height)',
-               wordBreak: 'break-word',
-               overflowWrap: 'break-word',
+               lineHeight: 'max(var(--diary-line-height), 1.5)',
+               whiteSpace: 'pre-wrap',
+               wordBreak: 'normal',
+               overflowWrap: 'anywhere',
+               hyphens: 'none',
             }}
             dangerouslySetInnerHTML={{ __html: htmlContent }} 
           />
@@ -538,25 +558,6 @@ export const DiaryExportCard = ({ entry, theme, htmlContent, images }: { entry: 
 };
 
 const SYSTEM_TEMPLATE = "## 开心的事：\n\n## 充实的事：\n\n## 感谢的人：\n\n## 改进的事：\n\n## 今日思考：\n\n";
-
-type PersistReason = 'autosave' | 'manual' | 'back' | 'visibility' | 'pagehide' | 'freeze' | 'unmount' | 'abandon';
-
-type PersistCurrentEntryOptions = {
-  reason: PersistReason;
-  saveHistory?: boolean;
-  updateState?: boolean;
-  navigateToSaved?: boolean;
-  markClean?: boolean;
-};
-
-function makeEntrySignature(content: string, images: string[], backgroundId?: string, themeId?: string | null): string {
-  return JSON.stringify({
-    content,
-    images,
-    backgroundId: backgroundId || null,
-    themeId: themeId || null,
-  });
-}
 
 function getLocalDateKey(date = new Date()): string {
   return [
@@ -1475,7 +1476,7 @@ export default function Editor() {
     hasUnsavedChanges.current = true;
     
     // Save as last used theme for new diaries
-    localStorage.setItem('lastUsedDiaryThemeId', theme.id);
+    editorPreferences.setLastThemeId(theme.id);
 
     if (existingJournal) {
       await diaryService.updateEntry(existingJournal.id, { themeId: theme.id });
@@ -1490,7 +1491,7 @@ export default function Editor() {
   // Templates State
   const [templates, setTemplates] = useState<DiaryTemplate[]>([]);
   const [activeTab, setActiveTab] = useState<'system' | 'custom'>('system');
-  const [preferredTemplateId, setPreferredTemplateId] = useState<string | null>(localStorage.getItem('preferredTemplateId'));
+  const [preferredTemplateId, setPreferredTemplateId] = useState<string | null>(editorPreferences.getPreferredTemplateId());
 
   useEffect(() => {
     templatesRef.current = templates;
@@ -1514,7 +1515,7 @@ export default function Editor() {
           setTemplates(prev => prev.filter(t => t.id !== id));
           if (preferredTemplateId === id) {
             setPreferredTemplateId(null);
-            localStorage.removeItem('preferredTemplateId');
+            editorPreferences.clearPreferredTemplateId();
           }
         });
       }
@@ -1549,7 +1550,7 @@ export default function Editor() {
     () => settingsService.getSettings().dailyEchoFloatEnabled,
   );
   const [isEchoFloatMutedToday, setIsEchoFloatMutedToday] = useState(
-    () => localStorage.getItem('daily_echo_float_muted_date') === getLocalDateKey(),
+    () => editorPreferences.isDailyEchoMuted(getLocalDateKey()),
   );
   const [isEchoFloatScrollHidden, setIsEchoFloatScrollHidden] = useState(false);
   const echoFloatScrollTimerRef = useRef<number | null>(null);
@@ -1619,7 +1620,7 @@ export default function Editor() {
       if (event.key === 'app_settings') {
         setDailyEchoFloatEnabled(settingsService.getSettings().dailyEchoFloatEnabled);
       }
-      if (event.key === 'daily_echo_float_muted_date') {
+      if (event.key === DAILY_ECHO_MUTED_DATE_KEY) {
         setIsEchoFloatMutedToday(event.newValue === getLocalDateKey());
       }
     };
@@ -1911,48 +1912,31 @@ export default function Editor() {
         await new Promise(r => setTimeout(r, 50));
         attempts++;
       }
+      if (el.getAttribute('data-ready') !== 'true') {
+        throw new Error('Export card background is not ready');
+      }
 
-      // 绛夊緟鍥剧墖鍔犺浇瀹屾垚
-      const imgElements = Array.from(el.querySelectorAll('img'));
-      await Promise.all(imgElements.map(img => {
-        if (img.complete) return Promise.resolve();
-        return new Promise(resolve => {
-          img.onload = resolve;
-          img.onerror = resolve;
-        });
-      }));
-
-      // 棰濆绛夊緟涓€涓嬩互纭繚甯冨眬绋冲畾
-      await waitForExportRenderReady(el);
-
-      // bugfix: diary-export-long-text-fails (Requirement 2.1)
-      // 1) 涓讳慨锛氬厛鎶?oklch/oklab/lab/lch 褰掍竴鍖栨垚 rgb锛岄伩鍏?html2canvas 瑙ｆ瀽澶辫触锛?
-      // 2) 娆＄骇闃茬嚎锛氭寜鍗＄墖楂樺害鎸?scale锛堥粯璁?2锛岃繃楂樻椂闄嶇骇锛夛紝闃叉鐗╃悊 canvas 瓒呴檺锛?
-      // 3) 鏃犺 html2canvas 鎴愬姛澶辫触锛宖inally 閲岄兘瑕?restoreColors() 鍥炴粴 inline style銆?
       const { cardH } = measureExportCard(el);
       const scale = pickExportScale(cardH);
-      const restoreColors = sanitizeModernColors(el);
 
-      let canvas: HTMLCanvasElement;
-      try {
-        canvas = await renderExportCanvas(el, html2canvas, scale);
-      } finally {
-        restoreColors();
+      // html-to-image 会把 DOM 克隆进 SVG；通过 FontFace API 加载的用户字体不会自动
+      // 出现在克隆样式表中，因此只在导出期间嵌入当前选中的字体文件。
+      let fontEmbedCSS: string | undefined;
+      const fontSettings = settingsService.getFontSettings();
+      if (fontSettings.fontFamily !== 'noto-sans') {
+        try {
+          const customFonts = await diaryService.getCustomFonts();
+          const activeFont = customFonts.find(font => font.id === fontSettings.fontFamily);
+          if (activeFont) fontEmbedCSS = await buildExportFontEmbedCss(activeFont);
+        } catch (fontError) {
+          // 字体文件损坏或读取失败时仍允许浏览器使用稳定的中文 fallback 字体。
+          console.warn('Export custom font embedding failed; using fallback font:', fontError);
+        }
       }
 
-      // bugfix: diary-export-long-text-fails (Task 3.4锛孯equirement 2.3 棰勭暀)
-      // 娆＄骇闃茬嚎鍏滃簳锛氳嫢 html2canvas 杩斿洖鐨?canvas 鏄┖鐨?/ toDataURL 杩斿洖 "data:,"锛?
-      // 璇存槑鐗╃悊 canvas 灏哄 / 闈㈢Н瑙﹀強娴忚鍣ㄤ笂闄愶紙iOS Safari 4096px銆丄ndroid WebView 鏇翠綆锛夛紝
-      // 鎶涘嚭鍚?"canvas size" 鐨勯敊璇蛋 decodeErrorReason 鈫?'oversize' 鈫?瀵瑰簲鐨?toast銆?
-      const dataUrl = canvas.toDataURL('image/png');
-      if (canvas.width === 0 || canvas.height === 0 || dataUrl === 'data:,') {
-        throw new Error(
-          `canvas size exceeded safe limit (width=${canvas.width}, height=${canvas.height})`
-        );
-      }
-
-      root.unmount();
-      document.body.removeChild(wrapper);
+      // 浏览器原生排版与原生栅格化使用同一套 fallback 字体度量，避免 html2canvas
+      // 的 DOM Range 测量值与 Canvas fillText 实际字宽不一致。
+      const { dataUrl } = await renderExportPng(el, htmlToImage.toPng, scale, fontEmbedCSS);
 
       if (canUseAndroidImageSaver()) {
         try {
@@ -1983,11 +1967,9 @@ export default function Editor() {
       } else {
         showToast('导出图片失败，请重试');
       }
-      root.unmount();
-      if (document.body.contains(wrapper)) {
-        document.body.removeChild(wrapper);
-      }
     } finally {
+      root.unmount();
+      if (document.body.contains(wrapper)) document.body.removeChild(wrapper);
       setExporting(false);
     }
   };
@@ -2092,9 +2074,9 @@ export default function Editor() {
 
     try {
       const uploadedImages = await uploadCommunityImages(compressedImages);
-      const createdPost = await api.post('/community/posts', {
+      const createdPost = await publishDiaryPost({
         content: communityContent,
-        images: uploadedImages
+        images: uploadedImages,
       });
       navigate('/community', { state: { createdPost, refreshPosts: true } });
     } catch (e) {
@@ -2430,7 +2412,7 @@ export default function Editor() {
         lastManualSaveSignatureRef.current = '';
         lastManualSaveWritingSecondsRef.current = 0;
         draftDiaryDateRef.current = draftDiaryDateRef.current || getDraftDiaryDate();
-        const lastThemeId = localStorage.getItem('lastUsedDiaryThemeId');
+        const lastThemeId = editorPreferences.getLastThemeId();
         const defaultTheme = allThemes.find(t => t.id === lastThemeId) || allThemes.find(t => t.id === 'warm-white');
         if (defaultTheme) {
           selectedThemeRef.current = defaultTheme;
@@ -2438,7 +2420,7 @@ export default function Editor() {
         }
 
         let initialContent = '';
-        const prefId = localStorage.getItem('preferredTemplateId');
+        const prefId = editorPreferences.getPreferredTemplateId();
         if (prefId) {
           if (prefId === 'system') {
             initialContent = SYSTEM_TEMPLATE.replace(/\n\n/g, '\n\n<p></p>\n\n');
@@ -2663,7 +2645,7 @@ export default function Editor() {
     if (plainText === systemText) return true;
 
     // Check if it's just the preferred custom template
-    const prefId = localStorage.getItem('preferredTemplateId');
+    const prefId = editorPreferences.getPreferredTemplateId();
     if (prefId && prefId !== 'system') {
       const prefTpl = templates.find(t => t.id === prefId);
       if (prefTpl) {
@@ -2689,7 +2671,7 @@ export default function Editor() {
     const systemText = SYSTEM_TEMPLATE.replace(/<[^>]*>?/gm, '').trim();
     if (plainText === systemText) return true;
 
-    const prefId = localStorage.getItem('preferredTemplateId');
+    const prefId = editorPreferences.getPreferredTemplateId();
     if (prefId && prefId !== 'system') {
       const prefTpl = templatesRef.current.find(t => t.id === prefId);
       const prefText = prefTpl?.content.replace(/<[^>]*>?/gm, '').trim();
@@ -2736,36 +2718,24 @@ export default function Editor() {
     const shouldSaveHistory = saveHistory ?? (
       reason !== 'autosave' || Boolean(existingEntry && !autosaveHistoryBaselineSavedRef.current)
     );
-    let savedEntry: DiaryEntry | undefined;
-
-    if (existingEntry) {
-      savedEntry = await diaryService.updateEntry(existingEntry.id, {
-        content: currentContent,
-        images: currentImages,
-        backgroundId: currentBackgroundId,
-        themeId: currentThemeId,
-        activeWritingSeconds,
-      }, {
+    const entryId = existingEntry?.id || activeEntryIdRef.current || createClientId();
+    activeEntryIdRef.current = entryId;
+    const savedEntry = await persistDiaryDraft({
+      writer: diaryService,
+      existingEntry,
+      entryId,
+      content: currentContent,
+      images: currentImages,
+      diaryDate: getDraftDiaryDate(),
+      createdAt: draftCreatedAtRef.current,
+      backgroundId: currentBackgroundId,
+      themeId: currentThemeId,
+      activeWritingSeconds,
+      saveOptions: {
         saveHistory: shouldSaveHistory,
         immediateSync: reason !== 'autosave',
-      });
-    } else {
-      const entryId = activeEntryIdRef.current || createClientId();
-      activeEntryIdRef.current = entryId;
-      savedEntry = await diaryService.createEntry({
-        id: entryId,
-        content: currentContent,
-        images: currentImages,
-        diaryDate: getDraftDiaryDate(),
-        createdAt: draftCreatedAtRef.current,
-        backgroundId: currentBackgroundId,
-        themeId: currentThemeId,
-        activeWritingSeconds,
-      }, {
-        saveHistory: shouldSaveHistory,
-        immediateSync: reason !== 'autosave',
-      });
-    }
+      },
+    });
 
     if (!savedEntry) return undefined;
 
@@ -2811,15 +2781,6 @@ export default function Editor() {
     return savedEntry;
   }, [getDraftDiaryDate, isNewEntryWithoutMeaningfulContent, navigate, normalizeContentForStorage]);
 
-  const getEntryPlainText = (entry: DiaryEntry) => {
-    if (typeof document === 'undefined') {
-      return (entry.content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-    }
-    const node = document.createElement('div');
-    node.innerHTML = entry.content || '';
-    return (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
-  };
-
   const persistDailyEcho = async (nextEcho: DailyEcho): Promise<DiaryEntry | undefined> => {
     const entry = existingJournalRef.current;
     if (!entry) return undefined;
@@ -2843,40 +2804,20 @@ export default function Editor() {
     void persistDailyEcho({ ...dailyEcho, status: 'saved' });
   }, [dailyEcho, existingJournal]);
 
-  const getDailyEchoInsightContext = async (entry: DiaryEntry) => {
-    const [draft, hotMemory, activeEntries] = await Promise.all([
-      diaryService.getInsightDraft(),
-      diaryService.getEchoHotMemory(),
-      diaryService.getActiveEntries(),
-    ]);
-    return {
-      insightDraft: draft && !isEmptyInsightDraft(draft) ? draft : undefined,
-      hotMemory,
-      recentDiaries: activeEntries
-        .filter(item => item.id !== entry.id)
-        .slice(0, 8),
-    };
-  };
-
   const scheduleInsightDraftUpdate = (entry: DiaryEntry) => {
-    if (!isAuthenticated() || getEntryPlainText(entry).length < 6) return;
+    if (!isAuthenticated() || getDiaryPlainText(entry).length < 6) return;
     const signature = `${entry.id}:${entry.updatedAt}`;
     if (insightDraftBackgroundUpdateRef.current === signature) return;
     insightDraftBackgroundUpdateRef.current = signature;
 
     window.setTimeout(() => {
       void (async () => {
-        const insightDraftResult = await ensureInsightDraftUpdated(entry, {
-          forceRemotePull: true,
-          source: 'manual-save',
-        });
-        if (insightDraftResult.diagnostics.status === 'failed') {
-          console.warn('Insight draft background update failed:', insightDraftResult.diagnostics.error);
+        const result = await refreshDailyEchoMemory(entry);
+        if (result.insightDraftError) {
+          console.warn('Insight draft background update failed:', result.insightDraftError);
         }
-
-        const hotMemoryResult = await ensureEchoHotMemoryUpdated(entry);
-        if (hotMemoryResult.status === 'failed') {
-          console.warn('Echo hot memory background update failed:', hotMemoryResult.error);
+        if (result.hotMemoryError) {
+          console.warn('Echo hot memory background update failed:', result.hotMemoryError);
         }
       })().catch(error => {
         console.warn('Daily echo memory background update failed:', error);
@@ -2894,7 +2835,7 @@ export default function Editor() {
       setDailyEcho(currentEcho);
       return;
     }
-    if (getEntryPlainText(entry).length < 6) return;
+    if (getDiaryPlainText(entry).length < 6) return;
 
     if (!isAuthenticated()) {
       setDailyEcho({
@@ -2918,17 +2859,8 @@ export default function Editor() {
 
     try {
       const nextRegenerateCount = force ? (currentEcho?.regenerateCount || 0) + 1 : (currentEcho?.regenerateCount || 0);
-      const { insightDraft, recentDiaries, hotMemory } = await getDailyEchoInsightContext(entry);
-      const content = await generateDiaryEcho(entry, nextRegenerateCount, insightDraft, recentDiaries, hotMemory);
+      const nextEcho = await generateDailyEchoForEntry(entry, nextRegenerateCount);
       if (echoGenerationTokenRef.current !== token) return;
-      const nextEcho: DailyEcho = {
-        status: 'saved',
-        content,
-        styleId: 'gentle',
-        generatedAt: new Date().toISOString(),
-        sourceEntryUpdatedAt: entry.updatedAt,
-        regenerateCount: nextRegenerateCount,
-      };
       await persistDailyEcho(nextEcho);
     } catch (error) {
       console.warn('Failed to generate daily echo:', error);
@@ -2987,7 +2919,7 @@ export default function Editor() {
         source: 'daily-echo',
         entryId: entry.id,
         entryDate: entry.diaryDate,
-        diaryText: getEntryPlainText(entry).slice(0, 1800),
+        diaryText: getDiaryPlainText(entry).slice(0, 1800),
         echoText: dailyEcho.content,
       },
     });
@@ -3159,16 +3091,7 @@ export default function Editor() {
           return;
         }
         
-        const appSettingsStr = localStorage.getItem('app_settings');
-        let saveOnExit = true;
-        if (appSettingsStr) {
-          try {
-            const appSettings = JSON.parse(appSettingsStr);
-            if (appSettings.saveOnExit === false) {
-              saveOnExit = false;
-            }
-          } catch (e) {}
-        }
+        const saveOnExit = settingsService.getSettings().saveOnExit;
 
         if (saveOnExit) {
           await handleSave(true);
@@ -3184,47 +3107,16 @@ export default function Editor() {
     }
   };
 
-  useEffect(() => {
-    if (!isEditing || previewHashActive || !hasUnsavedChanges.current) return;
-
-    const timer = window.setTimeout(() => {
-      void persistCurrentEntry({
-        reason: 'autosave',
-        navigateToSaved: true,
-      }).catch(error => console.warn('Diary entry autosave failed:', error));
-    }, 1500);
-
-    return () => window.clearTimeout(timer);
-  }, [backgroundId, content, images, isEditing, persistCurrentEntry, previewHashActive, selectedTheme?.id]);
-
-  useEffect(() => {
-    const flush = (reason: PersistReason) => {
-      void persistCurrentEntry({
-        reason,
-        saveHistory: true,
-        updateState: false,
-        navigateToSaved: false,
-        markClean: false,
-      }).catch(error => console.warn(`Diary lifecycle save failed (${reason}):`, error));
-    };
-
-    const handleVisibility = () => {
-      if (document.visibilityState === 'hidden') flush('visibility');
-    };
-    const handlePageHide = () => flush('pagehide');
-    const handleFreeze = () => flush('freeze');
-
-    document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('pagehide', handlePageHide);
-    document.addEventListener('freeze', handleFreeze);
-
-    return () => {
-      flush('unmount');
-      document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('pagehide', handlePageHide);
-      document.removeEventListener('freeze', handleFreeze);
-    };
-  }, [persistCurrentEntry]);
+  useDiaryLifecycleAutosave({
+    isEditing,
+    previewHashActive,
+    hasUnsavedChanges,
+    content,
+    images,
+    backgroundId,
+    themeId: selectedTheme?.id,
+    persistEntry: persistCurrentEntry,
+  });
 
   const displayDate = existingJournal
     ? parseDiaryDateKey(existingJournal.diaryDate)
@@ -4111,7 +4003,7 @@ export default function Editor() {
                   <div className="p-4 rounded-2xl border border-surface-container-high bg-surface-container-lowest hover:border-primary/30 transition-colors cursor-pointer relative"
                        onClick={() => {
                          setPreferredTemplateId('system');
-                         localStorage.setItem('preferredTemplateId', 'system');
+                         editorPreferences.setPreferredTemplateId('system');
                          
                          const currentHtml = editor?.getHTML() || '';
                          const systemHtml = SYSTEM_TEMPLATE.replace(/\n\n/g, '\n\n<p></p>\n\n');
@@ -4148,7 +4040,7 @@ export default function Editor() {
                       onClick={() => {
                         if (isLongPress.current) return;
                         setPreferredTemplateId(tpl.id);
-                        localStorage.setItem('preferredTemplateId', tpl.id);
+                        editorPreferences.setPreferredTemplateId(tpl.id);
                         
                         const currentHtml = editor?.getHTML() || '';
                         const newHtml = currentHtml === '<p></p>' || !currentHtml ? tpl.content : currentHtml + tpl.content;

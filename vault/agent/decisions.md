@@ -1,5 +1,12 @@
 # 决策记录
 
+## 2026-06-30
+
+- MVP 架构采用“兼容门面的模块化单体”：保留 `diaryService` 公共 API，内部通过领域模型、Repository、同步 DTO 和提交后协调器形成边界，不引入微服务、全局状态库或 DI 框架。
+- 日记保存的不可破坏顺序是：先提交 IndexedDB 与历史，再执行 Vault/云同步等可选副作用。同一篇日记的副作用必须串行，Vault 只允许合并路径元数据，任何副作用失败都不得回滚或覆盖较新的日记内容。
+- 服务端日记 CRUD 与批量同步必须共用 diary codec；月度回声通过可等待的 projector 接收日记变更，投影失败只记录报告，不得让日记写入失败，也不得留下请求结束后的悬空 Promise。
+- 日记云同步字段采用显式 allowlist；`blocks`、`prompts`、`backgroundId`、Vault 路径、InsightDraft/EchoHotMemory 等本地数据默认不得隐式进入云端。新增字段必须补前后端契约测试。
+
 ## 2026-06-07
 
 - `DiaryEntry.diaryDate` 的长期契约是无时区的日记归属日 `YYYY-MM-DD`，不是创建时间戳。新建、导入、本地日志同步、前端同步 payload 和服务端写入都必须保存日期字符串；展示、排序、统计不能直接 `new Date('YYYY-MM-DD')`，应走 `src/utils/diaryDate.ts`。实际创建/修改时间继续使用 `createdAt` / `updatedAt`。

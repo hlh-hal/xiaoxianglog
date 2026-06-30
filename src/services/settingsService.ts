@@ -50,7 +50,14 @@ export const settingsService = {
   getSettings(): AppSettings {
     const stored = localStorage.getItem('app_settings');
     if (stored) {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
+      try {
+        const parsed = JSON.parse(stored);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return { ...DEFAULT_SETTINGS, ...parsed };
+        }
+      } catch (error) {
+        console.warn('Failed to parse app settings, using defaults:', error);
+      }
     }
     return DEFAULT_SETTINGS;
   },

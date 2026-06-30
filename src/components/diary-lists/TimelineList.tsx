@@ -1,5 +1,5 @@
 import React from 'react';
-import { DiaryEntry } from '../../services/diaryService';
+import type { DiaryEntry } from '../../features/diary/model';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { Check, Pin } from 'lucide-react';

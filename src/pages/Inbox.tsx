@@ -5,8 +5,7 @@ import { sendBrowserNotification } from '../utils/notify';
 import { api } from '../services/apiClient';
 import { AppToast } from '../components/AppToast';
 import { UserAvatar } from '../components/UserAvatar';
-
-type FriendStatus = 'none' | 'pending' | 'accepted' | 'declined';
+import { friendRelations, type FriendStatus } from '../features/social/friendRelations';
 
 export interface Notification {
   id: string;
@@ -59,18 +58,6 @@ const formatTime = (iso: string) => {
   if (hour < 24) return `${hour}小时前`;
   if (day < 7) return `${day}天前`;
   return new Date(iso).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
-};
-
-const getFriendStatus = (userId: string, serverStatus?: FriendStatus): FriendStatus => {
-  if (serverStatus) return serverStatus;
-  const relations = JSON.parse(localStorage.getItem('xiang_friend_relations') || '{}');
-  return relations[userId] || 'none';
-};
-
-const setFriendStatus = (userId: string, status: string) => {
-  const relations = JSON.parse(localStorage.getItem('xiang_friend_relations') || '{}');
-  relations[userId] = status;
-  localStorage.setItem('xiang_friend_relations', JSON.stringify(relations));
 };
 
 export default function Inbox() {
@@ -137,7 +124,7 @@ export default function Inbox() {
     if (!item.sourceUser.id) return;
     try {
       await api.post(`/friends/${item.sourceUser.id}/accept`);
-      setFriendStatus(item.sourceUser.id, 'accepted');
+      friendRelations.set(item.sourceUser.id, 'accepted');
       showToast(`已接受 ${item.sourceUser.nickname} 的好友申请 🎉`);
       
       // Update local ui to hide buttons
@@ -151,7 +138,7 @@ export default function Inbox() {
     if (!item.sourceUser.id) return;
     try {
       await api.post(`/friends/${item.sourceUser.id}/decline`);
-      setFriendStatus(item.sourceUser.id, 'declined');
+      friendRelations.set(item.sourceUser.id, 'declined');
       showToast('已拒绝');
       updateNotification(item.id, { isRead: true, friendStatus: 'declined' });
     } catch (e) {
@@ -363,7 +350,7 @@ export default function Inbox() {
             {/* 右侧：好友申请的操作按钮 / 状态文字 */}
             {item.type === 'friend_request' && (
               <div style={{ flexShrink: 0 }}>
-                {!['accepted', 'declined'].includes(getFriendStatus(item.sourceUser.id, item.friendStatus)) ? (
+                {!['accepted', 'declined'].includes(friendRelations.get(item.sourceUser.id, item.friendStatus)) ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <button onClick={e => { e.stopPropagation(); acceptFriend(item); }}
                       style={{
@@ -386,7 +373,7 @@ export default function Inbox() {
                   </div>
                 ) : (
                   <span style={{ fontSize: 13, color: '#A1A1A6', display: 'flex', height: '100%', alignItems: 'center' }}>
-                    {getFriendStatus(item.sourceUser.id, item.friendStatus) === 'accepted' ? '已接受' : '已拒绝'}
+                    {friendRelations.get(item.sourceUser.id, item.friendStatus) === 'accepted' ? '已接受' : '已拒绝'}
                   </span>
                 )}
               </div>

@@ -41,6 +41,18 @@ const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const BASELINE_DIR = path.resolve(REPO_ROOT, 'tests', 'fixtures', 'export-baseline');
 
+function resolveBrowserExecutable(): string | undefined {
+  const candidates = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ];
+  return candidates.find((candidate): candidate is string => Boolean(candidate && fs.existsSync(candidate)));
+}
+
 async function waitForHarnessReady(page: Page, timeoutMs = 30000): Promise<void> {
   await page.waitForFunction(() => window.__harnessReady === true, { timeout: timeoutMs });
 }
@@ -96,11 +108,13 @@ async function main(): Promise<void> {
   const results: PreservationResult[] = [];
   const consoleErrors: Array<{ text: string }> = [];
   const summaries: BaselineSummary[] = [];
+  const pendingWrites: Array<{ pngPath: string; shaPath: string; pngBuffer: Buffer; sha256: string }> = [];
 
   try {
     browser = await puppeteer.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      executablePath: resolveBrowserExecutable(),
     });
     const page = await browser.newPage();
 
@@ -145,16 +159,16 @@ async function main(): Promise<void> {
         } else {
           const pngPath = path.join(BASELINE_DIR, `${r.caseId}.png`);
           const shaPath = path.join(BASELINE_DIR, `${r.caseId}.sha256`);
-          fs.writeFileSync(pngPath, pngBuffer);
-          fs.writeFileSync(shaPath, r.sha256 + '\n', 'utf8');
+          // 所有浏览器 case 完成后再落盘；否则 Vite 会因 fixture 变化刷新 harness，
+          // 破坏下一次 page.evaluate 的 execution context。
+          pendingWrites.push({ pngPath, shaPath, pngBuffer, sha256: r.sha256 });
           summary.sizeBytes = pngBuffer.byteLength;
           summary.sha256 = r.sha256;
           summary.sha256Short = r.sha256.slice(0, 12);
           console.log(
             `[preservation] ${r.caseId} ✅ ${r.width}x${r.height}, ${pngBuffer.byteLength} bytes, sha256=${r.sha256.slice(0, 12)}..., elapsed=${Math.round(r.elapsedMs)}ms`,
           );
-          console.log(`  → wrote ${path.relative(REPO_ROOT, pngPath)}`);
-          console.log(`  → wrote ${path.relative(REPO_ROOT, shaPath)}`);
+          console.log(`  → queued ${path.relative(REPO_ROOT, pngPath)}`);
         }
       } else if (r.assertion) {
         console.error(`[preservation] ${r.caseId} ❌ 前置断言失败（命中 oklch）: ${r.assertion}`);
@@ -163,6 +177,11 @@ async function main(): Promise<void> {
       }
 
       summaries.push(summary);
+    }
+
+    for (const pending of pendingWrites) {
+      fs.writeFileSync(pending.pngPath, pending.pngBuffer);
+      fs.writeFileSync(pending.shaPath, pending.sha256 + '\n', 'utf8');
     }
   } finally {
     if (browser) await browser.close();

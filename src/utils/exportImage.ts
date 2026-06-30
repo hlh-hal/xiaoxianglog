@@ -571,10 +571,33 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForFontsReady(timeoutMs: number): Promise<void> {
+async function waitForFontsReady(root: HTMLElement, timeoutMs: number): Promise<void> {
   const fontSet = document.fonts;
   if (!fontSet?.ready) return;
-  await Promise.race([fontSet.ready.then(() => undefined), delay(timeoutMs)]);
+
+  const fontRequests = new Map<string, string>();
+  const elements = [root, ...Array.from(root.querySelectorAll<HTMLElement>('*'))];
+  for (const element of elements) {
+    const text = (element.textContent || '').trim();
+    if (!text) continue;
+    try {
+      const style = getComputedStyle(element);
+      const font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      if (!fontRequests.has(font)) {
+        fontRequests.set(font, Array.from(text).slice(0, 48).join(''));
+      }
+    } catch {
+      // 单个节点样式读取失败不应阻止整张图片导出。
+    }
+  }
+
+  const explicitLoads = Array.from(fontRequests, ([font, sample]) =>
+    fontSet.load(font, sample).then(() => undefined).catch(() => undefined)
+  );
+  await Promise.race([
+    Promise.all([fontSet.ready.then(() => undefined), ...explicitLoads]).then(() => undefined),
+    delay(timeoutMs),
+  ]);
 }
 
 async function waitForImagesReady(root: HTMLElement, timeoutMs: number): Promise<void> {
@@ -595,8 +618,52 @@ async function waitForImagesReady(root: HTMLElement, timeoutMs: number): Promise
   ]);
 }
 
+function hashSnapshotPart(hash: number, value: string | number): number {
+  const text = String(value);
+  let next = hash;
+  for (let i = 0; i < text.length; i++) {
+    next ^= text.charCodeAt(i);
+    next = Math.imul(next, 16777619);
+  }
+  return next >>> 0;
+}
+
+function getTextGeometryFingerprint(root: HTMLElement): string {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let hash = 2166136261;
+  let textNodes = 0;
+  let lineBoxes = 0;
+  let current = walker.nextNode();
+
+  while (current) {
+    const textNode = current as Text;
+    if (textNode.data.trim()) {
+      textNodes++;
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(textNode);
+        const rects = Array.from(range.getClientRects());
+        lineBoxes += rects.length;
+        for (const rect of rects) {
+          hash = hashSnapshotPart(hash, Math.round(rect.left * 100));
+          hash = hashSnapshotPart(hash, Math.round(rect.top * 100));
+          hash = hashSnapshotPart(hash, Math.round(rect.width * 100));
+          hash = hashSnapshotPart(hash, Math.round(rect.height * 100));
+        }
+        range.detach();
+      } catch {
+        hash = hashSnapshotPart(hash, textNode.data.length);
+      }
+    }
+    current = walker.nextNode();
+  }
+
+  return `${textNodes}:${lineBoxes}:${hash}`;
+}
+
 function getLayoutSnapshot(el: HTMLElement): string {
   const rect = el.getBoundingClientRect();
+  const content = el.querySelector<HTMLElement>('[data-export-content="true"]') || el;
   return [
     Math.round(rect.width * 100) / 100,
     Math.round(rect.height * 100) / 100,
@@ -604,31 +671,30 @@ function getLayoutSnapshot(el: HTMLElement): string {
     el.scrollHeight,
     el.offsetWidth,
     el.offsetHeight,
+    getTextGeometryFingerprint(content),
   ].join(':');
 }
 
 /**
- * Wait until the export card is safe for html2canvas.
+ * 等待导出节点中的字体、图片和实际文字行盒全部稳定。
  *
- * Mixed Chinese/English text can shift after React paint while browser fonts and
- * line boxes settle. Capturing during that short window may make glyphs overlap,
- * so the export path waits for fonts/images and then requires a stable layout
- * across consecutive animation frames.
+ * 只比较整卡宽高无法发现“字体 fallback 已改变、但总高度碰巧没变”的情况，因此快照
+ * 还包含每个文本节点的 Range 行盒。中英文 fallback 或换行位置变化都会重置稳定计数。
  */
 export async function waitForExportRenderReady(el: HTMLElement): Promise<void> {
-  await waitForFontsReady(1500);
+  await waitForFontsReady(el, 2500);
   await waitForImagesReady(el, 3000);
 
   let stableFrames = 0;
   let previous = '';
-  const maxFrames = 24;
+  const maxFrames = 30;
 
   for (let i = 0; i < maxFrames; i++) {
     await nextAnimationFrame();
     const current = getLayoutSnapshot(el);
     if (current === previous) {
       stableFrames++;
-      if (stableFrames >= 2) return;
+      if (stableFrames >= 3) return;
     } else {
       stableFrames = 0;
       previous = current;
@@ -636,11 +702,11 @@ export async function waitForExportRenderReady(el: HTMLElement): Promise<void> {
   }
 }
 
-/** html2canvas 单次产出 canvas 的物理单边安全阈值（px）。*/
+/** 单次导出 PNG 的物理单边安全阈值（px）。*/
 const SAFE_MAX_SIDE = 12000;
 
 /**
- * 根据卡片 CSS 高度选 `html2canvas` 的 scale。默认 2；超阈值时按 1.5 → 1 降级。
+ * 根据卡片 CSS 高度选择像素倍率。默认 2；超阈值时按 1.5 → 1 降级。
  * 对 0 / 负值 / NaN 返回 2（不触发降级，让正常路径跑）。
  */
 export function pickExportScale(cardH: number): 1 | 1.5 | 2 {
@@ -650,119 +716,168 @@ export function pickExportScale(cardH: number): 1 | 1.5 | 2 {
   return 1;
 }
 
-type Html2CanvasOptions = {
-  useCORS: boolean;
-  allowTaint: boolean;
-  scale: number;
-  backgroundColor: string | null;
-  logging: boolean;
-  width: number;
-  windowWidth: number;
-};
-
-export type Html2CanvasRenderer = (
-  element: HTMLElement,
-  options: Html2CanvasOptions,
-) => Promise<HTMLCanvasElement>;
-
-export async function renderExportCanvas(
-  el: HTMLElement,
-  html2canvas: Html2CanvasRenderer,
-  scale: 1 | 1.5 | 2,
-): Promise<HTMLCanvasElement> {
-  const baseOptions: Html2CanvasOptions = {
-    useCORS: true,
-    allowTaint: false,
-    scale,
-    backgroundColor: null,
-    logging: false,
-    width: 375,
-    windowWidth: 375,
-  };
-
-  const restoreTextBreaks = insertExportTextBreaks(el);
-  try {
-    return await html2canvas(el, baseOptions);
-  } finally {
-    restoreTextBreaks();
-  }
+export interface ExportFontSource {
+  fontFamily: string;
+  fileName: string;
+  fileData: ArrayBuffer;
 }
 
-function insertExportTextBreaks(root: HTMLElement): () => void {
+function getFontMimeAndFormat(fileName: string): { mime: string; format: string } {
+  const extension = fileName.split('.').pop()?.toLowerCase();
+  if (extension === 'woff2') return { mime: 'font/woff2', format: 'woff2' };
+  if (extension === 'woff') return { mime: 'font/woff', format: 'woff' };
+  if (extension === 'otf') return { mime: 'font/otf', format: 'opentype' };
+  return { mime: 'font/ttf', format: 'truetype' };
+}
+
+function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('读取字体文件失败'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** 为通过 FontFace API 加载的用户字体生成一次性嵌入 CSS，避免 SVG 克隆后丢失字体。 */
+export async function buildExportFontEmbedCss(font: ExportFontSource): Promise<string> {
+  const { mime, format } = getFontMimeAndFormat(font.fileName);
+  const dataUrl = await readBlobAsDataUrl(new Blob([font.fileData], { type: mime }));
+  if (!dataUrl.startsWith('data:')) throw new Error('字体嵌入数据为空');
+  return `@font-face{font-family:${JSON.stringify(font.fontFamily)};src:url(${JSON.stringify(dataUrl)}) format(${JSON.stringify(format)});font-style:normal;font-weight:400;font-display:block;}`;
+}
+
+type HtmlToImageOptions = {
+  width?: number;
+  height?: number;
+  pixelRatio?: number;
+  cacheBust?: boolean;
+  skipAutoScale?: boolean;
+  fontEmbedCSS?: string;
+};
+
+export type HtmlToImagePngRenderer = (
+  element: HTMLElement,
+  options?: HtmlToImageOptions,
+) => Promise<string>;
+
+export interface ExportPngResult {
+  dataUrl: string;
+  width: number;
+  height: number;
+}
+
+type StyleMutation = {
+  node: HTMLElement;
+  property: string;
+  value: string;
+  priority: string;
+};
+
+function setTemporaryStyle(mutations: StyleMutation[], node: HTMLElement, property: string, value: string): void {
+  mutations.push({
+    node,
+    property,
+    value: node.style.getPropertyValue(property),
+    priority: node.style.getPropertyPriority(property),
+  });
+  node.style.setProperty(property, value);
+}
+
+function applyExportTypographySafety(root: HTMLElement): () => void {
+  const mutations: StyleMutation[] = [];
   const content = root.querySelector<HTMLElement>('[data-export-content="true"]');
-  if (!content) return () => undefined;
 
-  const restoreCallbacks: Array<() => void> = [];
-  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
-  const textNodes: Text[] = [];
-  let current = walker.nextNode();
-  while (current) {
-    textNodes.push(current as Text);
-    current = walker.nextNode();
-  }
+  setTemporaryStyle(mutations, root, '-webkit-text-size-adjust', 'none');
+  setTemporaryStyle(mutations, root, 'text-size-adjust', 'none');
 
-  for (const textNode of textNodes) {
-    const parent = textNode.parentElement;
-    if (!parent || parent.closest('code, pre')) continue;
+  if (content) {
+    setTemporaryStyle(mutations, content, 'white-space', 'pre-wrap');
+    setTemporaryStyle(mutations, content, 'word-break', 'normal');
+    setTemporaryStyle(mutations, content, 'overflow-wrap', 'anywhere');
+    setTemporaryStyle(mutations, content, 'hyphens', 'none');
 
-    const replacement = createTextBreakFragment(textNode.data);
-    if (!replacement) continue;
-
-    const nodes = Array.from(replacement.childNodes);
-    parent.replaceChild(replacement, textNode);
-    restoreCallbacks.push(() => {
-      const first = nodes[0];
-      const activeParent = first?.parentNode;
-      if (!activeParent) return;
-      activeParent.insertBefore(textNode, first);
-      nodes.forEach((node) => {
-        if (node.parentNode === activeParent) activeParent.removeChild(node);
-      });
-    });
+    const style = getComputedStyle(content);
+    const fontSize = Number.parseFloat(style.fontSize);
+    const lineHeight = Number.parseFloat(style.lineHeight);
+    if (Number.isFinite(fontSize) && fontSize > 0 && (!Number.isFinite(lineHeight) || lineHeight < fontSize * 1.5)) {
+      setTemporaryStyle(mutations, content, 'line-height', `${Math.ceil(fontSize * 1.5 * 100) / 100}px`);
+    }
   }
 
   return () => {
-    for (let i = restoreCallbacks.length - 1; i >= 0; i--) {
-      restoreCallbacks[i]();
+    for (let i = mutations.length - 1; i >= 0; i--) {
+      const mutation = mutations[i];
+      if (mutation.value) {
+        mutation.node.style.setProperty(mutation.property, mutation.value, mutation.priority);
+      } else {
+        mutation.node.style.removeProperty(mutation.property);
+      }
     }
   };
 }
 
-function createTextBreakFragment(text: string): DocumentFragment | null {
-  const chars = Array.from(text);
-  let hasBreak = false;
-  const fragment = document.createDocumentFragment();
-  let buffer = '';
+function decodePngDimensions(dataUrl: string, timeoutMs = 5000): Promise<{ width: number; height: number }> {
+  return Promise.race([
+    new Promise<{ width: number; height: number }>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+      image.onerror = () => reject(new Error('导出 PNG 解码失败'));
+      image.src = dataUrl;
+    }),
+    delay(timeoutMs).then(() => {
+      throw new Error('导出 PNG 解码超时');
+    }),
+  ]);
+}
 
-  for (let i = 0; i < chars.length; i++) {
-    const char = chars[i];
-    const previous = i > 0 ? chars[i - 1] : '';
-    if (previous && shouldInsertExportBreak(previous, char)) {
-      if (buffer) {
-        fragment.appendChild(document.createTextNode(buffer));
-        buffer = '';
-      }
-      fragment.appendChild(document.createTextNode('\u200B'));
-      hasBreak = true;
+/**
+ * 使用浏览器原生 SVG foreignObject 排版生成 PNG。
+ *
+ * 这条路径不会像 html2canvas 那样先用 DOM Range 测量、再用 Canvas fillText
+ * 重新绘制文字，因此中英文 fallback 字体不会产生两套不一致的字宽。
+ */
+export async function renderExportPng(
+  el: HTMLElement,
+  toPng: HtmlToImagePngRenderer,
+  scale: 1 | 1.5 | 2,
+  fontEmbedCSS?: string,
+): Promise<ExportPngResult> {
+  const restoreTypography = applyExportTypographySafety(el);
+  try {
+    await waitForExportRenderReady(el);
+    const cardHeight = Math.max(1, Math.ceil(el.scrollHeight || el.offsetHeight || el.getBoundingClientRect().height));
+    const dataUrl = await toPng(el, {
+      width: 375,
+      height: cardHeight,
+      pixelRatio: scale,
+      cacheBust: false,
+      skipAutoScale: true,
+      ...(fontEmbedCSS ? { fontEmbedCSS } : {}),
+    });
+
+    if (!dataUrl.startsWith('data:image/png;base64,') || dataUrl === 'data:,') {
+      throw new Error('导出 PNG 数据为空');
     }
-    buffer += char;
+
+    const dimensions = await decodePngDimensions(dataUrl);
+    const expectedWidth = 375 * scale;
+    const expectedHeight = cardHeight * scale;
+    if (
+      dimensions.width <= 0 ||
+      dimensions.height <= 0 ||
+      Math.abs(dimensions.width - expectedWidth) > 1 ||
+      Math.abs(dimensions.height - expectedHeight) > 1
+    ) {
+      throw new Error(
+        `canvas size mismatch (actual=${dimensions.width}x${dimensions.height}, expected=${expectedWidth}x${expectedHeight})`,
+      );
+    }
+
+    return { dataUrl, ...dimensions };
+  } finally {
+    restoreTypography();
   }
-
-  if (!hasBreak) return null;
-  if (buffer) fragment.appendChild(document.createTextNode(buffer));
-  return fragment;
-}
-
-function shouldInsertExportBreak(left: string, right: string): boolean {
-  return (isCjkChar(left) && isAsciiWordChar(right)) || (isAsciiWordChar(left) && isCjkChar(right));
-}
-
-function isAsciiWordChar(char: string): boolean {
-  return /^[A-Za-z0-9]$/.test(char);
-}
-
-function isCjkChar(char: string): boolean {
-  return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(char);
 }
 
 export type ExportErrorReason = 'unsupported_color' | 'oversize' | 'io' | 'unknown';

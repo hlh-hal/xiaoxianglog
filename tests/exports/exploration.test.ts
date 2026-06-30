@@ -1,7 +1,8 @@
 import puppeteer, { type Browser, type Page } from 'puppeteer';
+import { existsSync } from 'node:fs';
 
 const HARNESS_URL = 'http://localhost:3000/tests/exports/harness.html';
-const CASES = ['H1', 'H2', 'H3', 'H4', 'H5', 'H6'] as const;
+const CASES = ['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7', 'H8'] as const;
 type CaseId = (typeof CASES)[number];
 
 interface HarnessResult {
@@ -28,9 +29,23 @@ const EXPECTATIONS: CaseExpectation[] = [
   { caseId: 'H4', expect: 'pass', description: 'plain paragraph' },
   { caseId: 'H5', expect: 'pass', description: 'mixed Chinese/English export text with ai skill phrase' },
   { caseId: 'H6', expect: 'pass', description: 'Edge mixed Chinese/Latin overlap regression text' },
+  { caseId: 'H7', expect: 'pass', description: 'reported UU/CJK overlap plus numbers and explicit line breaks' },
+  { caseId: 'H8', expect: 'pass', description: 'long mixed-language paragraphs and unbroken tokens' },
 ];
 
 const OKLCH_PATTERN = /Attempting to parse an unsupported color function/i;
+
+function resolveBrowserExecutable(): string | undefined {
+  const candidates = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ];
+  return candidates.find((candidate): candidate is string => Boolean(candidate && existsSync(candidate)));
+}
 
 async function waitForHarnessReady(page: Page, timeoutMs = 30000): Promise<void> {
   await page.waitForFunction(() => window.__harnessReady === true, { timeout: timeoutMs });
@@ -69,6 +84,7 @@ async function main(): Promise<void> {
     browser = await puppeteer.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      executablePath: resolveBrowserExecutable(),
     });
     const page = await browser.newPage();
 

@@ -61,6 +61,18 @@ const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const BASELINE_DIR = path.resolve(REPO_ROOT, 'tests', 'fixtures', 'export-baseline');
 
+function resolveBrowserExecutable(): string | undefined {
+  const candidates = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ];
+  return candidates.find((candidate): candidate is string => Boolean(candidate && fs.existsSync(candidate)));
+}
+
 async function waitForHarnessReady(page: Page, timeoutMs = 30000): Promise<void> {
   await page.waitForFunction(() => window.__harnessReady === true, { timeout: timeoutMs });
 }
@@ -196,12 +208,12 @@ function runStaticChecks(): StaticCheck[] {
       pattern: /link\.download\s*=\s*`小象日志_\$\{format\(displayDate,\s*'yyyy-MM-dd'\)\}\.png`/,
     },
     {
-      key: 'filename(Capacitor Filesystem) 保持 小象日志_${format(displayDate, \'yyyy-MM-dd\')}.png',
+      key: 'filename(Android MediaStore) 保持 小象日志_${format(displayDate, \'yyyy-MM-dd\')}.png',
       pattern: /const fileName\s*=\s*`小象日志_\$\{format\(displayDate,\s*'yyyy-MM-dd'\)\}\.png`/,
     },
     {
-      key: 'directory(Capacitor) 保持 Directory.Documents',
-      pattern: /directory:\s*Directory\.Documents/,
+      key: 'Android 保存方式保持 savePngDataUrlToAndroidGallery',
+      pattern: /savePngDataUrlToAndroidGallery\(dataUrl,\s*fileName\)/,
     },
     {
       key: 'download way(Web) 保持 <a>.click() 触发下载',
@@ -288,6 +300,7 @@ async function main(): Promise<void> {
     browser = await puppeteer.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      executablePath: resolveBrowserExecutable(),
     });
     const page = await browser.newPage();
 

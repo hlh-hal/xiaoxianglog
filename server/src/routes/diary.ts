@@ -15,85 +15,21 @@ import prisma from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { paramString, positiveInt, queryString, stringArray } from '../utils/request.js';
 import { deleteStoredUrls } from '../lib/objectStorage.js';
-import { repairLegacyImageUrls } from '../lib/imageRepair.js';
 import { areStringArraysEqual, parseStoredStringArray, saveEditHistorySnapshot } from '../lib/editHistory.js';
 import {
-  handleEntryChangedForMonthlyEcho,
-  handleEntryDeletedForMonthlyEcho,
-} from '../lib/monthlyEchoService.js';
+  dailyEchoImageUrls,
+  formatDiaryEntry,
+  normalizeActiveWritingSeconds,
+  normalizeDailyEcho,
+  normalizeDiaryDate,
+  parseJsonArray,
+} from '../modules/diary/diaryEntryCodec.js';
+import { projectDiaryChange } from '../modules/diary/diaryChangeProjector.js';
 
 const router = Router();
 
 // 所有日记接口都需要认证
 router.use(requireAuth);
-
-function parseJsonArray(value?: string | null): string[] {
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-function parseJsonObject(value?: string | null): Record<string, unknown> | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function normalizeDailyEcho(value: unknown): string | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const raw = JSON.stringify(value);
-  return raw.length <= 200000 ? raw : null;
-}
-
-function normalizeActiveWritingSeconds(value: unknown, fallback = 0): number {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return fallback;
-  return Math.max(0, Math.floor(numeric));
-}
-
-function toLocalDateKey(date = new Date()): string {
-  return [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, '0'),
-    String(date.getDate()).padStart(2, '0'),
-  ].join('-');
-}
-
-function normalizeDiaryDate(value: unknown): string {
-  const raw = typeof value === 'string' ? value.trim() : '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw.slice(0, 10);
-
-  const parsed = raw ? new Date(raw) : new Date();
-  if (!Number.isNaN(parsed.getTime())) {
-    return toLocalDateKey(parsed);
-  }
-
-  return toLocalDateKey();
-}
-
-function dailyEchoImageUrls(value?: string | null): string[] {
-  const parsed = parseJsonObject(value);
-  const imageUrl = (parsed?.card as any)?.imageUrl;
-  return typeof imageUrl === 'string' && imageUrl.trim() ? [imageUrl] : [];
-}
-
-async function formatDiaryEntry(entry: any) {
-  return {
-    ...entry,
-    tags: entry.tags ? JSON.parse(entry.tags) : [],
-    images: await repairLegacyImageUrls(parseJsonArray(entry.images)),
-    dailyEcho: parseJsonObject(entry.dailyEcho),
-  };
-}
 
 // 获取日记列表
 router.get('/entries', async (req: Request, res: Response) => {
@@ -184,8 +120,7 @@ router.post('/entries', async (req: Request, res: Response) => {
       images: parseJsonArray(entry.images),
     });
 
-    handleEntryChangedForMonthlyEcho({ userId, entryId: entry.id })
-      .catch(error => console.warn('[monthly-echo] enqueue after create failed:', error));
+    await projectDiaryChange({ type: 'changed', userId, entryId: entry.id });
 
     res.status(201).json(await formatDiaryEntry(entry));
   } catch (err: any) {
@@ -258,11 +193,16 @@ router.put('/entries/:id', async (req: Request, res: Response) => {
     }
 
     const updated = await prisma.diaryEntry.findFirst({ where: { id: entryId, userId } });
-    handleEntryChangedForMonthlyEcho({
+    if (!updated) {
+      res.status(404).json({ error: '日记不存在' });
+      return;
+    }
+    await projectDiaryChange({
+      type: 'changed',
       userId,
       entryId,
       previousDiaryDate: existingForHistory.diaryDate,
-    }).catch(error => console.warn('[monthly-echo] enqueue after update failed:', error));
+    });
     res.json(await formatDiaryEntry(updated));
   } catch (err: any) {
     console.error('更新日记失败:', err);
@@ -291,8 +231,12 @@ router.delete('/entries/:id', async (req: Request, res: Response) => {
       return;
     }
     if (entry?.id) {
-      handleEntryDeletedForMonthlyEcho(req.user!.userId, entry.id, entry.diaryDate)
-        .catch(error => console.warn('[monthly-echo] enqueue after trash failed:', error));
+      await projectDiaryChange({
+        type: 'deleted',
+        userId: req.user!.userId,
+        entryId: entry.id,
+        diaryDate: entry.diaryDate,
+      });
     }
     res.json({ message: '已移入回收站' });
   } catch (err: any) {
@@ -316,8 +260,11 @@ router.post('/entries/:id/restore', async (req: Request, res: Response) => {
       res.status(404).json({ error: '日记不存在或不在回收站' });
       return;
     }
-    handleEntryChangedForMonthlyEcho({ userId: req.user!.userId, entryId: paramString(req, 'id') })
-      .catch(error => console.warn('[monthly-echo] enqueue after restore failed:', error));
+    await projectDiaryChange({
+      type: 'changed',
+      userId: req.user!.userId,
+      entryId: paramString(req, 'id'),
+    });
     res.json({ message: '已恢复' });
   } catch (err: any) {
     console.error('恢复日记失败:', err);
@@ -344,8 +291,12 @@ router.delete('/entries/:id/permanent', async (req: Request, res: Response) => {
       ...dailyEchoImageUrls(entry?.dailyEcho),
     ]);
     if (entry?.id) {
-      handleEntryDeletedForMonthlyEcho(req.user!.userId, entry.id, entry.diaryDate)
-        .catch(error => console.warn('[monthly-echo] enqueue after permanent delete failed:', error));
+      await projectDiaryChange({
+        type: 'deleted',
+        userId: req.user!.userId,
+        entryId: entry.id,
+        diaryDate: entry.diaryDate,
+      });
     }
     res.json({ message: '已永久删除' });
   } catch (err: any) {
@@ -368,10 +319,12 @@ router.post('/trash/clear', async (req: Request, res: Response) => {
       ...(entry.images ? JSON.parse(entry.images) : []),
       ...dailyEchoImageUrls(entry.dailyEcho),
     ]));
-    trashedEntries.forEach(entry => {
-      handleEntryDeletedForMonthlyEcho(req.user!.userId, entry.id, entry.diaryDate)
-        .catch(error => console.warn('[monthly-echo] enqueue after trash clear failed:', error));
-    });
+    await Promise.all(trashedEntries.map(entry => projectDiaryChange({
+      type: 'deleted',
+      userId: req.user!.userId,
+      entryId: entry.id,
+      diaryDate: entry.diaryDate,
+    })));
     res.json({ message: `已清空 ${result.count} 条` });
   } catch (err: any) {
     console.error('清空回收站失败:', err);
