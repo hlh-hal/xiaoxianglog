@@ -232,3 +232,34 @@
 - 更新公告三项：导出日记图片中英文重叠修复、编辑器移动端光标/选区白块优化、写完日记后的真实写作用时统计修正。
 - 线上 pp-update.json 已返回 1.0.16 / 18，公网 APK 与本地正式签名包 SHA256 一致：F3F764E1E8A9901FDA20E470E6D18FC5CCB7B7BAC1AFBB8F6DB11F80466AAAFE。
 - 本次未同步 GitHub Pages / GitHub Release；验证详情见 ault/notes/daily/2026-06-22-android-v116-release.md。
+
+
+## 2026-06-23 Android v1.0.17 发布
+
+- 已发布自有服务器主链路 Android 正式包 1.0.17 / versionCode 19，主下载地址仍为 https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk。
+- 更新公告三项：Android 编辑器选区/光标白块优化、写作用时统计 3 分钟思考上限、月度回声入口封面和六页阅读布局优化。
+- 线上 pp-update.json 已返回 1.0.17 / 19，公网 APK 与本地正式签名包 SHA256 一致：9C5248DFAF926E5E52CBDD79F0F3016D642C7668E22D7204A3741A84ACBCE2C8。
+- 本次未同步 GitHub Pages / GitHub Release；验证详情见 ault/notes/daily/2026-06-23-android-v117-release.md。
+
+## 2026-06-24 Android v1.0.18 发布
+
+- 已发布自有服务器主链路 Android 正式包 `1.0.18 / versionCode 20`，主下载地址仍为 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk`。
+- 更新公告三项：修复编辑页顶部正文滑动时压住日期和按钮；追补 Android App 选中文字和光标附近白色方块；关闭 Android WebView 强制深色合成，降低原生选区层冒白底概率。
+- 线上 `app-update.json` 已返回 `1.0.18 / 20`，公网 APK 与本地正式签名包 SHA256 一致：`496E83FAFB1381EA9B8850FB18FDE1D4078BE80CB9DF47F831AF5B226D565A4C`。
+- 本次未同步 GitHub Pages / GitHub Release；验证详情见 `vault/notes/daily/2026-06-24-android-v118-release.md`。
+# 2026-06-24 Android v1.0.20 发布
+
+- 已发布自有服务器主链路 Android 正式包 `1.0.20 / versionCode 22`，用于还原上一轮误改的 Android 文本选择手柄图标样式；主下载地址仍为 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk`。
+- 线上 APK 与本地签名包 SHA256 一致：`F10140FD6FC685CF1DBD3F53A26346110D00F271DF7BD566025EA142DB2EE936`；本次未同步 GitHub Pages / GitHub Release。交接详见 `vault/notes/daily/2026-06-24-android-v120-release.md`。
+
+## 2026-06-24 Android 发布 skill 流程优化
+
+- `C:\Users\ASUS\.codex\skills\xiaoxiang-android-release` 已按发布复盘优化：默认自有服务器发布、GitHub 显式请求才处理、发布正常目标 8-12 分钟、强制 `D:\小象日志` 根目录 guard、APK 上传外层超时 300 秒、禁止 PowerShell bash heredoc、验证分为硬门槛和增强项。
+- Skill 校验命令 `PYTHONUTF8=1 python C:\Users\ASUS\.codex\skills\.system\skill-creator\scripts\quick_validate.py C:\Users\ASUS\.codex\skills\xiaoxiang-android-release` 已通过。
+
+## 2026-06-24 Android v1.0.19 发布
+
+- 已发布自有服务器主链路 Android 正式包 `1.0.19 / versionCode 21`，主下载地址仍为 `https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk`。
+- 更新公告三项：修复编辑页顶部正文滑动压住日期和按钮；追补 Android App 选中文字和光标附近白色方块；关闭 Android WebView 强制深色合成，降低原生选区层冒白底概率。
+- 线上 `app-update.json` 已返回 `1.0.19 / 21`，公网 APK 与本地正式签名包 SHA256 一致：`9EE01434526D0A721BB85AFB6862CC798B1B40176CABC0A4FB5A0DF275F0EAA8`。
+- 本次未同步 GitHub Pages / GitHub Release；验证详情见 `vault/notes/daily/2026-06-24-android-v119-release.md`。

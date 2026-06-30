@@ -1237,35 +1237,6 @@ export default function Editor() {
     return Boolean(rects) || clamped;
   }, [clampTextSelectionBlankScroll, getEditorTextSelectionRects]);
 
-  const scheduleTextSelectionScrollGuard = useCallback(() => {
-    const guard = textSelectionScrollGuardRef.current;
-    if (!guard) return false;
-
-    if (guard.frame !== null) {
-      window.cancelAnimationFrame(guard.frame);
-      guard.frame = null;
-    }
-
-    let remainingFrames = 8;
-    const restoreFrame = () => {
-      const activeGuard = textSelectionScrollGuardRef.current;
-      if (!activeGuard) return;
-
-      restoreTextSelectionScrollGuard();
-      remainingFrames -= 1;
-
-      if (remainingFrames > 0) {
-        activeGuard.frame = window.requestAnimationFrame(restoreFrame);
-      } else {
-        activeGuard.frame = null;
-      }
-    };
-
-    restoreTextSelectionScrollGuard();
-    guard.frame = window.requestAnimationFrame(restoreFrame);
-    return true;
-  }, [restoreTextSelectionScrollGuard]);
-
   const releaseTextSelectionScrollGuard = useCallback((delay = 700) => {
     const guard = textSelectionScrollGuardRef.current;
     if (!guard) return;
@@ -1321,7 +1292,7 @@ export default function Editor() {
     }
 
     return false;
-  }, [isEditorTextSelectionActive, scheduleTextSelectionScrollGuard, stopTextSelectionScrollGuard]);
+  }, [isEditorTextSelectionActive, stopTextSelectionScrollGuard]);
 
   const handleTextSelectionTouchMove = useCallback(() => {
     if (!textSelectionScrollGuardRef.current && !isEditorTextSelectionActive()) {
@@ -1354,7 +1325,7 @@ export default function Editor() {
 
     const handleEditorScroll = () => {
       if (!textSelectionScrollGuardRef.current || !isEditorTextSelectionActive()) return;
-      scheduleTextSelectionScrollGuard();
+      releaseTextSelectionScrollGuard(600);
     };
 
     const scrollEl = editorScrollRef.current;
@@ -1365,7 +1336,7 @@ export default function Editor() {
       document.removeEventListener('selectionchange', handleSelectionChange);
       scrollEl?.removeEventListener('scroll', handleEditorScroll);
     };
-  }, [ensureTextSelectionScrollGuard, isEditorTextSelectionActive, releaseTextSelectionScrollGuard, scheduleTextSelectionScrollGuard, stopInputScrollLock, stopTextSelectionScrollGuard]);
+  }, [ensureTextSelectionScrollGuard, isEditorTextSelectionActive, releaseTextSelectionScrollGuard, stopInputScrollLock, stopTextSelectionScrollGuard]);
 
   const finishTapScrollLock = useCallback((e: React.PointerEvent<HTMLElement>) => {
     const lock = tapScrollLockRef.current;
@@ -3274,7 +3245,7 @@ export default function Editor() {
 
   const fixedViewportHeightCss = fixedViewportHeight > 0 ? `${fixedViewportHeight}px` : '100vh';
   const editorChromeHeight = 'calc(64px + env(safe-area-inset-top))';
-  const editorContentTopPadding = 'calc(76px + env(safe-area-inset-top))';
+  const editorContentTopGap = '12px';
   // bugfix: 杞敭鐩樺脊鍑烘椂锛宭ayout viewport 鍦ㄩ儴鍒嗗畨鍗撴祻瑙堝櫒涓笉浼氱缉灏忥紝
   // 瀵艰嚧 <main> 娌℃湁婧㈠嚭銆佸畬鍏ㄦ棤娉曟粴鍔紝鐭枃妗堟椂鍏夋爣浼氳杈撳叆娉曢伄鎸°€?
   // 杩欓噷鎶?keyboardInset 鍔犲埌搴曢儴 padding锛岀‘淇濇湁瓒冲鐨勫彲婊氬姩绌洪棿鎶婂厜鏍囨粴鍒板彲瑙嗗尯銆?
@@ -3294,15 +3265,6 @@ export default function Editor() {
   const editorScrollPaddingBottom = isTextSelectionActiveState
     ? 'calc(96px + env(safe-area-inset-bottom))'
     : `calc(120px + ${editorBottomBreathingRoom})`;
-  const editorTopFadeMask = [
-    'linear-gradient(to bottom',
-    'transparent 0px',
-    'transparent calc(64px + env(safe-area-inset-top))',
-    'rgba(0, 0, 0, 0.35) calc(70px + env(safe-area-inset-top))',
-    '#000 calc(76px + env(safe-area-inset-top))',
-    '#000 100%)',
-  ].join(', ');
-  const shouldUseEditorTopFadeMask = !isEditing && !isTextSelectionActiveState;
   const navStyle: React.CSSProperties = {
     height: editorChromeHeight,
     paddingTop: 'env(safe-area-inset-top)',
@@ -3321,11 +3283,10 @@ export default function Editor() {
     : '0px';
   const editorScrollStyle: React.CSSProperties = {
     ...(selectedTheme ? { backgroundColor: selectedTheme.paperColor || 'transparent' } : {}),
-    paddingTop: editorContentTopPadding,
+    top: editorChromeHeight,
+    paddingTop: editorContentTopGap,
     paddingBottom: editorContentBottomPadding,
     WebkitOverflowScrolling: 'touch',
-    WebkitMaskImage: shouldUseEditorTopFadeMask ? editorTopFadeMask : undefined,
-    maskImage: shouldUseEditorTopFadeMask ? editorTopFadeMask : undefined,
     scrollPaddingBottom: editorScrollPaddingBottom,
     overflowAnchor: 'none',
   };
@@ -3719,7 +3680,7 @@ export default function Editor() {
 
       <main
         ref={editorScrollRef}
-        className={`fixed inset-x-0 top-0 bottom-0 z-10 overflow-y-auto overscroll-contain ${shouldShowInlineImageToolbar ? 'inline-image-toolbar-active' : ''}`}
+        className={`diary-editor-scrollport fixed inset-x-0 bottom-0 z-10 overflow-y-auto overscroll-contain ${shouldShowInlineImageToolbar ? 'inline-image-toolbar-active' : ''}`}
         style={editorScrollStyle}
         onTouchMove={() => {
           hideDailyEchoFloatBriefly();
@@ -3756,7 +3717,7 @@ export default function Editor() {
             return;
           }
           if (isEditorTextSelectionActive()) {
-            scheduleTextSelectionScrollGuard();
+            restoreTextSelectionScrollGuard();
             releaseTextSelectionScrollGuard();
             stopTapScrollLock();
             return;

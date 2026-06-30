@@ -45,7 +45,7 @@ test('counts user text while excluding diary template labels and punctuation', (
   assert.equal(countDiaryTextCharacters(html), 17);
 });
 
-test('caps active writing time at 90 seconds and ignores inactive gaps', () => {
+test('caps active writing time at 180 seconds and ignores inactive gaps', () => {
   let activity = createWritingActivityState();
   activity = recordWritingInput(activity, 1_000);
   activity = recordWritingInput(activity, 11_000);
@@ -61,9 +61,28 @@ test('completion minutes ignore wall-clock gaps and use capped active writing ti
   activity = recordWritingInput(activity, 6 * 60_000);
   activity = recordWritingInput(activity, 12 * 60_000);
 
+  assert.equal(activity.elapsedMs, 360_000);
+  assert.equal(getActiveWritingSeconds(activity, 12 * 60_000), 360);
+  assert.equal(getActiveWritingMinutes(activity, 12 * 60_000), 6);
+});
+
+test('counts thinking pauses up to three minutes between writing actions', () => {
+  let activity = createWritingActivityState();
+  activity = recordWritingInput(activity, 0);
+  activity = recordWritingInput(activity, 2 * 60_000 + 30_000);
+
+  assert.equal(activity.elapsedMs, 150_000);
+  assert.equal(getActiveWritingMinutes(activity, 2 * 60_000 + 31_000), 3);
+});
+
+test('caps long thinking pauses at three minutes without counting the full absence', () => {
+  let activity = createWritingActivityState();
+  activity = recordWritingInput(activity, 0);
+  activity = recordWritingInput(activity, 10 * 60_000);
+
   assert.equal(activity.elapsedMs, 180_000);
-  assert.equal(getActiveWritingSeconds(activity, 12 * 60_000), 180);
-  assert.equal(getActiveWritingMinutes(activity, 12 * 60_000), 3);
+  assert.equal(getActiveWritingSeconds(activity, 10 * 60_000), 180);
+  assert.equal(getActiveWritingMinutes(activity, 10 * 60_000), 3);
 });
 
 test('continuous five minute writing with natural pauses displays about five minutes', () => {

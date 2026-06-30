@@ -1,6 +1,6 @@
 import type { DiaryEntry } from '../services/diaryService';
 
-export const WRITING_ACTIVITY_WINDOW_MS = 90_000;
+export const WRITING_ACTIVITY_WINDOW_MS = 180_000;
 
 export type WritingActivityState = {
   elapsedMs: number;

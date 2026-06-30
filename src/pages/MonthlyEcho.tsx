@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import html2canvas from 'html2canvas';
-import { Loader2, RefreshCcw, Share2, Sparkle } from 'lucide-react';
+import { Loader2, Sparkle } from 'lucide-react';
 import { monthlyEchoService } from '../services/monthlyEchoService';
 import { canUseAndroidImageSaver, savePngDataUrlToAndroidGallery } from '../services/androidImageSaver';
 import { useOptionalAuth } from '../contexts/AuthContext';
@@ -18,6 +18,7 @@ import {
 const storyFont = '"Noto Sans SC", "Microsoft YaHei", "PingFang SC", "Inter", sans-serif';
 const serifFont = '"Noto Serif SC", "Songti SC", "SimSun", serif';
 const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const entranceCoverBackground = '/monthly-echo/entrance-cover.png?v=20260623-entry-cover';
 const chineseMonthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
 const actionIcons = ['说', 'Ⅱ', '记', '心', '芽'];
 const storyPages = ['cover', 'map', 'moments', 'actions', 'theme', 'letter'] as const;
@@ -61,6 +62,37 @@ function truncateText(text: string, maxLength: number): string {
   const chars = textChars(value);
   if (chars.length <= maxLength) return value;
   return `${chars.slice(0, Math.max(0, maxLength - 1)).join('')}…`;
+}
+
+function formatDisplayName(nickname?: string | null): string {
+  const value = String(nickname || '').trim();
+  if (!value) return '你';
+  const chars = textChars(value);
+  if (chars.length <= 12) return value;
+  return chars.slice(0, 12).join('');
+}
+
+function splitLetterParagraphs(text: string): string[] {
+  const normalized = String(text || '')
+    .replace(/^\s*亲爱的[^：:]{0,24}[：:]\s*/u, '')
+    .replace(/\r/g, '\n')
+    .trim();
+  if (!normalized) return ['这个月，你已经被好好看见。小象想把这份温柔留给你，也陪你慢慢走进下一个月。'];
+
+  const rawParagraphs = normalized
+    .split(/\n{2,}|(?<=。)\s*(?=这个月|你也|那些|愿你|小象|后来|当|但|也正是|从)/u)
+    .map(item => cleanText(item))
+    .filter(Boolean);
+
+  const paragraphs: string[] = [];
+  for (const paragraph of rawParagraphs) {
+    const chars = textChars(paragraph);
+    for (let index = 0; index < chars.length; index += 120) {
+      paragraphs.push(chars.slice(index, index + 120).join(''));
+      if (paragraphs.length >= 4) return paragraphs;
+    }
+  }
+  return paragraphs.slice(0, 4);
 }
 
 function stripLeadingMarker(text: string): string {
@@ -276,6 +308,14 @@ function getFrameScale(): number {
   return Math.max(0.72, Math.min(widthScale, heightScale));
 }
 
+function getFrameWidth(): number {
+  if (typeof window === 'undefined') return 390;
+  if (window.innerWidth <= 640) {
+    return Math.max(390, Math.min(window.innerWidth, 480));
+  }
+  return 390;
+}
+
 function PaperNoise() {
   return <div className="paper-noise" aria-hidden="true" />;
 }
@@ -346,26 +386,13 @@ function EntranceCoverFrame({
   onNext: () => void;
 }) {
   return (
-    <section className="echo-frame entrance-cover-frame" data-page-index={0} data-name="PAGE 1 / 入口页">
-      <PaperNoise />
-      <span className="entrance-wash entrance-wash-top" aria-hidden="true" />
-      <span className="entrance-wash entrance-wash-bottom" aria-hidden="true" />
-      <EchoRings left={197} top={27} sizes={[78, 118, 158]} />
-      <EntranceFloralDecor />
-      <h1 className="entrance-title">月之回响</h1>
-      <div className="entrance-month">{getEnglishMonth(monthKey)}</div>
-      <span className="entrance-divider" aria-hidden="true" />
-      <p className="entrance-copy">
-        一份温柔的<br />
-        自我回望笔记，<br />
-        陪你在时光里<br />
-        慢慢靠近自己。
-      </p>
-      <p className="entrance-blessing">
-        愿你每个月都可以<br />
-        收到自我回响
-      </p>
-      <DownCue onClick={onNext} />
+    <section
+      className="echo-frame entrance-cover-frame"
+      data-page-index={0}
+      data-name="PAGE 1 / 入口页"
+      aria-label={`${getEnglishMonth(monthKey)} 月之回响入口页`}
+    >
+      <button type="button" className="entrance-cover-next" onClick={onNext} aria-label="继续查看月之回响" />
     </section>
   );
 }
@@ -431,7 +458,7 @@ function BrushQuote({
   children: React.ReactNode;
   className?: string;
   green?: boolean;
-  width?: number;
+  width?: number | string;
 }) {
   return (
     <div className={`brush-quote ${green ? 'brush-quote-green' : ''} ${className}`} style={{ width }}>
@@ -440,21 +467,6 @@ function BrushQuote({
       <span className="wash wash-bottom" />
       <span className="brush-text">{children}</span>
     </div>
-  );
-}
-
-function EchoTopBar({
-  onBack,
-}: {
-  onBack: () => void;
-}) {
-  return (
-    <>
-      <button type="button" className="echo-back" onClick={onBack} aria-label="返回">
-        ‹
-      </button>
-      <div className="echo-top-title">月之回响</div>
-    </>
   );
 }
 
@@ -469,20 +481,16 @@ function DownCue({ onClick }: { onClick?: () => void }) {
 function EchoStoryFrame({
   children,
   index,
-  onBack,
   name,
 }: {
   children: React.ReactNode;
   index: number;
-  onBack: () => void;
+  onBack?: () => void;
   name: string;
 }) {
   return (
     <section className="echo-frame" data-page-index={index} data-name={name}>
       <PaperNoise />
-      <EchoTopBar
-        onBack={onBack}
-      />
       {children}
     </section>
   );
@@ -564,19 +572,16 @@ function StatusStoryFrame({
   title,
   message,
   loading,
-  onBack,
 }: {
   title: string;
   message: string;
   loading?: boolean;
-  onBack: () => void;
+  onBack?: () => void;
 }) {
   return (
     <section className="echo-frame status-frame">
       <PaperNoise />
-      <EchoRings left={205} top={70} />
-      <button type="button" className="echo-back" onClick={onBack} aria-label="返回">‹</button>
-      <div className="echo-top-title">月之回响</div>
+      <EchoRings left={205} top={36} />
       <div className="status-content">
         {loading ? <Loader2 className="status-icon animate-spin" /> : <Sparkle className="status-icon" />}
         <h1>{title}</h1>
@@ -627,8 +632,10 @@ function StoryStyle() {
         .echo-frame {
           box-sizing: border-box;
           position: relative;
-          width: 390px;
+          width: var(--echo-frame-width, 390px);
           height: 844px;
+          --echo-page-pad: 26px;
+          --echo-content-width: calc(var(--echo-frame-width, 390px) - (var(--echo-page-pad) * 2));
           overflow: hidden;
           background: #f6efe2;
           border: 0;
@@ -651,43 +658,10 @@ function StoryStyle() {
             radial-gradient(circle at 286px 666px, rgba(56, 51, 45, 0.034) 0 0.9px, transparent 1.1px);
           background-size: 390px 844px, 190px 240px, 210px 280px, 170px 220px, 230px 310px, 250px 350px;
         }
-        .echo-back {
-          position: absolute;
-          z-index: 20;
-          border: 0;
-          background: transparent;
-          color: #1b3c21;
-          font-family: Inter, ${storyFont};
-          font-weight: 700;
-          cursor: pointer;
-          touch-action: manipulation;
-        }
-        .echo-back {
-          width: 38px;
-          height: 38px;
-          left: 22px;
-          top: 15px;
-          font-size: 36px;
-          line-height: 32px;
-        }
-        .echo-top-title {
-          position: absolute;
-          z-index: 18;
-          width: 390px;
-          height: 20px;
-          left: 0;
-          top: 28px;
-          text-align: center;
-          font-family: Inter, ${storyFont};
-          font-size: 17px;
-          line-height: 20px;
-          font-weight: 700;
-          color: #1b3c21;
-        }
         .down-cue {
           position: absolute;
           z-index: 12;
-          width: 390px;
+          width: 100%;
           height: 24px;
           left: 0;
           top: 792px;
@@ -875,11 +849,26 @@ function StoryStyle() {
           word-break: break-word;
         }
         .entrance-cover-frame {
-          background:
-            radial-gradient(circle at 8% -2%, rgba(255, 248, 234, 0.36) 0, rgba(255, 248, 234, 0.16) 24%, transparent 48%),
-            radial-gradient(circle at 104% 86%, rgba(239, 226, 204, 0.26) 0, rgba(239, 226, 204, 0.12) 28%, transparent 56%),
-            #f6efe2;
+          width: 100vw;
+          height: 100dvh;
+          background-color: #f6efe2;
+          background-image: url("${entranceCoverBackground}");
+          background-position: center center;
+          background-repeat: no-repeat;
+          background-size: 100% 100%;
           font-family: ${serifFont};
+        }
+        .entrance-cover-next {
+          position: absolute;
+          z-index: 20;
+          left: 0;
+          bottom: 0;
+          width: 100%;
+          height: 150px;
+          border: 0;
+          background: transparent;
+          cursor: pointer;
+          touch-action: manipulation;
         }
         .entrance-wash {
           pointer-events: none;
@@ -1158,17 +1147,17 @@ function StoryStyle() {
         }
         .map-lead {
           position: absolute;
-          left: 42px;
-          top: 105px;
-          width: 300px;
+          left: var(--echo-page-pad);
+          top: 56px;
+          width: var(--echo-content-width);
           color: #38332d;
           font-size: 14px;
           line-height: 20px;
         }
         .map-label {
           position: absolute;
-          left: 42px;
-          top: 156px;
+          left: var(--echo-page-pad);
+          top: 108px;
           width: 120px;
           color: #8f8374;
           font-size: 14px;
@@ -1177,9 +1166,9 @@ function StoryStyle() {
         }
         .map-headline {
           position: absolute;
-          left: 42px;
-          top: 184px;
-          width: 300px;
+          left: var(--echo-page-pad);
+          top: 136px;
+          width: var(--echo-content-width);
           color: #1b3c21;
           font-size: 19px;
           line-height: 28px;
@@ -1191,6 +1180,7 @@ function StoryStyle() {
           width: 390px;
           height: 844px;
           pointer-events: none;
+          transform: translateY(-44px);
         }
         .map-route svg {
           position: absolute;
@@ -1233,9 +1223,9 @@ function StoryStyle() {
         }
         .map-summary {
           position: absolute;
-          left: 42px;
-          top: 690px;
-          width: 302px;
+          left: var(--echo-page-pad);
+          top: 636px;
+          width: var(--echo-content-width);
           height: 92px;
           box-sizing: border-box;
           padding: 18px 23px 14px 24px;
@@ -1248,17 +1238,17 @@ function StoryStyle() {
         }
         .moments-lead {
           position: absolute;
-          left: 42px;
-          top: 118px;
-          width: 260px;
+          left: var(--echo-page-pad);
+          top: 78px;
+          width: var(--echo-content-width);
           color: #38332d;
           font-size: 17px;
           line-height: 32px;
         }
         .moment-card {
           position: absolute;
-          left: 42px;
-          width: 306px;
+          left: var(--echo-page-pad);
+          width: var(--echo-content-width);
           min-height: 158px;
           border-radius: 8px;
           background: rgba(255, 252, 246, 0.96);
@@ -1312,9 +1302,9 @@ function StoryStyle() {
         }
         .moment-content {
           position: absolute;
-          left: 92px;
+          left: 104px;
           top: 22px;
-          width: 184px;
+          width: calc(100% - 132px);
           display: flex;
           flex-direction: column;
           gap: 8px;
@@ -1347,9 +1337,9 @@ function StoryStyle() {
         }
         .moments-end {
           position: absolute;
-          width: 285px;
-          left: 42px;
-          top: 683px;
+          width: var(--echo-content-width);
+          left: var(--echo-page-pad);
+          top: 690px;
           color: #38332d;
           font-size: 15px;
           line-height: 26px;
@@ -1358,9 +1348,9 @@ function StoryStyle() {
         }
         .actions-title {
           position: absolute;
-          width: 230px;
-          left: 42px;
-          top: 120px;
+          width: var(--echo-content-width);
+          left: var(--echo-page-pad);
+          top: 78px;
           color: #1b3c21;
           font-size: 22px;
           line-height: 34px;
@@ -1368,15 +1358,15 @@ function StoryStyle() {
         }
         .action-trail {
           position: absolute;
-          left: 78px;
-          top: 230px;
-          width: 270px;
+          left: 50px;
+          top: 196px;
+          width: calc(var(--echo-frame-width, 390px) - 70px);
           height: 350px;
         }
         .action-row {
           position: absolute;
           left: 0;
-          width: 270px;
+          width: 100%;
           min-height: 42px;
         }
         .action-foot {
@@ -1410,7 +1400,7 @@ function StoryStyle() {
           position: absolute;
           left: 104px;
           top: 3px;
-          width: 180px;
+          width: calc(100% - 104px);
           margin: 0;
           color: #38332d;
           font-size: 15px;
@@ -1418,10 +1408,10 @@ function StoryStyle() {
         }
         .action-paper {
           position: absolute;
-          width: 302px;
+          width: var(--echo-content-width);
           min-height: 106px;
-          left: 42px;
-          top: 650px;
+          left: var(--echo-page-pad);
+          top: 628px;
           box-sizing: border-box;
           padding: 29px 66px 24px 48px;
           background: rgba(255, 252, 246, 0.72);
@@ -1442,9 +1432,9 @@ function StoryStyle() {
         }
         .theme-lead {
           position: absolute;
-          width: 270px;
-          left: 42px;
-          top: 138px;
+          width: var(--echo-content-width);
+          left: var(--echo-page-pad);
+          top: 78px;
           color: #1b3c21;
           font-size: 24px;
           line-height: 42px;
@@ -1452,9 +1442,9 @@ function StoryStyle() {
         }
         .theme-desc {
           position: absolute;
-          width: 284px;
-          left: 42px;
-          top: 286px;
+          width: var(--echo-content-width);
+          left: var(--echo-page-pad);
+          top: 218px;
           color: #38332d;
           font-size: 18px;
           line-height: 36px;
@@ -1462,9 +1452,9 @@ function StoryStyle() {
         }
         .theme-turn {
           position: absolute;
-          width: 280px;
-          left: 42px;
-          top: 548px;
+          width: var(--echo-content-width);
+          left: var(--echo-page-pad);
+          top: 510px;
           color: #38332d;
           font-size: 18px;
           line-height: 32px;
@@ -1472,77 +1462,91 @@ function StoryStyle() {
         }
         .letter-card {
           position: absolute;
-          width: 306px;
-          height: 600px;
-          left: 42px;
-          top: 111px;
+          width: var(--echo-content-width);
+          height: 690px;
+          left: var(--echo-page-pad);
+          top: 62px;
           box-sizing: border-box;
-          padding: 32px 30px 30px;
-          background: rgba(255, 252, 246, 0.98);
-          box-shadow: 0 12px 30px rgba(56, 41, 20, 0.12);
-          border-radius: 18px;
+          padding: 52px 28px 40px;
+          overflow: hidden;
+          background:
+            radial-gradient(circle at 86% 7%, rgba(191, 160, 106, 0.12) 0 22px, transparent 23px),
+            radial-gradient(circle at 88% 4%, rgba(255, 252, 244, 0.92) 0 18px, transparent 19px),
+            rgba(255, 252, 244, 0.86);
+          box-shadow: 0 18px 48px rgba(92, 72, 45, 0.08);
+          border: 1px solid rgba(248, 240, 226, 0.72);
+          border-radius: 22px;
+        }
+        .letter-card::before {
+          content: '';
+          position: absolute;
+          right: -38px;
+          top: -78px;
+          width: 260px;
+          height: 260px;
+          border-radius: 999px;
+          background:
+            repeating-radial-gradient(circle, transparent 0 26px, rgba(191, 160, 106, 0.16) 27px 28px, transparent 29px 42px);
+          opacity: 0.58;
+          pointer-events: none;
+        }
+        .letter-card::after {
+          content: '';
+          position: absolute;
+          right: 42px;
+          bottom: 40px;
+          width: 92px;
+          height: 184px;
+          border-right: 1.5px solid rgba(176, 149, 102, 0.34);
+          border-radius: 50% 0 0 0;
+          transform: rotate(-13deg);
+          opacity: 0.72;
+          pointer-events: none;
+        }
+        .letter-greeting {
+          position: relative;
+          z-index: 2;
+          color: #1b3c21;
+          font-size: 17px;
+          line-height: 25px;
+          font-weight: 800;
+          letter-spacing: 0.02em;
         }
         .letter-body {
-          width: 246px;
-          height: 368px;
+          position: relative;
+          z-index: 2;
+          margin-top: 26px;
+          width: 100%;
+          height: 444px;
           overflow: hidden;
-          white-space: pre-line;
           color: #38332d;
-          font-size: 14px;
-          line-height: 23px;
+          font-size: 15px;
+          line-height: 28px;
+          font-weight: 500;
         }
-        .letter-quote {
-          position: absolute;
-          left: 30px;
-          top: 400px;
-          width: 238px;
-          min-height: 106px;
-          box-sizing: border-box;
-          padding: 8px 18px 8px 20px;
-          border-left: 4px solid #2f5a35;
-          border-radius: 2px;
-          background: rgba(237, 229, 213, 0.48);
-          color: #38332d;
-          font-size: 14px;
-          line-height: 23px;
-          font-weight: 800;
+        .letter-body p {
+          margin: 0 0 14px;
         }
         .letter-sign {
           position: absolute;
-          right: 42px;
-          top: 538px;
+          z-index: 2;
+          right: 38px;
+          bottom: 78px;
           color: #c8a978;
-          font-size: 16px;
-          line-height: 22px;
+          font-size: 20px;
+          line-height: 28px;
           font-weight: 800;
         }
-        .letter-actions {
+        .letter-date {
           position: absolute;
-          left: 42px;
-          top: 744px;
-          width: 306px;
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 40px;
-        }
-        .letter-actions button {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: 10px;
-          min-height: 62px;
-          border: 0;
-          background: transparent;
-          color: #1b3c21;
-          font-size: 17px;
-          line-height: 22px;
-          font-weight: 800;
-          cursor: pointer;
-        }
-        .letter-actions svg {
-          width: 22px;
-          height: 22px;
+          z-index: 2;
+          right: 38px;
+          bottom: 48px;
+          color: rgba(191, 160, 106, 0.68);
+          font-size: 13px;
+          line-height: 18px;
+          font-weight: 500;
+          letter-spacing: 0.04em;
         }
         .poster-frame {
           font-family: ${serifFont};
@@ -1619,7 +1623,7 @@ function StoryStyle() {
         .status-content {
           position: absolute;
           left: 46px;
-          top: 300px;
+          top: 248px;
           width: 292px;
           color: #1b3c21;
         }
@@ -1657,13 +1661,15 @@ export default function MonthlyEcho() {
   const [regenerating, setRegenerating] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [frameScale, setFrameScale] = useState(getFrameScale);
+  const [frameWidth, setFrameWidth] = useState(getFrameWidth);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const posterRef = useRef<HTMLDivElement | null>(null);
 
-  const displayName = auth?.user?.nickname || '你';
+  const displayName = formatDisplayName(auth?.user?.nickname);
   const sections: MonthlyEchoSections = payload?.sections || {};
   const storyData = useMemo(() => deriveStoryData(payload, sections), [payload, sections]);
+  const letterParagraphs = useMemo(() => splitLetterParagraphs(storyData.letterText), [storyData.letterText]);
   const hasReadableEcho = Boolean(
     payload && (payload.fullText || sections.mainArcSection || sections.keyMomentsSection || sections.finalInsightSentence),
   );
@@ -1691,7 +1697,10 @@ export default function MonthlyEcho() {
   }, [monthKey]);
 
   useEffect(() => {
-    const onResize = () => setFrameScale(getFrameScale());
+    const onResize = () => {
+      setFrameScale(getFrameScale());
+      setFrameWidth(getFrameWidth());
+    };
     onResize();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
@@ -1787,12 +1796,12 @@ export default function MonthlyEcho() {
           <span className="map-dot" style={{ left: 170, top: 452, opacity: 0.74 }} />
           <span className="map-dot" style={{ left: 130, top: 564, opacity: 0.58 }} />
         </div>
-        <h3 className="map-title" style={{ left: 188, top: 337, width: 140 }}>{storyData.mapNodes[0].title}</h3>
-        <p className="map-desc map-desc-two" style={{ left: 188, top: 362, width: 145 }}>{storyData.mapNodes[0].text}</p>
-        <h3 className="map-title" style={{ left: 132, top: 438, width: 80 }}>{storyData.mapNodes[1].title}</h3>
-        <p className="map-desc map-desc-two" style={{ left: 78, top: 466, width: 145 }}>{storyData.mapNodes[1].text}</p>
-        <h3 className="map-title" style={{ left: 174, top: 548, width: 110 }}>{storyData.mapNodes[2].title}</h3>
-        <p className="map-desc map-desc-three" style={{ left: 174, top: 574, width: 155 }}>{storyData.mapNodes[2].text}</p>
+        <h3 className="map-title" style={{ left: 188, top: 293, width: 140 }}>{storyData.mapNodes[0].title}</h3>
+        <p className="map-desc map-desc-two" style={{ left: 188, top: 318, width: 145 }}>{storyData.mapNodes[0].text}</p>
+        <h3 className="map-title" style={{ left: 132, top: 394, width: 80 }}>{storyData.mapNodes[1].title}</h3>
+        <p className="map-desc map-desc-two" style={{ left: 78, top: 422, width: 145 }}>{storyData.mapNodes[1].text}</p>
+        <h3 className="map-title" style={{ left: 174, top: 504, width: 110 }}>{storyData.mapNodes[2].title}</h3>
+        <p className="map-desc map-desc-three" style={{ left: 174, top: 530, width: 155 }}>{storyData.mapNodes[2].text}</p>
         <div className="map-summary" style={clampStyle(3)}>{storyData.mapSummary}</div>
         <DownCue onClick={() => scrollToPage(2)} />
       </EchoStoryFrame>
@@ -1805,7 +1814,7 @@ export default function MonthlyEcho() {
             key={`${index}-${moment.dateLabel}-${moment.title}`}
             index={index}
             moment={moment}
-            top={[190, 352, 514][index]}
+            top={[154, 326, 498][index]}
             rotate={[0.5, -0.7, 0.6][index]}
           />
         ))}
@@ -1824,15 +1833,15 @@ export default function MonthlyEcho() {
       </EchoStoryFrame>
 
       <EchoStoryFrame index={4} name="PAGE 5 / 05 反复主题" {...commonFrameProps}>
-        <EchoRings left={222} top={94} sizes={[60, 80, 100, 120, 140]} />
-        <EchoRings left={257} top={280} sizes={[70, 90, 110, 130, 150]} />
+        <EchoRings left={222} top={48} sizes={[60, 80, 100, 120, 140]} />
+        <EchoRings left={257} top={244} sizes={[70, 90, 110, 130, 150]} />
         <h2 className="theme-lead">这个月，<br />有一个问题一再出现：</h2>
         <p className="theme-desc" style={clampStyle(3)}>{storyData.repeatedLead}</p>
-        <BrushQuote className="left-[54px] top-[407px] text-[22px] leading-[29px]" width={270}>
+        <BrushQuote className="left-[34px] top-[378px] text-[22px] leading-[29px]" width="calc(var(--echo-frame-width, 390px) - 68px)">
           「{storyData.repeatedQuestion}」
         </BrushQuote>
         <p className="theme-turn" style={clampStyle(2)}>{storyData.repeatedTurn}</p>
-        <BrushQuote className="left-[56px] top-[642px] text-[19px] leading-[29px]" width={280} green>
+        <BrushQuote className="left-[34px] top-[636px] text-[19px] leading-[29px]" width="calc(var(--echo-frame-width, 390px) - 68px)" green>
           「{storyData.nextQuestion}」
         </BrushQuote>
         <DownCue onClick={() => scrollToPage(5)} />
@@ -1840,19 +1849,14 @@ export default function MonthlyEcho() {
 
       <EchoStoryFrame index={5} name="PAGE 6 / 06 回声信" {...commonFrameProps}>
         <div className="letter-card">
-          <div className="letter-body">{storyData.letterText}</div>
-          <div className="letter-quote" style={clampStyle(4)}>「{storyData.letterQuote}」</div>
+          <div className="letter-greeting">亲爱的 {displayName}：</div>
+          <div className="letter-body">
+            {letterParagraphs.map((paragraph, index) => (
+              <p key={`${index}-${paragraph.slice(0, 8)}`}>{paragraph}</p>
+            ))}
+          </div>
           <div className="letter-sign">爱你的小象</div>
-        </div>
-        <div className="letter-actions">
-          <button type="button" onClick={() => void handleRegenerate()} disabled={regenerating}>
-            {regenerating ? <Loader2 className="animate-spin" /> : <RefreshCcw />}
-            重新整理
-          </button>
-          <button type="button" onClick={() => void handleSavePoster()} disabled={saving}>
-            {saving ? <Loader2 className="animate-spin" /> : <Share2 />}
-            保存 / 分享
-          </button>
+          <div className="letter-date">{payload!.monthKey.replace('-', ' · ')}</div>
         </div>
       </EchoStoryFrame>
     </>
@@ -1887,21 +1891,43 @@ export default function MonthlyEcho() {
     );
   };
 
-  const renderSlot = (content: React.ReactNode, index: number) => (
-    <div
-      key={index}
-      ref={node => {
-        pageRefs.current[index] = node;
-      }}
-      className="monthly-echo-slot"
-    >
-      <div style={{ width: 390 * frameScale, height: 844 * frameScale }}>
-        <div className="echo-scale-box" style={{ transform: `scale(${frameScale})` }}>
+  const renderSlot = (content: React.ReactNode, index: number, isEntrancePage = false) => {
+    if (isEntrancePage) {
+      return (
+        <div
+          key={index}
+          ref={node => {
+            pageRefs.current[index] = node;
+          }}
+          className="monthly-echo-slot monthly-echo-entrance-slot"
+        >
           {content}
         </div>
+      );
+    }
+
+    return (
+      <div
+        key={index}
+        ref={node => {
+          pageRefs.current[index] = node;
+        }}
+        className="monthly-echo-slot"
+      >
+        <div style={{ width: frameWidth * frameScale, height: 844 * frameScale }}>
+          <div
+            className="echo-scale-box"
+            style={{
+              transform: `scale(${frameScale})`,
+              '--echo-frame-width': `${frameWidth}px`,
+            } as React.CSSProperties}
+          >
+            {content}
+          </div>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const storyContent = hasReadableEcho && payload
     ? React.Children.toArray(renderReadablePages().props.children)
@@ -1911,7 +1937,7 @@ export default function MonthlyEcho() {
     <div className="monthly-echo-root">
       <StoryStyle />
       <div ref={scrollerRef} className="monthly-echo-scroll">
-        {storyContent.map((content, index) => renderSlot(content, index))}
+        {storyContent.map((content, index) => renderSlot(content, index, Boolean(hasReadableEcho && payload && index === 0)))}
       </div>
       <div ref={posterRef} className="pointer-events-none fixed left-[-9999px] top-0">
         {payload && hasReadableEcho && (

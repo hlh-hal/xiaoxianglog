@@ -5,6 +5,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.view.Window;
+import android.webkit.WebSettings;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 
@@ -46,7 +47,23 @@ public class MainActivity extends BridgeActivity {
 
         WebView webView = getBridge().getWebView();
         if (webView != null) {
-            webView.setBackgroundColor(APP_SURFACE_COLOR);
+            configureWebViewAppearance(webView);
+        }
+    }
+
+    private void configureWebViewAppearance(WebView webView) {
+        webView.setBackgroundColor(APP_SURFACE_COLOR);
+
+        WebSettings settings = webView.getSettings();
+        if (settings == null) {
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            settings.setForceDark(WebSettings.FORCE_DARK_OFF);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            settings.setAlgorithmicDarkeningAllowed(false);
         }
     }
 

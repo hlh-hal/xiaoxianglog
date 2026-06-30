@@ -43,6 +43,7 @@ const consoleMessages = [];
 const responses = [];
 const entryId = `writing-time-${Date.now()}`;
 const fiveMinuteEntryId = `${entryId}-five`;
+const thinkingEntryId = `${entryId}-thinking`;
 
 page.on('console', msg => consoleMessages.push(`${msg.type()}: ${msg.text()}`));
 page.on('pageerror', err => consoleMessages.push(`pageerror: ${err.message}`));
@@ -267,6 +268,17 @@ try {
       status: 'active',
       activeWritingSeconds: 0,
     });
+    tx.objectStore('entries').put({
+      id: `${id}-thinking`,
+      userId: 'test-user',
+      content: '<p>thinking baseline</p>',
+      images: [],
+      createdAt: '2026-06-05T00:00:00.000Z',
+      updatedAt: '2026-06-05T00:00:00.000Z',
+      diaryDate: '2026-06-05T08:00:00.000Z',
+      status: 'active',
+      activeWritingSeconds: 0,
+    });
     await new Promise(resolve => {
       tx.oncomplete = tx.onerror = tx.onabort = () => resolve(undefined);
     });
@@ -286,6 +298,18 @@ try {
   await sleep(800);
   const fiveMinuteCompletionText = await getCompletionText(fiveMinuteEntryId, { required: false });
   const fiveMinuteStoredSeconds = await getStoredSeconds(fiveMinuteEntryId);
+
+  console.log('[writing-time] thinking pause editor open');
+  await page.goto(`${baseUrl.replace(/\/$/, '')}/editor?id=${thinkingEntryId}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.ProseMirror', { timeout: 15000 });
+  console.log('[writing-time] thinking pause edit');
+  await insertText(' first thought', 0);
+  await insertText(' after thinking', 150_000);
+  await clickSave();
+  console.log('[writing-time] thinking pause save');
+  await sleep(800);
+  const thinkingCompletionText = await getCompletionText(thinkingEntryId, { required: false });
+  const thinkingStoredSeconds = await getStoredSeconds(thinkingEntryId);
 
   console.log('[writing-time] first editor open');
   await page.goto(`${baseUrl.replace(/\/$/, '')}/editor?id=${entryId}`, { waitUntil: 'domcontentloaded' });
@@ -316,6 +340,10 @@ try {
     && typeof fiveMinuteStoredSeconds === 'number'
     && fiveMinuteStoredSeconds >= 270
     && fiveMinuteStoredSeconds <= 330
+    && (!thinkingCompletionText || thinkingCompletionText.includes('用了3分钟'))
+    && typeof thinkingStoredSeconds === 'number'
+    && thinkingStoredSeconds >= 150
+    && thinkingStoredSeconds <= 210
     && (!firstCompletionText || firstCompletionText.includes('用了14分钟'))
     && (!secondCompletionText || secondCompletionText.includes('用了15分钟'))
     && typeof firstStoredSeconds === 'number'
@@ -330,10 +358,13 @@ try {
     out: ok ? out : failOut,
     entryId,
     fiveMinuteEntryId,
+    thinkingEntryId,
     fiveMinuteCompletionText,
+    thinkingCompletionText,
     firstCompletionText,
     secondCompletionText,
     fiveMinuteStoredSeconds,
+    thinkingStoredSeconds,
     firstStoredSeconds,
     secondStoredSeconds,
     responses: responses.slice(-30),
