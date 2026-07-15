@@ -7,15 +7,24 @@ import {
 
 const CHECK_INTERVAL_MS = 60 * 1000;
 let schedulerStarted = false;
+let schedulerRunning = false;
 
 export async function runMonthlyEchoSchedulerTick() {
-  const [traceCount, queuedMonthEnd] = await Promise.all([
-    processPendingTraceNodes(),
-    enqueueDueMonthEndJobs(),
-  ]);
-  const jobCount = await processPendingMonthlyJobs();
-  const pushedCount = await processDueMonthlyPushes();
-  return { traceCount, queuedMonthEnd, jobCount, pushedCount };
+  if (schedulerRunning) {
+    return { traceCount: 0, queuedMonthEnd: 0, jobCount: 0, pushedCount: 0, skipped: true };
+  }
+  schedulerRunning = true;
+  try {
+    // Interactive month jobs own their trace generation and must not wait behind
+    // the global trace backlog.
+    const jobCount = await processPendingMonthlyJobs();
+    const traceCount = await processPendingTraceNodes();
+    const queuedMonthEnd = await enqueueDueMonthEndJobs();
+    const pushedCount = await processDueMonthlyPushes();
+    return { traceCount, queuedMonthEnd, jobCount, pushedCount, skipped: false };
+  } finally {
+    schedulerRunning = false;
+  }
 }
 
 export function startMonthlyEchoScheduler(): void {

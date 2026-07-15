@@ -5,6 +5,13 @@ import puppeteer, { type Browser, type ElementHandle, type Page } from 'puppetee
 
 const APP_URL = process.env.XIAOXIANG_APP_URL ?? 'http://localhost:3000';
 const EDITOR_URL = `${APP_URL}/editor`;
+const BROWSER_EXECUTABLE = [
+  process.env.PUPPETEER_EXECUTABLE_PATH,
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+].find(candidate => candidate && fs.existsSync(candidate));
 
 type StoredEntry = {
   id: string;
@@ -13,6 +20,7 @@ type StoredEntry = {
   status: string;
   diaryDate: string;
   updatedAt: string;
+  activeWritingSeconds?: number;
 };
 
 type StoredHistory = {
@@ -187,6 +195,22 @@ async function typeDiaryText(page: Page, text: string): Promise<void> {
   await page.keyboard.type(text, { delay: 5 });
 }
 
+async function installWritingClock(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const clock = { base: Date.now(), offset: 0 };
+    (window as any).__writingTimeTestClock = clock;
+    Date.now = () => clock.base + clock.offset;
+  });
+}
+
+async function setWritingClockOffset(page: Page, offset: number): Promise<void> {
+  await page.evaluate((nextOffset) => {
+    const clock = (window as any).__writingTimeTestClock as { base: number; offset: number } | undefined;
+    if (!clock) throw new Error('Writing time test clock is not installed');
+    clock.offset = nextOffset;
+  }, offset);
+}
+
 async function dispatchPageHide(page: Page): Promise<void> {
   await page.evaluate(() => {
     window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
@@ -222,6 +246,79 @@ async function runNewEntryAutosave(page: Page): Promise<void> {
   });
 
   await assertSingleEntryWith(page, marker);
+}
+
+async function runWritingTimeSurvivesAutosaveAndCleanBack(page: Page): Promise<void> {
+  await resetApp(page);
+  await openEditor(page);
+  await installWritingClock(page);
+  const marker = `P0 writing time autosave ${Date.now()}`;
+  await typeDiaryText(page, marker);
+
+  await waitFor('writing-time entry autosave', async () => {
+    const entries = await getEntries(page);
+    return entries.some(entry => entry.status === 'active' && entry.content.includes(marker));
+  });
+  await sleep(1700);
+
+  await setWritingClockOffset(page, 2 * 60_000);
+  await page.click('.ProseMirror');
+  await setWritingClockOffset(page, 4 * 60_000);
+  await page.click('nav button:first-of-type');
+
+  await waitFor('writing time saved after clean back navigation', async () => {
+    const entries = await getEntries(page);
+    const entry = entries.find(item => item.status === 'active' && item.content.includes(marker));
+    return Boolean(
+      entry
+      && typeof entry.activeWritingSeconds === 'number'
+      && entry.activeWritingSeconds >= 239
+      && entry.activeWritingSeconds <= 241,
+    );
+  });
+}
+
+async function runWritingTimeCheckpointRecovery(page: Page): Promise<void> {
+  await resetApp(page);
+  const entryId = 'p0-writing-time-checkpoint';
+  const now = new Date().toISOString();
+  await page.evaluate((entry) => window.__diaryTestDb.seedEntry(entry), {
+    id: entryId,
+    content: '<p>checkpoint recovery baseline</p>',
+    images: [],
+    status: 'active',
+    diaryDate: now,
+    createdAt: now,
+    updatedAt: now,
+    activeWritingSeconds: 120,
+  } as StoredEntry & { createdAt: string });
+
+  await page.evaluate((id) => {
+    localStorage.setItem(`xiang_writing_time_checkpoint:v1:anonymous:${id}`, JSON.stringify({
+      version: 1,
+      entryId: id,
+      ownerId: null,
+      totalElapsedMs: 240_000,
+      observedAt: Date.now(),
+      segmentStartedAt: Date.now() - 120_000,
+      lastActiveAt: Date.now(),
+      endedAt: null,
+      endReason: null,
+    }));
+  }, entryId);
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await ensureDbHelpers(page);
+  await waitFor('writing-time checkpoint startup recovery', async () => {
+    const entries = await getEntries(page);
+    const entry = entries.find(item => item.id === entryId);
+    return entry?.activeWritingSeconds === 240;
+  });
+
+  const checkpointStillExists = await page.evaluate((id) => (
+    localStorage.getItem(`xiang_writing_time_checkpoint:v1:anonymous:${id}`) !== null
+  ), entryId);
+  if (checkpointStillExists) throw new Error('Expected recovered writing-time checkpoint to be cleared');
 }
 
 async function runNewEntryPageHide(page: Page): Promise<void> {
@@ -568,6 +665,7 @@ async function main(): Promise<void> {
   try {
     browser = await puppeteer.launch({
       headless: true,
+      ...(BROWSER_EXECUTABLE ? { executablePath: BROWSER_EXECUTABLE } : {}),
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     });
     const page = await browser.newPage();
@@ -578,6 +676,8 @@ async function main(): Promise<void> {
 
     const cases: Array<[string, () => Promise<void>]> = [
       ['new entry autosaves without tapping save', () => runNewEntryAutosave(page)],
+      ['writing time survives autosave and clean back navigation', () => runWritingTimeSurvivesAutosaveAndCleanBack(page)],
+      ['writing time checkpoint recovers on app startup', () => runWritingTimeCheckpointRecovery(page)],
       ['new entry pagehide flushes immediately', () => runNewEntryPageHide(page)],
       ['existing entry pagehide updates entry and keeps history', () => runExistingPageHideWithHistory(page)],
       ['repeated autosave/pagehide does not duplicate entries', () => runNoDuplicateFlush(page)],

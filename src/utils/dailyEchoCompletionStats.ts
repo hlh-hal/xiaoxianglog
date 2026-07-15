@@ -1,13 +1,17 @@
 import type { DiaryEntry } from '../services/diaryService';
+import {
+  WRITING_IDLE_TIMEOUT_MS,
+  closeSegment,
+  createWritingTimeState,
+  getWritingMinutesFromSeconds,
+  getWritingSeconds,
+  recordActivity,
+  type WritingTimeState,
+} from '../features/editor/writingTimeTracker';
 
-export const WRITING_ACTIVITY_WINDOW_MS = 180_000;
-
-export type WritingActivityState = {
-  elapsedMs: number;
-  lastInputAt: number | null;
-  sessionStartedAt: number | null;
-  sessionEndedAt: number | null;
-};
+// 保留旧导出名，避免已有内部调用一次性迁移；实际规则集中在 writingTimeTracker。
+export const WRITING_ACTIVITY_WINDOW_MS = WRITING_IDLE_TIMEOUT_MS;
+export type WritingActivityState = WritingTimeState;
 
 export type DailyEchoCompletionStats = {
   wordCount: number;
@@ -28,12 +32,7 @@ const TEMPLATE_LABELS = [
 const TEMPLATE_LABEL_PATTERN = TEMPLATE_LABELS.join('|');
 
 export function createWritingActivityState(elapsedMs = 0): WritingActivityState {
-  return {
-    elapsedMs: Math.max(0, elapsedMs),
-    lastInputAt: null,
-    sessionStartedAt: null,
-    sessionEndedAt: null,
-  };
+  return createWritingTimeState(elapsedMs);
 }
 
 export function recordWritingInput(
@@ -41,21 +40,7 @@ export function recordWritingInput(
   timestamp = Date.now(),
   activityWindowMs = WRITING_ACTIVITY_WINDOW_MS,
 ): WritingActivityState {
-  if (state.lastInputAt === null) {
-    return {
-      ...state,
-      lastInputAt: timestamp,
-      sessionStartedAt: state.sessionStartedAt ?? timestamp,
-      sessionEndedAt: null,
-    };
-  }
-
-  return {
-    elapsedMs: state.elapsedMs + Math.max(0, Math.min(timestamp - state.lastInputAt, activityWindowMs)),
-    lastInputAt: timestamp,
-    sessionStartedAt: state.sessionStartedAt ?? timestamp,
-    sessionEndedAt: null,
-  };
+  return recordActivity(state, timestamp, activityWindowMs);
 }
 
 export function pauseWritingActivity(
@@ -63,27 +48,15 @@ export function pauseWritingActivity(
   timestamp = Date.now(),
   activityWindowMs = WRITING_ACTIVITY_WINDOW_MS,
 ): WritingActivityState {
-  if (state.lastInputAt === null) return state;
-
-  return {
-    elapsedMs: state.elapsedMs + Math.max(0, Math.min(timestamp - state.lastInputAt, activityWindowMs)),
-    lastInputAt: null,
-    sessionStartedAt: state.sessionStartedAt,
-    sessionEndedAt: timestamp,
-  };
+  return closeSegment(state, 'interruption', timestamp, activityWindowMs);
 }
 
 export function getActiveWritingMinutes(state: WritingActivityState, timestamp = Date.now()): number {
-  const finalized = pauseWritingActivity(state, timestamp);
-  const activeMinutes = finalized.elapsedMs > 0 ? Math.round(finalized.elapsedMs / 60_000) : 0;
-  if (activeMinutes <= 0 && finalized.elapsedMs <= 0) return 0;
-  return Math.max(1, activeMinutes);
+  return getWritingMinutesFromSeconds(getWritingSeconds(state, timestamp));
 }
 
 export function getActiveWritingSeconds(state: WritingActivityState, timestamp = Date.now()): number {
-  const finalized = pauseWritingActivity(state, timestamp);
-  if (finalized.elapsedMs <= 0) return 0;
-  return Math.max(1, Math.ceil(finalized.elapsedMs / 1_000));
+  return getWritingSeconds(state, timestamp);
 }
 
 export function stripHtmlToVisibleText(html: string): string {
@@ -172,12 +145,11 @@ export function calculateDiaryStreak(entries: DiaryEntry[], currentEntry: DiaryE
 export function buildDailyEchoCompletionStats(
   entry: DiaryEntry,
   entries: DiaryEntry[],
-  writingActivity: WritingActivityState,
-  timestamp = Date.now(),
+  activeWritingSeconds = entry.activeWritingSeconds || 0,
 ): DailyEchoCompletionStats {
   return {
     wordCount: countDiaryTextCharacters(entry.content),
-    activeWritingMinutes: getActiveWritingMinutes(writingActivity, timestamp),
+    activeWritingMinutes: getWritingMinutesFromSeconds(activeWritingSeconds),
     streakDays: calculateDiaryStreak(entries, entry),
   };
 }

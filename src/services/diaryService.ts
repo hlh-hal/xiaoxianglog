@@ -27,6 +27,10 @@ import {
   type DiaryPostCommitEffect,
 } from '../features/diary/postCommitCoordinator';
 import { createIndexedDbDiaryRepository } from '../features/diary/indexedDbDiaryRepository';
+import {
+  readAllWritingTimeCheckpoints,
+  removeStoredWritingTimeCheckpoint,
+} from '../features/editor/writingTimeTracker';
 
 export type {
   ChatMessage,
@@ -603,6 +607,50 @@ function stampEntryUser(entry: DiaryEntry, userId: string | null = getCurrentUse
   return { ...entry, userId };
 }
 
+async function recoverWritingTimeCheckpoints(): Promise<number> {
+  const checkpoints = readAllWritingTimeCheckpoints();
+  if (checkpoints.length === 0) return 0;
+
+  const currentUserId = getCurrentUserId();
+  let recoveredCount = 0;
+
+  for (const { storageKey, checkpoint } of checkpoints) {
+    // 其他账号的检查点留给对应账号恢复；anonymous 检查点可归入当前未标记账号的本地日记。
+    if (checkpoint.ownerId && checkpoint.ownerId !== currentUserId) continue;
+
+    try {
+      const entry = await entryRepository.getById(checkpoint.entryId);
+      if (!entry) {
+        removeStoredWritingTimeCheckpoint(storageKey);
+        continue;
+      }
+      if (!isEntryForCurrentUser(entry, currentUserId)) continue;
+
+      const recoveredSeconds = checkpoint.totalElapsedMs > 0
+        ? Math.max(1, Math.ceil(checkpoint.totalElapsedMs / 1_000))
+        : 0;
+      if (recoveredSeconds <= (entry.activeWritingSeconds || 0)) {
+        removeStoredWritingTimeCheckpoint(storageKey);
+        continue;
+      }
+
+      await entryRepository.put(stampEntryUser({
+        ...entry,
+        activeWritingSeconds: recoveredSeconds,
+        updatedAt: new Date().toISOString(),
+      }, currentUserId));
+      removeStoredWritingTimeCheckpoint(storageKey);
+      recoveredCount += 1;
+    } catch (error) {
+      // 保留失败检查点，下次启动继续恢复，避免一次 IndexedDB 故障造成永久丢失。
+      console.warn('Recover writing time checkpoint failed:', error);
+    }
+  }
+
+  if (recoveredCount > 0) activeEntriesCache = null;
+  return recoveredCount;
+}
+
 function normalizeEntryForLocalAccount(entry: DiaryEntry, userId: string | null): DiaryEntry {
   return stampEntryUser({ ...entry, images: filterValidImages(entry.images) }, userId);
 }
@@ -947,6 +995,7 @@ export const diaryService = {
 
   async init(): Promise<void> {
     await initDB();
+    await recoverWritingTimeCheckpoints();
     await this.getActiveEntries();
     this.startAutoSync();
     this.triggerSync();

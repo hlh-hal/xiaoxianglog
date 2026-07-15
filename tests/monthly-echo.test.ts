@@ -19,6 +19,19 @@ import {
   safeTimeZone,
   safetyFallbackMonthlyEcho,
 } from '../server/src/lib/monthlyEchoUtils';
+import {
+  compileMonthlyEchoReport,
+  evidenceRegistryFromTraces,
+  injectCurrentNickname,
+  isObservableAction,
+  normalizeDailyTraceV2,
+  normalizeMonthlyArcV2,
+} from '../server/src/lib/monthlyEchoV2';
+import {
+  applyMonthlyEchoEdgeResistance,
+  clampMonthlyEchoPage,
+  resolveMonthlyEchoSwipe,
+} from '../src/utils/monthlyEchoPager';
 
 const monthlyEchoServiceSource = readFileSync(
   new URL('../server/src/lib/monthlyEchoService.ts', import.meta.url),
@@ -172,6 +185,32 @@ test('GET page-trigger and regenerate check pending job or running lock before e
   );
 });
 
+test('monthly generation state machine does not hide terminal failures or retry traces forever', () => {
+  assert.match(monthlyEchoServiceSource, /existing\.attemptCount >= MONTHLY_MAX_ATTEMPTS/);
+  assert.match(monthlyEchoServiceSource, /status: 'failed'[\s\S]+retryable: true[\s\S]+toMonthlyEchoUserError/);
+  assert.match(
+    monthlyEchoServiceSource,
+    /processPendingTraceNodes[\s\S]+status: \{ in: \['pending', 'stale'\] \}[\s\S]+monthKey: \{ in: backgroundMonthKeys \}/,
+  );
+  assert.match(monthlyEchoServiceSource, /interactiveJobs[\s\S]+monthly_echo[\s\S]+regenerate/);
+});
+
+test('scheduler is non-overlapping and interactive jobs run before global traces', () => {
+  const schedulerSource = readFileSync(new URL('../server/src/lib/monthlyEchoScheduler.ts', import.meta.url), 'utf8');
+  assert.match(schedulerSource, /if \(schedulerRunning\)/);
+  assert.match(
+    schedulerSource,
+    /const jobCount = await processPendingMonthlyJobs\(\);[\s\S]+const traceCount = await processPendingTraceNodes\(\);/,
+  );
+  assert.match(schedulerSource, /finally \{[\s\S]+schedulerRunning = false/);
+});
+
+test('frontend polls generating reports and renders failed reports without a spinner', () => {
+  const pageSource = readFileSync(new URL('../src/pages/MonthlyEcho.tsx', import.meta.url), 'utf8');
+  assert.match(pageSource, /payload\?\.status !== 'generating'[\s\S]+setTimeout[\s\S]+load\(true\)/);
+  assert.match(pageSource, /payload\?\.status === 'failed'[\s\S]+actionLabel=[\s\S]+handleRegenerate/);
+});
+
 test('month-end push path locks runtime and checks pushedAt before sending', () => {
   assert.match(
     monthlyEchoServiceSource,
@@ -185,4 +224,124 @@ test('month-end push path locks runtime and checks pushedAt before sending', () 
     monthlyEchoServiceSource,
     /monthlyEcho\.updateMany\(\{[\s\S]+where: \{ userId, monthKey, pushedAt: null \}/,
   );
+});
+
+test('DailyTraceNode V2 keeps only exact diary evidence and observable actions', () => {
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: ['今天我停下来写了三行字', 'AI 编造的原句'],
+    importantEvents: [{ text: '停下来记录自己', evidenceQuotes: ['今天我停下来写了三行字'] }],
+    emotionTone: [{ text: '疲惫', evidenceQuotes: ['今天我停下来写了三行字'] }],
+    actions: [
+      { action: '停下来写了三行字', scene: '很累的时候', iconHint: 'record', evidenceQuotes: ['今天我停下来写了三行字'] },
+      { action: '难过', scene: '', iconHint: 'other', evidenceQuotes: ['今天我停下来写了三行字'] },
+    ],
+    conflicts: [],
+    relationships: [],
+    smallChange: { text: '开始允许自己慢一点', evidenceQuotes: ['今天我停下来写了三行字'] },
+    unfinishedQuestions: [],
+    confidence: 0.9,
+  }, '今天我停下来写了三行字，虽然还是很累。', 'entry-1', '2026-06-08');
+
+  assert.equal(trace.schemaVersion, 2);
+  assert.deepEqual(trace.evidenceQuotes.map(item => item.quote), ['今天我停下来写了三行字']);
+  assert.equal(trace.actions.length, 1);
+  assert.equal(trace.actions[0].iconHint, 'record');
+  assert.equal(isObservableAction('难过'), false);
+});
+
+test('MonthlyArcDraft V2 resolves dates from valid evidence ids and drops invalid claims', () => {
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: ['我给妈妈打了电话', '晚上重新整理了计划'],
+    importantEvents: [],
+    emotionTone: [],
+    actions: [
+      { action: '给妈妈打了电话', scene: '晚饭后', iconHint: 'express', evidenceQuotes: ['我给妈妈打了电话'] },
+      { action: '重新整理了计划', scene: '晚上', iconHint: 'organize', evidenceQuotes: ['晚上重新整理了计划'] },
+    ],
+    conflicts: [], relationships: [], smallChange: null, unfinishedQuestions: [], confidence: 0.8,
+  }, '我给妈妈打了电话。晚上重新整理了计划。', 'entry-2', '2026-06-16');
+  const registry = evidenceRegistryFromTraces([trace]);
+  const evidenceIds = trace.evidenceQuotes.map(item => item.id);
+  const arc = normalizeMonthlyArcV2({
+    mainArc: { text: '开始把混乱变得可以处理', evidenceIds },
+    keyMoments: [
+      { title: '重新整理', event: '整理了计划', meaning: '事情重新变得可处理', evidenceIds: [evidenceIds[1]] },
+      { title: '伪造事件', event: '不存在的旅行', meaning: '无证据', evidenceIds: ['ev_missing'] },
+    ],
+    actionTrace: [{ action: '给妈妈打了电话', scene: '晚饭后', meaning: '主动表达', iconHint: 'express', evidenceIds: [evidenceIds[0]] }],
+    emotionArc: { text: '从混乱到稍微稳定', evidenceIds },
+    recurringPattern: null,
+    sideThemes: [],
+    growthDirection: { text: '开始用具体行动处理混乱', evidenceIds },
+    finalInsight: { text: '细小行动也有重量', evidenceIds },
+    letter: [{ text: '你开始做一些真实的小事。', evidenceIds }],
+    confidence: 0.8,
+  }, registry);
+
+  assert.equal(arc.keyMoments.length, 1);
+  assert.equal(arc.keyMoments[0].date, '2026-06-16');
+  assert.equal(arc.actionTrace[0].date, '2026-06-16');
+});
+
+test('seven-page report keeps real partial data, returns fallback state, and injects current nickname', () => {
+  const report = compileMonthlyEchoReport('2026-06', 2, {
+    schemaVersion: 2,
+    mainArc: null,
+    keyMoments: [],
+    actionTrace: [],
+    emotionArc: null,
+    recurringPattern: null,
+    sideThemes: [],
+    growthDirection: null,
+    finalInsight: null,
+    letter: [],
+    confidence: 0.2,
+  });
+  const named = injectCurrentNickname(report, '阿树');
+
+  assert.equal(named.pages.entrance.monthEn, 'June');
+  assert.equal(named.pages.entrance.diaryCount, 2);
+  assert.equal(named.pages.moments.contentState, 'fallback');
+  assert.equal(named.pages.actions.contentState, 'fallback');
+  assert.match(named.pages.moments.fallbackMessage || '', /不够|不替你下结论/);
+  assert.equal(named.pages.letter.salutation, '亲爱的阿树：');
+});
+
+test('monthly echo H5 pager advances from distance or velocity and never crosses page bounds', () => {
+  assert.deepEqual(resolveMonthlyEchoSwipe({
+    currentIndex: 2,
+    pageCount: 7,
+    deltaY: -90,
+    velocityY: -0.2,
+    viewportHeight: 844,
+  }), { targetIndex: 3, shouldAdvance: true });
+  assert.deepEqual(resolveMonthlyEchoSwipe({
+    currentIndex: 2,
+    pageCount: 7,
+    deltaY: 18,
+    velocityY: 0.8,
+    viewportHeight: 844,
+  }), { targetIndex: 1, shouldAdvance: true });
+  assert.deepEqual(resolveMonthlyEchoSwipe({
+    currentIndex: 2,
+    pageCount: 7,
+    deltaY: -30,
+    velocityY: -0.1,
+    viewportHeight: 844,
+  }), { targetIndex: 2, shouldAdvance: false });
+  assert.deepEqual(resolveMonthlyEchoSwipe({
+    currentIndex: 6,
+    pageCount: 7,
+    deltaY: -140,
+    velocityY: -1,
+    viewportHeight: 844,
+  }), { targetIndex: 6, shouldAdvance: false });
+  assert.equal(clampMonthlyEchoPage(-3, 7), 0);
+  assert.equal(clampMonthlyEchoPage(10, 7), 6);
+});
+
+test('monthly echo H5 pager applies resistance only beyond the first and last pages', () => {
+  assert.equal(applyMonthlyEchoEdgeResistance(80, 2, 7), 80);
+  assert.ok(applyMonthlyEchoEdgeResistance(80, 0, 7) < 20);
+  assert.ok(applyMonthlyEchoEdgeResistance(-80, 6, 7) > -20);
 });

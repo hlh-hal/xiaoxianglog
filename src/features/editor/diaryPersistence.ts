@@ -11,6 +11,8 @@ export type PersistReason =
   | 'visibility'
   | 'pagehide'
   | 'freeze'
+  | 'idle-timeout'
+  | 'native-background'
   | 'unmount'
   | 'abandon';
 

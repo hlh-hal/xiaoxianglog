@@ -1,4 +1,6 @@
 import { useEffect } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
+import type { PluginListenerHandle } from '@capacitor/core';
 import type { DiaryEntryCreateInput } from '../diary/model';
 import { diaryService } from '../../services/diaryService';
 import { settingsService } from '../../services/settingsService';
@@ -153,14 +155,24 @@ async function sendDailyReminderIfNeeded(): Promise<void> {
 
 interface InteractionNotification {
   id: string;
-  type: 'friend_request' | 'like' | 'comment' | string;
+  type: 'friend_request' | 'like' | 'comment' | 'daily_echo_ready' | string;
   content?: string | null;
   isRead?: boolean;
   refPostId?: string | null;
+  refDiaryId?: string | null;
   fromUser?: { name?: string | null };
 }
 
-function buildInteractionNotification(item: InteractionNotification) {
+export function buildInteractionNotification(item: InteractionNotification) {
+  if (item.type === 'daily_echo_ready') {
+    return {
+      title: '每日回声已生成',
+      body: item.content?.trim() || '小象已经读完今天的故事，来看看吧。',
+      tag: `xiang-daily-echo-ready-${item.id}`,
+      url: item.refDiaryId ? `/editor?id=${encodeURIComponent(item.refDiaryId)}` : '/inbox',
+    };
+  }
+
   const senderName = item.fromUser?.name || '有新动态';
   if (item.type === 'friend_request') {
     if (!notificationPreferenceStore.isEnabled(NOTIFICATION_STORAGE_KEYS.friendRequest)) return null;
@@ -194,10 +206,8 @@ function buildInteractionNotification(item: InteractionNotification) {
 
 async function sendInteractionNotifications(): Promise<void> {
   if (!isAuthenticated()) return;
-  if (!notificationPreferenceStore.isEnabled(NOTIFICATION_STORAGE_KEYS.friendRequest)
-    && !notificationPreferenceStore.isEnabled(NOTIFICATION_STORAGE_KEYS.social)) return;
 
-  const notifications = await api.get<InteractionNotification[]>('/notifications?type=friend_request,like,comment');
+  const notifications = await api.get<InteractionNotification[]>('/notifications?type=friend_request,like,comment,daily_echo_ready');
   const notifiedIds = interactionNotificationStore.getIds();
   let changed = false;
   for (const item of notifications || []) {
@@ -271,6 +281,8 @@ export function useAppBootstrap(): void {
   }, []);
 
   useEffect(() => {
+    let disposed = false;
+    let appStateListener: PluginListenerHandle | null = null;
     const poll = () => {
       void sendInteractionNotifications().catch(error => console.warn('Failed to poll interaction notifications:', error));
     };
@@ -280,9 +292,17 @@ export function useAppBootstrap(): void {
       if (!document.hidden) poll();
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    void CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+      if (isActive) poll();
+    }).then((listener) => {
+      if (disposed) void listener.remove();
+      else appStateListener = listener;
+    }).catch(() => undefined);
     return () => {
+      disposed = true;
       window.clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      void appStateListener?.remove();
     };
   }, []);
 }

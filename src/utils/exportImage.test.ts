@@ -17,7 +17,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { JSDOM } from 'jsdom';
 import {
+  __materializeExportListMarkers,
   __normalizeColor,
   __replaceModernColorFunctions,
   pickExportScale,
@@ -77,6 +79,28 @@ function test(name: string, fn: () => void): void {
 // -------------------- Tests --------------------
 
 console.log('\nexportImage.ts unit tests\n');
+
+test('ordered-list markers are materialized for export and restored afterwards', () => {
+  const dom = new JSDOM(`
+    <div id="card">
+      <div data-export-content="true">
+        <ol start="3"><li>甲</li><li value="7">乙</li><li>丙</li></ol>
+        <ol reversed><li>一</li><li>二</li></ol>
+      </div>
+    </div>
+  `);
+  const card = dom.window.document.querySelector<HTMLElement>('#card');
+  assert.ok(card);
+
+  const restore = __materializeExportListMarkers(card);
+  const markers = Array.from(card.querySelectorAll('li')).map((item) =>
+    item.getAttribute('data-export-list-marker'),
+  );
+  assert.deepEqual(markers, ['3.', '7.', '8.', '2.', '1.']);
+
+  restore();
+  assert.equal(card.querySelector('[data-export-list-marker]'), null);
+});
 
 console.log('__normalizeColor: oklch → rgb');
 test('oklch(0.628 0.258 29.23) ≈ red rgb(255, 0, 0)', () => {

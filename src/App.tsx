@@ -13,6 +13,14 @@ import Walk from './pages/Walk';
 import OnThisDay from './pages/OnThisDay';
 import AnnualEcho from './pages/AnnualEcho';
 import MonthlyEcho from './pages/MonthlyEcho';
+import MonthlyEchoDesignDemo from './pages/MonthlyEchoDesignDemo';
+import MonthlyEchoStoryDesignDemo from './pages/MonthlyEchoStoryDesignDemo';
+import MonthlyEchoMapDesignDemo from './pages/MonthlyEchoMapDesignDemo';
+import MonthlyEchoMomentsDesignDemo from './pages/MonthlyEchoMomentsDesignDemo';
+import MonthlyEchoActionsDesignDemo from './pages/MonthlyEchoActionsDesignDemo';
+import MonthlyEchoThemeDesignDemo from './pages/MonthlyEchoThemeDesignDemo';
+import MonthlyEchoLetterDesignDemo from './pages/MonthlyEchoLetterDesignDemo';
+import MonthlyEchoV2DesignDemo from './pages/MonthlyEchoV2DesignDemo';
 import Trash from './pages/Trash';
 import Search from './pages/Search';
 import Login from './pages/Login';
@@ -95,6 +103,14 @@ export default function App() {
           <Route path="/editor" element={<Editor />} />
           <Route path="/friends" element={<FriendList />} />
           <Route path="/first-run/local-vault" element={<FirstRunVaultOnboarding />} />
+          <Route path="/monthly-echo-design-demo" element={<MonthlyEchoDesignDemo />} />
+          <Route path="/monthly-echo-story-design-demo" element={<MonthlyEchoStoryDesignDemo />} />
+          <Route path="/monthly-echo-map-design-demo" element={<MonthlyEchoMapDesignDemo />} />
+          <Route path="/monthly-echo-moments-design-demo" element={<MonthlyEchoMomentsDesignDemo />} />
+          <Route path="/monthly-echo-actions-design-demo" element={<MonthlyEchoActionsDesignDemo />} />
+          <Route path="/monthly-echo-theme-design-demo" element={<MonthlyEchoThemeDesignDemo />} />
+          <Route path="/monthly-echo-letter-design-demo" element={<MonthlyEchoLetterDesignDemo />} />
+          <Route path="/monthly-echo-v2-design-demo" element={<MonthlyEchoV2DesignDemo />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

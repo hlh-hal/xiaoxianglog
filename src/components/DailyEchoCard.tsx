@@ -16,12 +16,15 @@ type DailyEchoActions = {
 type DailyEchoCardProps = DailyEchoActions & {
   echo?: DailyEcho;
   isGenerating?: boolean;
+  streamingContent?: string;
+  isRetrying?: boolean;
 };
 
 type DailyEchoFloatingCardProps = DailyEchoCardProps & {
   hidden?: boolean;
   completionStats?: DailyEchoCompletionStats | null;
   onCloseDiary?: () => void;
+  openRequestKey?: string;
 };
 
 const DAILY_ECHO_MASCOT_SRC = '/icons/xiaoxiang-echo-mascot-float.png';
@@ -71,6 +74,8 @@ function ElephantIllustration({ className = '' }: { className?: string }) {
 function DailyEchoPanel({
   echo,
   isGenerating = false,
+  streamingContent = '',
+  isRetrying = false,
   isSavingImage = false,
   onRegenerate,
   onDismiss,
@@ -79,25 +84,38 @@ function DailyEchoPanel({
 }: DailyEchoCardProps) {
   const isSaved = echo?.status === 'saved';
   const isFailed = echo?.status === 'failed';
-  const parsedEcho = parseDailyEchoContent(echo?.content || '');
-  const quote = parsedEcho.quote;
-  const content = getCompleteEchoText(parsedEcho.body);
+  const parsedEcho = parseDailyEchoContent(isGenerating ? streamingContent : echo?.content || '');
+  const quote = isGenerating && !streamingContent.trim()
+    ? '小象正在为今天提炼一句回声'
+    : parsedEcho.quote;
+  const content = isGenerating ? parsedEcho.body.trim() : getCompleteEchoText(parsedEcho.body);
 
   return (
     <div className="flex max-h-[min(78vh,680px)] flex-col overflow-hidden rounded-[18px] border border-[#446733]/15 bg-[#FFFDF7]/95 px-4 py-3.5 shadow-[0_10px_30px_rgba(68,103,51,0.10)] backdrop-blur-sm">
       <div className="mb-3 shrink-0">
         <div className="rounded-[14px] bg-[#446733]/8 px-4 py-3 text-center">
           <p data-testid="daily-echo-quote" className="font-serif text-[17px] font-semibold leading-7 text-[#31402E]">
-            {isGenerating ? '小象正在为今天提炼一句回声' : quote}
+            {quote}
           </p>
         </div>
       </div>
 
       {isGenerating ? (
-        <div className="flex items-center gap-3 py-2 text-[13px] leading-6 text-[#5F6B57]">
-          <span className="h-4 w-4 rounded-full border-2 border-[#446733]/30 border-t-[#446733] animate-spin" />
-          <span>小象正在轻轻读完这一页...</span>
-        </div>
+        content ? (
+          <p
+            data-testid="daily-echo-streaming-content"
+            aria-live="polite"
+            className="min-h-0 max-h-[58vh] overflow-y-auto whitespace-pre-wrap pr-1 text-[13px] leading-6 text-[#3F4A3A] [scrollbar-width:thin]"
+          >
+            {content}
+            <span className="ml-1 inline-block h-4 w-0.5 translate-y-0.5 animate-pulse bg-[#446733]/55" aria-hidden="true" />
+          </p>
+        ) : (
+          <div className="flex items-center gap-3 py-2 text-[13px] leading-6 text-[#5F6B57]" aria-live="polite">
+            <span className="h-4 w-4 rounded-full border-2 border-[#446733]/30 border-t-[#446733] animate-spin" />
+            <span>{isRetrying ? '小象正在换个角度，再读一遍…' : '已在后台生成，离开页面也不会中断。'}</span>
+          </div>
+        )
       ) : isFailed ? (
         <p className="text-[13px] leading-6 text-[#5F6B57]">
           {content || '这次小象没有读完整，点换一句再试。'}
@@ -222,6 +240,7 @@ export function DailyEchoFloatingCard({
   hidden = false,
   completionStats,
   onCloseDiary,
+  openRequestKey,
   ...actions
 }: DailyEchoFloatingCardProps) {
   const [mode, setMode] = useState<'completion' | 'peek' | 'docked' | 'expanded'>('docked');
@@ -250,6 +269,11 @@ export function DailyEchoFloatingCard({
   useEffect(() => {
     if (hidden) setMode('docked');
   }, [hidden]);
+
+  useEffect(() => {
+    if (hidden || !openRequestKey) return;
+    setMode('expanded');
+  }, [hidden, openRequestKey]);
 
   if (hidden || (!completionStats && !isGenerating && (!echo || echo.status === 'dismissed'))) return null;
 

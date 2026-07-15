@@ -1,5 +1,31 @@
 # 小象日志
 
+## 2026-07-12 月度回声 V2 动态生成与七页渲染
+
+- 月度回声生成链路升级为 `DailyTraceNode V2 -> MonthlyArcDraft V2 -> renderPayload V2`。每日节点只分析日记正文，原句必须连续匹配对应日记并生成稳定 `evidenceId`；月度聚合只能引用有效证据 ID，日期由后端从证据节点确定。
+- `actionTrace` 只接受可观察行动，使用受控 `iconHint`；情绪不能单独作为行动。关键时刻最多 3 条，行动轨迹目标 4-6 条，证据不足时按页返回 `partial/fallback`，不再使用示例日期或示例文案补位。
+- Prisma 为 DailyTraceNode、MonthlyArcDraft、MonthlyEcho 增加版本化 JSON 字段，并保留旧字段兼容。GET 会对旧版本月报按需重新生成，回声信称呼读取用户当前昵称。
+- 七页正式页面使用最终设计图派生的无字底板，书本、花、照片、胶带、圆环、路径等装饰保持原图位置；所有业务文案改为 React/HTML 渲染，不再把动态文案盖在带字截图上。底板可通过 `python scripts/build_monthly_echo_textless_templates.py` 重建。
+- 本地 SQLite 已备份为 `server/prisma/data/xiaoxiang.db.pre-monthly-echo-v2-20260712-112101.bak`，并执行 `server npm run db:push` 与 Prisma Client 生成。
+- 验证通过：`npm run test:monthly-echo`、`npm run lint`、根目录 `npm run build`、`server npm run build`；七页在 `390x844` 视口截图检查，无横向溢出，页序为 0/844/1688/2532/3376/4220/5064。
+- 本地满数据视觉预览：`http://127.0.0.1:3000/monthly-echo-v2-design-demo`。正式入口：`http://127.0.0.1:3000/monthly-echo?monthKey=YYYY-MM`。线上后端仍需部署 schema 与新服务后才能真实使用。
+
+## 2026-07-12 月度回声永久生成状态修复
+
+- 根因不是单纯模型慢：前端只请求一次且不轮询；scheduler 的 `setInterval` tick 可重叠；全局历史 trace 在交互月报前执行；failed trace 每分钟无限重试；attempt 已耗尽的任务又被 GET 改回 pending，但 worker 永远不会再消费。
+- 前端生成中每 4 秒静默轮询，后端返回真实 `completed/total/attempt` 进度；终态失败不再显示 spinner，而是展示安全错误原因和“重新生成”按钮。
+- scheduler 增加进程内互斥，交互 `monthly_echo/regenerate` 优先于后台任务；failed trace 不进入全局自动重试；后台 trace 默认每 tick 仅 1 条，且只预生成当前月与上月，更早月份按用户打开时生成。
+- job 成功标准收紧为必须落库 `ready/pushed` 报告；attempt 耗尽的 pending/running 会自愈为 failed。显式重新生成会重置该次 job attempts，并将对应月份 failed trace 变为 stale 后重试。
+- 修复后 `2026-07` 后端读取确认 `status=ready`、`renderPayload.schemaVersion=2`。完整 65 秒调度观测仅新增 1 次 AI 调用，旧版本调用风暴已消失。
+
+## 2026-07-11 每日回声后台生成与流式恢复
+
+- 每日回声已实现持久任务、SSE 预览、轮询兜底、刷新/重进恢复、数据库级重复任务防护和原子站内通知；编辑器离开只停止监听，不取消服务端任务。
+- 任务结果不直接写服务端日记，由前端按 `sourceHash` 校验后写回 IndexedDB 并走原同步，避免覆盖未同步正文。任务输入终态清理，服务端结构化日志不含日记正文。
+- Android/PWA 活跃态完成提醒复用现有本地通知通道；本期明确不接 EMAS、FCM 或国产厂商通道，App 强杀后只保证结果与站内通知不丢。
+- 生产开关 `DAILY_ECHO_BACKGROUND_ENABLED` 默认关闭；尚未部署。上线需备份 SQLite、同步 Prisma schema、部署 SSE Nginx 配置、设置开关并重启，再验证 health build/capability 与真实 CPAMC 流式调用。
+- 完整测试、前后端构建和纯净 SQLite schema push 已通过；详细记录见 `vault/notes/daily/2026-07-11.md`。
+
 ## 2026-06-30 MVP 架构最小重构
 
 - 日记模型、同步 DTO、IndexedDB Repository 和提交后副作用协调器已从 `diaryService` 拆出，旧 API 保持兼容；日记本地提交不再被 Vault、云同步等可选功能失败阻断。
@@ -280,3 +306,70 @@
 - 回归验证命令：`npm run lint`、`npm run build`、`npx tsx src/utils/exportImage.test.ts`、`npm run test:exploration`、`npm run test:export-typography`、`npm run test:export-mojibake`、`npm run test:preservation`、`npm run test:preservation:verify`。
 - Android APK 实测证据：当前代码构建并安装 `D:\小象日志\android\app\build\outputs\apk\debug\app-debug.apk` 到 `Pixel_8` 模拟器；真实导出文件包括 `小象日志_2026-05-20 (1).png`、`小象日志_2026-06-29 (2).png`、`小象日志_2026-06-29 (3).png`。其中 `(3)` 是 `font_scale=1.3` 下导出，换行改变但无重叠。
 - 相关详细记录：`vault/notes/daily/2026-06-21-diary-export-overlap-fix.md`。
+- 已正式发版为 Android `1.0.21 / versionCode 23`，更新公告聚焦“导出文字不重叠、背景图更稳”，并同步到自有服务器更新清单。
+## 2026-07-01 月之回响封面设计还原页
+- 新增独立预览路由 `/monthly-echo-design-demo`，用于把用户提供的月之回响封面截图还原成项目内可运行的 HTML/CSS 页面，不改动现有 `/monthly-echo` 业务逻辑。
+- 新增页面文件 `src/pages/MonthlyEchoDesignDemo.tsx`，按原图 947×1661 比例做固定舞台缩放。
+- 用户先后指出“书本和右上圆圈差异很大”以及文字区遮罩形成突出的块。最终保留整张参考图 `public/monthly-echo/monthly-echo-cover-reference.png` 作为单一视觉资产，移除所有纸面遮罩、阴影、噪点和重复可见文字；文字语义通过屏幕阅读器专用结构保留。
+- 验证已通过：`npm run lint`，以及本地 `npm run dev` 后用 Puppeteer + 本机 Chrome 打开 `http://127.0.0.1:3000/monthly-echo-design-demo` 做实际截图检查。
+- 视觉验证画布为 947×1661，书本、圆环、文字和纸张纹理均与参考图保持同层，不再出现块状边界。若后续要求文字可编辑或内容动态化，需要先取得无字底图和独立书本/花束/圆环素材。
+- 已将该封面正式替换到 `/monthly-echo` 的第一屏入口，使用 `background-size: contain` 保持 947×1661 原始比例、不拉伸书本与圆环；点击底部箭头或从箭头区域直接上滑均可进入第二屏，其余月度回响数据、内容页和海报保存流程不变。
+- 手机视口回归：Puppeteer 在 390×844 下模拟 ready 数据，上滑与点击后的滚动位置均为 `844px`；`npm run lint`、`npm run build` 通过。
+- Android 验证时发现线上 `/api/monthly-echo` 返回 404，且新装调试包没有登录 token。为避免接口状态挡住入口视觉，`MonthlyEcho.tsx` 已改为始终把封面作为第一屏；加载、空数据、未登录或请求失败状态统一留在第二屏，成功月报的原有 6 屏流程不变。
+- 已重新执行 `npm run android:sync`、`:app:installDebug` 并在 Pixel_8 模拟器实测：首页正常显示封面；浏览器模拟 404 时第一屏无状态文案，上滑至 `844px` 后第二屏显示请求失败。真实月报内容仍依赖线上后端完成 schema 同步、部署和重启。
+
+## 2026-07-03 月度回响叙事页设计还原
+- 新增独立预览路由 `/monthly-echo-story-design-demo` 和页面 `src/pages/MonthlyEchoStoryDesignDemo.tsx`，用于展示“六月的回响”叙事页；2026-07-10 已正式接入 `/monthly-echo` ready 状态的第二页。
+- 最初按 245×735 低清截图做 HTML/CSS 重绘；用户随后提供 941×1672 高清成图并强调清晰度，最终改为把 `public/monthly-echo/monthly-echo-story-reference.png` 作为单一视觉资产，删除低清植物裁片、重绘文字和水彩层，避免二次栅格化与纹理偏差。
+- 页面按 941×1672 原始比例使用响应式固定舞台完整显示；保留屏幕阅读器专用的标题、月份、叙事正文和结语语义。
+- 已验证原始 941×1672 和 390×844、2×像素密度手机视口；手机画布为 390×693，保持比例、水平居中且不裁切。`npm run lint`、`npm run build` 通过。
+- 正式月度回声的成功路径现为“封面 → 高清叙事页 → 三个关键时刻 → 行动轨迹 → 反复主题 → 回声信”；旧“本月地图”派生数据和样式暂时保留但不渲染，便于回滚。
+- 第二页使用 `object-fit: contain` 保持高清图比例，底部透明按钮点击进入第三页，纵向上滑沿用原滚动容器。Puppeteer 在 390×844、2×像素密度下验证：第二页 `scrollTop=844`，点击或上滑后均为 `1688`；加载、失败或空数据路径固定为“封面 → 高清叙事页 → 状态页”，保证第二页不被接口状态占用。
+
+## 2026-07-10 写作时间统计状态机修复
+
+- 已修复 1.5 秒自动保存截断 3 分钟思考窗口的问题：自动保存只投影累计时长，完成、退出、后台、页面隐藏、系统中断和空闲超时才关闭片段。
+- `activeWritingSeconds` 仍是唯一云端累计字段，不改 Prisma/API；本地增加 15 秒检查点，App 异常终止后启动时按较大值恢复，不计入关机空档。
+- 返回键现在会单独检查待落盘写作时间，正文已自动保存也不会直接漏掉最后片段；完成卡统一读取保存后的累计秒数。
+- 新增 `npm run test:writing-time`，完整 `npm test`、lint、build、编辑器真实自动保存 E2E 和写作时间浏览器验证均通过。Android 实体设备后台/锁屏仍待人工验收，详细记录见 `vault/notes/daily/2026-07-10.md`。
+
+## 2026-07-11 月度回声地图页设计还原
+
+- 新增独立预览路由 `/monthly-echo-map-design-demo` 和页面 `src/pages/MonthlyEchoMapDesignDemo.tsx`，展示“如果把这个月看成一张地图”页面；同日已接入正式 `/monthly-echo` 的第三页。
+- 使用用户提供的 941×1672 高清图 `public/monthly-echo/monthly-echo-map-reference.png` 作为单一视觉资产，完整保留路线、节点、植物、水彩、纸张纹理和文字清晰度；页面补充屏幕阅读器可读的标题、主线、三个节点和总结文本。
+- 画布按 941×1672 原始比例等比完整显示。已验证原始尺寸及 390×844、2×像素密度手机视口；手机画布为 390×693，水平居中且无裁切。
+- 正式成功路径现为“封面 → 高清叙事页 → 高清地图页 → 三个关键时刻 → 行动轨迹 → 反复主题 → 回声信”。加载、空数据或接口失败时固定为“封面 → 高清叙事页 → 高清地图页 → 状态页”，不让网络状态抢占前三页。
+- 浏览器模拟 ready 数据确认地图页为 `scrollTop=1688`，地图箭头进入第四页 `scrollTop=2532`；模拟接口 404 时，地图页仍为第三页且状态不可见，第四页显示失败状态。`npm run build` 通过；`npm run lint` 当前被无关的 Prisma `DailyEchoJob` 生成客户端类型缺失阻断，待重新生成 Prisma 客户端后复查。
+
+## 2026-07-11 月度回声关键时刻页设计还原
+
+- 新增独立预览路由 `/monthly-echo-moments-design-demo` 和页面 `src/pages/MonthlyEchoMomentsDesignDemo.tsx`，展示“这个月，小象想帮你留下三个时刻”。2026-07-12 已将这张高清图正式接入 `/monthly-echo` 的第四页，替换动态关键时刻渲染；旧数据与辅助函数仍保留，便于安全回滚。
+- 使用用户提供的 941×1672 高清图 `public/monthly-echo/monthly-echo-moments-reference.png` 作为单一视觉资产，保留三张照片、回形针、胶带、纸张边缘与纹理；页面额外提供屏幕阅读器可读的三条时刻和总结语义。
+- 已验证原始尺寸及 390×844、2×像素密度手机视口；手机画布为 390×693，水平居中且无裁切。正式成功路径现为“封面 → 高清叙事页 → 高清地图页 → 高清关键时刻页 → 行动轨迹 → 反复主题 → 回声信”；加载、空数据或接口失败时固定为“封面 → 高清叙事页 → 高清地图页 → 高清关键时刻页 → 状态页”。浏览器确认第四页 `scrollTop=2532`，底部箭头进入第五页 `scrollTop=3376`；模拟接口 404 时仍可显示第四页，并进入失败状态页。`npm run build` 通过；`npm run lint` 仍受无关的 Prisma `DailyEchoJob` 生成客户端类型缺失阻断。
+
+## 2026-07-12 月度回声行动轨迹页设计还原
+
+- 新增独立预览路由 `/monthly-echo-actions-design-demo` 和页面 `src/pages/MonthlyEchoActionsDesignDemo.tsx`，展示“这个月，你不是只是在想。”的行动轨迹页；同日已替换正式 `/monthly-echo` 的第五页，旧动态行动轨迹实现保留以便回滚。
+- 使用用户提供的 941×1672 高清图 `public/monthly-echo/monthly-echo-actions-reference.png` 作为单一视觉资产，保留时间轴、图标、干花、胶带、小象插画和纸张纹理；页面同时提供屏幕阅读器可读的五项行动记录和总结文本。
+- 已在 390×844、2×像素密度浏览器视口验证，画布为 390×693，整页无溢出、无裁切。成功与 404 降级路径均在 `scrollTop=3376` 展示第五页，底部箭头进入第六页 `scrollTop=4220`；失败状态页位于第五页之后。`npm run build` 通过。
+
+## 2026-07-12 月度回声反复主题页设计还原
+
+- 新增独立预览路由 `/monthly-echo-theme-design-demo` 和页面 `src/pages/MonthlyEchoThemeDesignDemo.tsx`，并将用户提供的 `public/monthly-echo/monthly-echo-theme-reference.png` 正式替换 `/monthly-echo` 的第六页。
+- 视觉资产保持原始 941×1672 比例，完整保留圆环、水彩纸条、时间线、胶带和纸张纹理。外层画布使用纸张色，只保留截图本身的圆角黑边，避免额外出现不属于设计稿的黑色留白。
+- 成功路径现为“封面 → 叙事 → 地图 → 关键时刻 → 行动轨迹 → 反复主题 → 回声信”；失败、加载和空数据路径也保留前六张视觉页后才显示状态页。浏览器在 390×844、2×像素密度下验证：第六页为 `scrollTop=4220`，底部箭头进入第七页 `scrollTop=5064`；模拟 404 路径顺序相同。`npm run build` 通过。
+
+## 2026-07-12 月度回声回声信页设计还原
+
+- 新增独立预览路由 `/monthly-echo-letter-design-demo` 和页面 `src/pages/MonthlyEchoLetterDesignDemo.tsx`，并将用户提供的 `public/monthly-echo/monthly-echo-letter-reference.png` 正式替换 `/monthly-echo` 的第七页。
+- 使用原始 941×1672 高分辨率图，完整保留信纸、月夜照片、干花、胶带、水彩总结、签名与底部箭头。第七页是阅读终点，箭头只作为设计稿视觉元素，不增加未定义的点击跳转。
+- 在 390×844、2×像素密度浏览器视口中，预览画布为 390×693 且无溢出；正式成功和模拟 404 路径均在 `scrollTop=5064` 显示第七页，后者的状态页位于其后。当前正式月度回声已完整使用七张高清视觉页；`npm run build` 通过。
+
+## 2026-07-15 月度回声动态生成 V2.2 与 Android 验收
+
+- 七页正式月度回声已改为保留原视觉资产、由 HTML/CSS 注入真实日志生成文字；前端只渲染后端确定性编译的结构化 JSON，不再把整张带示例文字的图片覆盖到动态内容上。
+- 月度信固定采用 6 段证据结构，目标 350–430 个中文字符并保留 2–3 个真实日期锚点；昵称在读取报告时动态注入。证据不足时宁可缩短，不允许补写虚构日期、事件或原句。
+- 月报队列现在按 `promptVersion` 隔离。prompt 版本变化会重置旧任务重试预算；聚合 AI 输出上限提高到 4200 tokens，避免 JSON 截断造成看似“生成很久”的失败循环。
+- 本地 2026-07 报告已真实跑通，当前任务版本为 `monthly_arc_v2_2|monthly_echo_render_v2_2`，生成 6 段、356 字、3 个日期锚点；任务一次成功。
+- Android `Pixel_8` 模拟器已完成七页 H5 验证，第七页签名和小象图标完整，底部绿色残影已消除。复测地址为 `http://127.0.0.1:3000/monthly-echo?monthKey=2026-07`，需要保持前端 3000、后端 3001 并执行两条 `adb reverse`。
+- 验证命令：`npm run test:monthly-echo`、`npm run lint`、`npm run build`、`cd server && npm run build`、`git diff --check`。

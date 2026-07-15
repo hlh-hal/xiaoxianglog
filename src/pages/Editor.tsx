@@ -7,6 +7,7 @@ import type { DailyEcho, DiaryEntry, DiaryTemplate, EditHistory } from '../featu
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { useEditor, EditorContent } from '@tiptap/react';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Node as TiptapNode, mergeAttributes } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
@@ -24,7 +25,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { buildExportFontEmbedCss, sanitizeModernColors, measureExportCard, pickExportScale, decodeErrorReason, renderExportPng } from '../utils/exportImage';
 import { canUseAndroidImageSaver, savePngDataUrlToAndroidGallery } from '../services/androidImageSaver';
 import { DiaryTheme, allThemes } from '../types/theme';
-import { getAccessToken, isAuthenticated } from '../services/apiClient';
+import { ApiError, getAccessToken, isAuthenticated } from '../services/apiClient';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
@@ -38,10 +39,6 @@ import {
   type DailyEchoCompletionStats,
   buildDailyEchoCompletionStats,
   countDiaryTextCharacters,
-  createWritingActivityState,
-  getActiveWritingSeconds,
-  pauseWritingActivity,
-  recordWritingInput,
 } from '../utils/dailyEchoCompletionStats';
 import { parseDailyEchoContent } from '../utils/dailyEchoQuote';
 import { createAdjustedDiaryDateKey, parseDiaryDateKey } from '../utils/diaryDate';
@@ -52,15 +49,47 @@ import {
 } from '../features/editor/diaryPersistence';
 import { useDiaryLifecycleAutosave } from '../features/editor/useDiaryLifecycleAutosave';
 import {
+  WRITING_CHECKPOINT_INTERVAL_MS,
+  WRITING_IDLE_TIMEOUT_MS,
+  closeSegment,
+  createWritingTimeCheckpoint,
+  createWritingTimeState,
+  getWritingSeconds,
+  readWritingTimeCheckpoint,
+  recordActivity,
+  removeWritingTimeCheckpoint,
+  restoreCheckpoint,
+  writeWritingTimeCheckpoint,
+  type WritingSegmentEndReason,
+} from '../features/editor/writingTimeTracker';
+import {
+  buildDailyEchoJobInput,
   generateDailyEchoForEntry,
   getDiaryPlainText,
+  markDailyEchoMemoryEntriesUsed,
   refreshDailyEchoMemory,
 } from '../features/daily-echo/dailyEchoCoordinator';
+import {
+  createDailyEchoJob,
+  createDailyEchoSourceHash,
+  getDailyEchoJob,
+  getLatestDailyEchoJob,
+  isDailyEchoJobActive,
+  isDailyEchoJobTerminal,
+  watchDailyEchoJob,
+  type DailyEchoJobSnapshot,
+} from '../services/dailyEchoService';
+import {
+  checkBrowserNotificationPermission,
+  requestBrowserNotificationPermission,
+} from '../utils/notify';
 import { publishDiaryPost } from '../features/share/communityPublisher';
 import {
   DAILY_ECHO_MUTED_DATE_KEY,
   editorPreferences,
 } from '../features/editor/editorPreferences';
+
+const DAILY_ECHO_NOTIFICATION_PROMPT_KEY = 'xiang_daily_echo_notification_prompt_v1';
 
 const DiaryInlineImage = TiptapNode.create({
   name: 'diaryInlineImage',
@@ -675,6 +704,7 @@ export default function Editor() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const id = searchParams.get('id');
+  const echoJobQueryId = searchParams.get('echoJob');
   const [existingJournal, setExistingJournal] = useState<DiaryEntry | null>(null);
   const existingJournalRef = useRef<DiaryEntry | null>(null);
   const activeEntryIdRef = useRef<string>(id || createClientId());
@@ -1544,6 +1574,10 @@ export default function Editor() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [dailyEcho, setDailyEcho] = useState<DailyEcho | undefined>();
   const [isEchoGenerating, setIsEchoGenerating] = useState(false);
+  const [dailyEchoJob, setDailyEchoJob] = useState<DailyEchoJobSnapshot | null>(null);
+  const [dailyEchoStreamingContent, setDailyEchoStreamingContent] = useState('');
+  const [isDailyEchoRetrying, setIsDailyEchoRetrying] = useState(false);
+  const [showDailyEchoNotificationPrompt, setShowDailyEchoNotificationPrompt] = useState(false);
   const [isEchoImageSaving, setIsEchoImageSaving] = useState(false);
   const [dailyEchoCompletionStats, setDailyEchoCompletionStats] = useState<DailyEchoCompletionStats | null>(null);
   const [dailyEchoFloatEnabled, setDailyEchoFloatEnabled] = useState(
@@ -1554,10 +1588,19 @@ export default function Editor() {
   );
   const [isEchoFloatScrollHidden, setIsEchoFloatScrollHidden] = useState(false);
   const echoFloatScrollTimerRef = useRef<number | null>(null);
-  const echoGenerationTokenRef = useRef(0);
+  const dailyEchoWatcherAbortRef = useRef<AbortController | null>(null);
+  const activeDailyEchoJobIdRef = useRef<string | null>(null);
+  const dailyEchoJobStartGuardRef = useRef(false);
+  const dailyEchoPreviewRef = useRef('');
+  const persistedDailyEchoJobSignatureRef = useRef('');
   const autoSavedDailyEchoSignatureRef = useRef('');
   const insightDraftBackgroundUpdateRef = useRef('');
-  const writingActivityRef = useRef(createWritingActivityState());
+  const writingActivityRef = useRef(createWritingTimeState());
+  const writingIdleTimerRef = useRef<number | null>(null);
+  const writingCheckpointOwnerIdRef = useRef<string | null>(user?.userId || null);
+  const persistCurrentEntryRef = useRef<(
+    options: PersistCurrentEntryOptions,
+  ) => Promise<DiaryEntry | undefined>>(async () => undefined);
   const hasWritingActivitySinceManualSaveRef = useRef(false);
   const lastManualSaveSignatureRef = useRef('');
   const lastManualSaveWritingSecondsRef = useRef(0);
@@ -1575,6 +1618,18 @@ export default function Editor() {
     existingJournal?.dailyEcho?.card?.renderedAt,
   ]);
 
+  useEffect(() => {
+    dailyEchoWatcherAbortRef.current?.abort();
+    dailyEchoWatcherAbortRef.current = null;
+    activeDailyEchoJobIdRef.current = null;
+    dailyEchoPreviewRef.current = '';
+    persistedDailyEchoJobSignatureRef.current = '';
+    setDailyEchoJob(null);
+    setDailyEchoStreamingContent('');
+    setIsDailyEchoRetrying(false);
+    setIsEchoGenerating(false);
+  }, [existingJournal?.id, user?.userId]);
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 2000);
@@ -1591,29 +1646,121 @@ export default function Editor() {
     }, 900);
   }, []);
 
+  const clearWritingIdleTimer = useCallback(() => {
+    if (writingIdleTimerRef.current !== null) {
+      window.clearTimeout(writingIdleTimerRef.current);
+      writingIdleTimerRef.current = null;
+    }
+  }, []);
+
+  const writeCurrentWritingCheckpoint = useCallback((observedAt = Date.now()) => {
+    writeWritingTimeCheckpoint(createWritingTimeCheckpoint(
+      activeEntryIdRef.current,
+      writingCheckpointOwnerIdRef.current,
+      writingActivityRef.current,
+      observedAt,
+    ));
+  }, []);
+
+  const clearCurrentWritingCheckpoint = useCallback(() => {
+    removeWritingTimeCheckpoint(activeEntryIdRef.current, writingCheckpointOwnerIdRef.current);
+  }, []);
+
+  const closeCurrentWritingSegment = useCallback((
+    reason: WritingSegmentEndReason,
+    timestamp = Date.now(),
+  ) => {
+    clearWritingIdleTimer();
+    const previous = writingActivityRef.current;
+    const next = closeSegment(previous, reason, timestamp);
+    if (next === previous) return false;
+    writingActivityRef.current = next;
+    writeCurrentWritingCheckpoint(timestamp);
+    return true;
+  }, [clearWritingIdleTimer, writeCurrentWritingCheckpoint]);
+
+  const scheduleWritingIdleTimeout = useCallback(() => {
+    clearWritingIdleTimer();
+    const segment = writingActivityRef.current.activeSegment;
+    if (!segment) return;
+
+    const deadline = segment.lastActiveAt + WRITING_IDLE_TIMEOUT_MS;
+    writingIdleTimerRef.current = window.setTimeout(() => {
+      writingIdleTimerRef.current = null;
+      const currentSegment = writingActivityRef.current.activeSegment;
+      if (!currentSegment) return;
+
+      const currentDeadline = currentSegment.lastActiveAt + WRITING_IDLE_TIMEOUT_MS;
+      if (Date.now() < currentDeadline) {
+        scheduleWritingIdleTimeout();
+        return;
+      }
+
+      if (!closeCurrentWritingSegment('idle_timeout', currentDeadline)) return;
+      void persistCurrentEntryRef.current({
+        reason: 'idle-timeout',
+        saveHistory: false,
+        navigateToSaved: false,
+        markClean: false,
+      }).catch(error => console.warn('Writing time idle checkpoint save failed:', error));
+    }, Math.max(0, deadline - Date.now()));
+  }, [clearWritingIdleTimer, closeCurrentWritingSegment]);
+
   const recordWritingActivity = useCallback(() => {
-    writingActivityRef.current = recordWritingInput(writingActivityRef.current);
+    if (!isEditingRef.current) return;
+    const previous = writingActivityRef.current;
+    const next = recordActivity(previous);
+    writingActivityRef.current = next;
+    const startedNewSegment = !previous.activeSegment
+      || next.activeSegment?.startedAt !== previous.activeSegment.startedAt;
+    if (startedNewSegment) {
+      writingCheckpointOwnerIdRef.current = existingJournalRef.current?.userId || user?.userId || null;
+      writeCurrentWritingCheckpoint();
+    }
+    scheduleWritingIdleTimeout();
     hasWritingActivitySinceManualSaveRef.current = true;
     setDailyEchoCompletionStats(null);
-  }, []);
-
-  const pauseCurrentWritingActivity = useCallback(() => {
-    writingActivityRef.current = pauseWritingActivity(writingActivityRef.current);
-  }, []);
+  }, [scheduleWritingIdleTimeout, user?.userId, writeCurrentWritingCheckpoint]);
 
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        pauseCurrentWritingActivity();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && writingActivityRef.current.activeSegment) {
+        writeCurrentWritingCheckpoint();
       }
-    };
-    window.addEventListener('pagehide', pauseCurrentWritingActivity);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    }, WRITING_CHECKPOINT_INTERVAL_MS);
     return () => {
-      window.removeEventListener('pagehide', pauseCurrentWritingActivity);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.clearInterval(timer);
+      clearWritingIdleTimer();
     };
-  }, [pauseCurrentWritingActivity]);
+  }, [clearWritingIdleTimer, writeCurrentWritingCheckpoint]);
+
+  useEffect(() => {
+    let disposed = false;
+    let removeListener: (() => Promise<void>) | undefined;
+
+    void CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+      if (isActive) return;
+      closeCurrentWritingSegment('background');
+      void persistCurrentEntryRef.current({
+        reason: 'native-background',
+        saveHistory: true,
+        updateState: false,
+        navigateToSaved: false,
+        markClean: false,
+      }).catch(error => console.warn('Diary native background save failed:', error));
+    }).then(handle => {
+      if (disposed) {
+        void handle.remove();
+      } else {
+        removeListener = () => handle.remove();
+      }
+    }).catch(error => console.warn('Register native app state listener failed:', error));
+
+    return () => {
+      disposed = true;
+      if (removeListener) void removeListener();
+    };
+  }, [closeCurrentWritingSegment]);
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
@@ -2116,9 +2263,18 @@ export default function Editor() {
   }, [brieflySuppressEditorClick, selectInlineImageFromElement]);
 
   const lockEditorScrollDomEvents = {
-    pointerdown: (_view: unknown, event: PointerEvent) => preventInlineImageFocus(event),
-    mousedown: (_view: unknown, event: MouseEvent) => preventInlineImageFocus(event),
-    touchstart: (_view: unknown, event: TouchEvent) => preventInlineImageFocus(event, false),
+    pointerdown: (_view: unknown, event: PointerEvent) => {
+      recordWritingActivity();
+      return preventInlineImageFocus(event);
+    },
+    mousedown: (_view: unknown, event: MouseEvent) => {
+      recordWritingActivity();
+      return preventInlineImageFocus(event);
+    },
+    touchstart: (_view: unknown, event: TouchEvent) => {
+      recordWritingActivity();
+      return preventInlineImageFocus(event, false);
+    },
     pointerup: (_view: unknown, event: PointerEvent) => selectInlineImageFromEvent(event),
     click: (_view: unknown, event: MouseEvent) => selectInlineImageFromEvent(event),
     beforeinput: () => {
@@ -2159,7 +2315,15 @@ export default function Editor() {
       const editingKey = event.key.length === 1
         || event.key === 'Enter'
         || event.key === 'Backspace'
-        || event.key === 'Delete';
+        || event.key === 'Delete'
+        || event.key === 'ArrowLeft'
+        || event.key === 'ArrowRight'
+        || event.key === 'ArrowUp'
+        || event.key === 'ArrowDown'
+        || event.key === 'Home'
+        || event.key === 'End'
+        || event.key === 'PageUp'
+        || event.key === 'PageDown';
 
       if (editingKey) {
         recordWritingActivity();
@@ -2222,7 +2386,6 @@ export default function Editor() {
     },
     onBlur: () => {
       setIsFocused(false);
-      pauseCurrentWritingActivity();
       if (keepInlineImageToolbarOnBlurRef.current) {
         keepInlineImageToolbarOnBlurRef.current = false;
         return;
@@ -2357,7 +2520,15 @@ export default function Editor() {
         const data = await diaryService.getEntryById(id);
         if (data) {
           existingJournalRef.current = data;
-          writingActivityRef.current = createWritingActivityState((data.activeWritingSeconds || 0) * 1_000);
+          writingCheckpointOwnerIdRef.current = data.userId || user?.userId || null;
+          const writingCheckpoint = readWritingTimeCheckpoint(
+            data.id,
+            writingCheckpointOwnerIdRef.current,
+          );
+          writingActivityRef.current = restoreCheckpoint(
+            (data.activeWritingSeconds || 0) * 1_000,
+            writingCheckpoint,
+          );
           hasWritingActivitySinceManualSaveRef.current = false;
           activeEntryIdRef.current = data.id;
           draftDiaryDateRef.current = data.diaryDate;
@@ -2407,7 +2578,8 @@ export default function Editor() {
       if (existingJournalRef.current) return;
       // New diary, load preferred template
       const initNewDiary = async () => {
-        writingActivityRef.current = createWritingActivityState();
+        writingCheckpointOwnerIdRef.current = user?.userId || null;
+        writingActivityRef.current = createWritingTimeState();
         hasWritingActivitySinceManualSaveRef.current = false;
         lastManualSaveSignatureRef.current = '';
         lastManualSaveWritingSecondsRef.current = 0;
@@ -2446,7 +2618,7 @@ export default function Editor() {
       };
       initNewDiary();
     }
-  }, [id, editor, getDraftDiaryDate, hydrateContentForEditor, normalizeContentForStorage, setImagesWithRef]);
+  }, [id, editor, getDraftDiaryDate, hydrateContentForEditor, normalizeContentForStorage, setImagesWithRef, user?.userId]);
 
   // ===== Auto-save history: periodic snapshots every 30s while editing =====
   useEffect(() => {
@@ -2604,6 +2776,7 @@ export default function Editor() {
     Array.from(files).forEach(file => {
       const reader = new FileReader();
       reader.onload = (event) => {
+        recordWritingActivity();
         const base64 = event.target?.result as string;
         const imageKey = createInlineImageKey(base64);
         const nextImages = [...imagesRef.current, base64];
@@ -2621,6 +2794,7 @@ export default function Editor() {
   };
 
   const removeImage = (indexToRemove: number) => {
+    recordWritingActivity();
     setImagesWithRef(prev => prev.filter((_, index) => index !== indexToRemove));
     hasUnsavedChanges.current = true;
   };
@@ -2700,14 +2874,18 @@ export default function Editor() {
     const currentThemeId = selectedThemeRef.current?.id;
     const existingEntry = existingJournalRef.current;
     const signature = makeEntrySignature(currentContent, currentImages, currentBackgroundId, currentThemeId);
-    const finalizedWritingActivity = pauseWritingActivity(writingActivityRef.current);
-    writingActivityRef.current = finalizedWritingActivity;
     const activeWritingSeconds = Math.max(
       existingEntry?.activeWritingSeconds || 0,
-      getActiveWritingSeconds(finalizedWritingActivity),
+      getWritingSeconds(writingActivityRef.current),
     );
+    const hasWritingTimeChanges = activeWritingSeconds > (existingEntry?.activeWritingSeconds || 0);
 
-    if (!hasUnsavedChanges.current && existingEntry && signature === lastPersistedSignatureRef.current) {
+    if (
+      !hasUnsavedChanges.current
+      && !hasWritingTimeChanges
+      && existingEntry
+      && signature === lastPersistedSignatureRef.current
+    ) {
       return existingEntry;
     }
 
@@ -2733,7 +2911,7 @@ export default function Editor() {
       activeWritingSeconds,
       saveOptions: {
         saveHistory: shouldSaveHistory,
-        immediateSync: reason !== 'autosave',
+        immediateSync: reason !== 'autosave' && reason !== 'idle-timeout',
       },
     });
 
@@ -2754,8 +2932,14 @@ export default function Editor() {
     );
 
     existingJournalRef.current = savedEntry;
-    writingActivityRef.current = createWritingActivityState((savedEntry.activeWritingSeconds || activeWritingSeconds) * 1_000);
     activeEntryIdRef.current = savedEntry.id;
+    writingCheckpointOwnerIdRef.current = savedEntry.userId || user?.userId || writingCheckpointOwnerIdRef.current;
+    if (reason !== 'autosave' && !writingActivityRef.current.activeSegment) {
+      writingActivityRef.current = createWritingTimeState(
+        (savedEntry.activeWritingSeconds || activeWritingSeconds) * 1_000,
+      );
+      clearCurrentWritingCheckpoint();
+    }
     draftDiaryDateRef.current = savedEntry.diaryDate;
     draftCreatedAtRef.current = savedEntry.createdAt || draftCreatedAtRef.current;
     lastPersistedSignatureRef.current = signature;
@@ -2779,9 +2963,11 @@ export default function Editor() {
     }
 
     return savedEntry;
-  }, [getDraftDiaryDate, isNewEntryWithoutMeaningfulContent, navigate, normalizeContentForStorage]);
+  }, [clearCurrentWritingCheckpoint, getDraftDiaryDate, isNewEntryWithoutMeaningfulContent, navigate, normalizeContentForStorage, user?.userId]);
 
-  const persistDailyEcho = async (nextEcho: DailyEcho): Promise<DiaryEntry | undefined> => {
+  persistCurrentEntryRef.current = persistCurrentEntry;
+
+  const persistDailyEcho = useCallback(async (nextEcho: DailyEcho): Promise<DiaryEntry | undefined> => {
     const entry = existingJournalRef.current;
     if (!entry) return undefined;
     const updated = await diaryService.updateEntry(entry.id, { dailyEcho: nextEcho }, {
@@ -2794,7 +2980,7 @@ export default function Editor() {
       setDailyEcho(updated.dailyEcho);
     }
     return updated;
-  };
+  }, []);
 
   useEffect(() => {
     if (!dailyEcho || dailyEcho.status !== 'draft' || !dailyEcho.content || !existingJournal) return;
@@ -2825,60 +3011,311 @@ export default function Editor() {
     }, 12000);
   };
 
+  const stopDailyEchoWatcher = useCallback(() => {
+    dailyEchoWatcherAbortRef.current?.abort();
+    dailyEchoWatcherAbortRef.current = null;
+    activeDailyEchoJobIdRef.current = null;
+  }, []);
+
+  const offerDailyEchoNotificationPermission = useCallback(async () => {
+    if (localStorage.getItem(DAILY_ECHO_NOTIFICATION_PROMPT_KEY) === 'handled') return;
+    const permission = await checkBrowserNotificationPermission().catch(() => 'unsupported' as const);
+    if (permission === 'granted' || permission === 'unsupported' || permission === 'insecure') {
+      localStorage.setItem(DAILY_ECHO_NOTIFICATION_PROMPT_KEY, 'handled');
+      return;
+    }
+    if (permission === 'denied') {
+      localStorage.setItem(DAILY_ECHO_NOTIFICATION_PROMPT_KEY, 'handled');
+      return;
+    }
+    setShowDailyEchoNotificationPrompt(true);
+  }, []);
+
+  const applyDailyEchoJobSnapshot = useCallback(async (job: DailyEchoJobSnapshot) => {
+    const entry = existingJournalRef.current;
+    if (!entry || job.entryId !== entry.id) return;
+
+    setDailyEchoJob(job);
+
+    // A dismissed echo remains dismissed; observing a historical server job must not revive it.
+    if (entry.dailyEcho?.status === 'dismissed') {
+      setIsEchoGenerating(false);
+      setDailyEchoStreamingContent('');
+      setIsDailyEchoRetrying(false);
+      setDailyEcho(entry.dailyEcho);
+      return;
+    }
+
+    const active = isDailyEchoJobActive(job);
+    const previousPreview = dailyEchoPreviewRef.current;
+    const nextPreview = job.previewContent || '';
+    dailyEchoPreviewRef.current = nextPreview;
+    setDailyEchoStreamingContent(nextPreview);
+    setIsEchoGenerating(active);
+
+    if (active) {
+      setIsDailyEchoRetrying(job.phase === 'retrying' || Boolean(previousPreview && !nextPreview));
+      return;
+    }
+
+    setIsDailyEchoRetrying(false);
+    setDailyEchoStreamingContent('');
+
+    const terminalTimestamp = job.generatedAt || job.updatedAt || new Date().toISOString();
+    if (job.status === 'failed') {
+      setDailyEcho({
+        status: 'failed',
+        content: job.errorMessage || '这次生成没有完成，请稍后再试。',
+        styleId: 'gentle',
+        generatedAt: terminalTimestamp,
+        sourceEntryUpdatedAt: job.sourceEntryUpdatedAt,
+        regenerateCount: job.regenerateCount,
+      });
+      return;
+    }
+
+    if (job.status === 'stale') {
+      setDailyEcho({
+        status: 'failed',
+        content: '日记内容已经更新，刚才的回声没有覆盖新内容。请生成最新回声。',
+        styleId: 'gentle',
+        generatedAt: terminalTimestamp,
+        sourceEntryUpdatedAt: job.sourceEntryUpdatedAt,
+        regenerateCount: job.regenerateCount,
+      });
+      return;
+    }
+
+    const content = job.content?.trim() || '';
+    if (job.status !== 'succeeded' || !content) {
+      setDailyEcho({
+        status: 'failed',
+        content: '这次生成没有完成，请稍后再试。',
+        styleId: 'gentle',
+        generatedAt: terminalTimestamp,
+        sourceEntryUpdatedAt: job.sourceEntryUpdatedAt,
+        regenerateCount: job.regenerateCount,
+      });
+      return;
+    }
+
+    const currentSourceHash = createDailyEchoSourceHash(entry.diaryDate, getDiaryPlainText(entry));
+    // updatedAt may legitimately change during local/cloud sync; content hash is
+    // the only freshness authority for a background result.
+    const sourceStillCurrent = currentSourceHash === job.sourceHash;
+    if (!sourceStillCurrent) {
+      setDailyEcho({
+        status: 'failed',
+        content: '日记内容已经更新，这段回声不会覆盖当前内容。请生成最新回声。',
+        styleId: 'gentle',
+        generatedAt: terminalTimestamp,
+        sourceEntryUpdatedAt: job.sourceEntryUpdatedAt,
+        regenerateCount: job.regenerateCount,
+      });
+      return;
+    }
+
+    const nextEcho: DailyEcho = {
+      status: 'saved',
+      content,
+      styleId: 'gentle',
+      generatedAt: terminalTimestamp,
+      sourceEntryUpdatedAt: job.sourceEntryUpdatedAt,
+      sourceHash: job.sourceHash,
+      regenerateCount: job.regenerateCount,
+    };
+    const persistSignature = `${job.id}:${nextEcho.generatedAt}:${nextEcho.content}`;
+    if (persistedDailyEchoJobSignatureRef.current === persistSignature) return;
+    persistedDailyEchoJobSignatureRef.current = persistSignature;
+
+    try {
+      const existingEcho = entry.dailyEcho;
+      if (
+        existingEcho?.status === 'saved'
+        && existingEcho.generatedAt === nextEcho.generatedAt
+        && existingEcho.content === nextEcho.content
+      ) {
+        setDailyEcho(existingEcho);
+      } else {
+        await persistDailyEcho(nextEcho);
+      }
+
+      void markDailyEchoMemoryEntriesUsed(
+        job.selectedMemoryEntryIds || [],
+        nextEcho.generatedAt,
+      ).catch(error => console.warn('Failed to mark Daily Echo memory usage:', error));
+    } catch (error) {
+      persistedDailyEchoJobSignatureRef.current = '';
+      throw error;
+    }
+  }, [persistDailyEcho]);
+
+  const beginDailyEchoWatcher = useCallback((initialJob: DailyEchoJobSnapshot) => {
+    stopDailyEchoWatcher();
+    const controller = new AbortController();
+    dailyEchoWatcherAbortRef.current = controller;
+    activeDailyEchoJobIdRef.current = initialJob.id;
+    dailyEchoPreviewRef.current = '';
+
+    void (async () => {
+      await applyDailyEchoJobSnapshot(initialJob);
+      if (isDailyEchoJobTerminal(initialJob) || controller.signal.aborted) return;
+
+      await watchDailyEchoJob(initialJob.id, async snapshot => {
+        if (
+          controller.signal.aborted
+          || activeDailyEchoJobIdRef.current !== initialJob.id
+        ) return;
+        await applyDailyEchoJobSnapshot(snapshot);
+      }, { signal: controller.signal, pollIntervalMs: 2_000 });
+    })().catch(error => {
+      if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
+      console.warn('Daily Echo watcher failed:', error);
+      if (error instanceof ApiError && [401, 403, 404].includes(error.status)) {
+        setIsEchoGenerating(false);
+        setDailyEchoStreamingContent('');
+        setDailyEcho({
+          status: 'failed',
+          content: error.status === 401
+            ? '登录状态已失效，请重新登录后生成。'
+            : '这次生成任务已经失效，请重新生成。',
+          styleId: 'gentle',
+          generatedAt: new Date().toISOString(),
+          sourceEntryUpdatedAt: existingJournalRef.current?.updatedAt || new Date().toISOString(),
+          regenerateCount: initialJob.regenerateCount,
+        });
+      }
+    }).finally(() => {
+      if (dailyEchoWatcherAbortRef.current === controller) {
+        dailyEchoWatcherAbortRef.current = null;
+      }
+    });
+  }, [applyDailyEchoJobSnapshot, stopDailyEchoWatcher]);
+
   const startDailyEchoGeneration = async (
     entry: DiaryEntry,
     force = false,
+    options: { allowForegroundFallback?: boolean } = {},
   ) => {
+    const allowForegroundFallback = options.allowForegroundFallback !== false;
+    if (dailyEchoJobStartGuardRef.current) return;
+    if (dailyEchoJob?.entryId === entry.id && isDailyEchoJobActive(dailyEchoJob)) return;
+
     const currentEcho = force ? dailyEcho || entry.dailyEcho : entry.dailyEcho;
-    if (!force && (currentEcho?.status === 'saved' || currentEcho?.status === 'dismissed')) return;
-    if (!force && currentEcho?.status === 'draft' && currentEcho.content && currentEcho.sourceEntryUpdatedAt === entry.updatedAt) {
+    const currentSourceHash = createDailyEchoSourceHash(entry.diaryDate, getDiaryPlainText(entry));
+    const echoMatchesCurrentSource = currentEcho?.sourceHash
+      ? currentEcho.sourceHash === currentSourceHash
+      : currentEcho?.sourceEntryUpdatedAt === entry.updatedAt;
+    if (!force && currentEcho?.status === 'dismissed') return;
+    if (!force && currentEcho?.status === 'saved' && echoMatchesCurrentSource) return;
+    if (!force && currentEcho?.status === 'draft' && currentEcho.content && echoMatchesCurrentSource) {
       setDailyEcho(currentEcho);
       return;
     }
     if (getDiaryPlainText(entry).length < 6) return;
 
-    if (!isAuthenticated()) {
-      setDailyEcho({
-        status: 'failed',
-        content: '需要登录后才可以生成小象回声。',
-        styleId: 'gentle',
-        generatedAt: new Date().toISOString(),
-        sourceEntryUpdatedAt: entry.updatedAt,
-        regenerateCount: currentEcho?.regenerateCount || 0,
-      });
-      showToast('登录后可生成小象回声');
-      return;
-    }
+    const latestJobRegenerateCount = dailyEchoJob?.entryId === entry.id
+      ? dailyEchoJob.regenerateCount
+      : 0;
+    const baseRegenerateCount = Math.max(
+      currentEcho?.regenerateCount || 0,
+      latestJobRegenerateCount,
+    );
+    const nextRegenerateCount = force ? baseRegenerateCount + 1 : baseRegenerateCount;
 
-    const token = echoGenerationTokenRef.current + 1;
-    echoGenerationTokenRef.current = token;
+    const runForegroundFallback = async () => {
+      showToast('当前为前台生成，请暂时不要关闭页面');
+      const echo = {
+        ...await generateDailyEchoForEntry(entry, nextRegenerateCount),
+        sourceHash: currentSourceHash,
+      };
+      if (activeEntryIdRef.current !== entry.id) return;
+      await persistDailyEcho(echo);
+      setDailyEcho(echo);
+      setIsEchoGenerating(false);
+    };
+
+    dailyEchoJobStartGuardRef.current = true;
     setIsEchoGenerating(true);
+    setDailyEchoStreamingContent('');
+    setIsDailyEchoRetrying(false);
     if (force || !currentEcho || currentEcho.status === 'failed') {
       setDailyEcho(undefined);
     }
 
     try {
-      const nextRegenerateCount = force ? (currentEcho?.regenerateCount || 0) + 1 : (currentEcho?.regenerateCount || 0);
-      const nextEcho = await generateDailyEchoForEntry(entry, nextRegenerateCount);
-      if (echoGenerationTokenRef.current !== token) return;
-      await persistDailyEcho(nextEcho);
+      if (!isAuthenticated()) {
+        if (allowForegroundFallback) await runForegroundFallback();
+        return;
+      }
+      const input = await buildDailyEchoJobInput(entry, nextRegenerateCount);
+      const job = await createDailyEchoJob(input);
+      if (activeEntryIdRef.current !== entry.id) return;
+      beginDailyEchoWatcher(job);
+      void offerDailyEchoNotificationPermission();
     } catch (error) {
-      console.warn('Failed to generate daily echo:', error);
-      if (echoGenerationTokenRef.current !== token) return;
+      console.warn('Failed to enqueue Daily Echo:', error);
+      if (activeEntryIdRef.current !== entry.id) return;
+
+      if (error instanceof ApiError && error.status === 503) {
+        if (allowForegroundFallback) {
+          try {
+            await runForegroundFallback();
+            return;
+          } catch (fallbackError) {
+            console.warn('Daily Echo foreground fallback failed:', fallbackError);
+          }
+        }
+      } else if (!(error instanceof ApiError)) {
+        // A lost POST response may still mean the durable task was accepted.
+        // Query latest before showing failure so we never start a duplicate.
+        const recovered = await getLatestDailyEchoJob(entry.id).catch(() => null);
+        if (recovered && recovered.sourceHash === createDailyEchoSourceHash(entry.diaryDate, getDiaryPlainText(entry))) {
+          beginDailyEchoWatcher(recovered);
+          return;
+        }
+      }
       setDailyEcho({
         status: 'failed',
-        content: '',
+        content: '暂时无法开始生成，请检查网络后再试。',
         styleId: 'gentle',
         generatedAt: new Date().toISOString(),
         sourceEntryUpdatedAt: entry.updatedAt,
-        regenerateCount: currentEcho?.regenerateCount || 0,
+        regenerateCount: nextRegenerateCount,
       });
+      setIsEchoGenerating(false);
     } finally {
-      if (echoGenerationTokenRef.current === token) {
-        setIsEchoGenerating(false);
-      }
+      dailyEchoJobStartGuardRef.current = false;
     }
   };
+
+  useEffect(() => {
+    const entryId = existingJournal?.id;
+    if (!entryId || !isAuthenticated()) return undefined;
+
+    let disposed = false;
+    void (async () => {
+      let job: DailyEchoJobSnapshot | null = null;
+      if (echoJobQueryId) {
+        try {
+          const linkedJob = await getDailyEchoJob(echoJobQueryId);
+          if (linkedJob.entryId === entryId) job = linkedJob;
+        } catch (error) {
+          console.warn('Failed to load linked Daily Echo job:', error);
+        }
+      }
+      if (!job) job = await getLatestDailyEchoJob(entryId);
+      if (disposed || !job || job.entryId !== existingJournalRef.current?.id) return;
+      beginDailyEchoWatcher(job);
+    })().catch(error => {
+      if (!disposed) console.warn('Failed to resume Daily Echo job:', error);
+    });
+
+    return () => {
+      disposed = true;
+      stopDailyEchoWatcher();
+    };
+  }, [beginDailyEchoWatcher, echoJobQueryId, existingJournal?.id, stopDailyEchoWatcher, user?.userId]);
 
   const handleSaveDailyEcho = async () => {
     if (!dailyEcho || dailyEcho.status === 'failed') return;
@@ -3017,8 +3454,8 @@ export default function Editor() {
       backgroundIdRef.current,
       selectedThemeRef.current?.id,
     );
-    const pendingWritingSecondsBeforeSave = getActiveWritingSeconds(writingActivityRef.current);
-    const writingActivityForCompletion = pauseWritingActivity(writingActivityRef.current);
+    closeCurrentWritingSegment(goBack ? 'exit' : 'complete');
+    const pendingWritingSecondsBeforeSave = getWritingSeconds(writingActivityRef.current);
     const hadManualWritingActivity = hasWritingActivitySinceManualSaveRef.current
       || pendingWritingSecondsBeforeSave > lastManualSaveWritingSecondsRef.current
       || currentSignatureBeforeSave !== lastManualSaveSignatureRef.current;
@@ -3032,6 +3469,10 @@ export default function Editor() {
       });
       
       if (goBack) {
+        if (savedEntry && isAuthenticated()) {
+          await startDailyEchoGeneration(savedEntry, false, { allowForegroundFallback: false });
+          scheduleInsightDraftUpdate(savedEntry);
+        }
         goBackSafely();
       } else {
         setIsEditing(false);
@@ -3050,7 +3491,11 @@ export default function Editor() {
 
           if (shouldShowCompletionFeedback && countDiaryTextCharacters(savedEntry.content) > 0) {
             const activeEntries = await diaryService.getActiveEntries();
-            const stats = buildDailyEchoCompletionStats(savedEntry, activeEntries, writingActivityForCompletion);
+            const stats = buildDailyEchoCompletionStats(
+              savedEntry,
+              activeEntries,
+              savedEntry.activeWritingSeconds || 0,
+            );
             setDailyEchoCompletionStats({
               ...stats,
               activeWritingMinutes: Math.max(1, stats.activeWritingMinutes),
@@ -3081,12 +3526,17 @@ export default function Editor() {
   const handleBack = async () => {
     try {
       if (isEditing) {
-        if (!hasUnsavedChanges.current && existingJournal) {
+        const hasUnpersistedWritingTime = getWritingSeconds(writingActivityRef.current)
+          > (existingJournalRef.current?.activeWritingSeconds || 0);
+        if (!hasUnsavedChanges.current && !hasUnpersistedWritingTime && existingJournal) {
           goBackSafely();
           return;
         }
 
         if (isEmptyOrTemplate() && !existingJournal && imagesRef.current.length === 0) {
+          clearWritingIdleTimer();
+          clearCurrentWritingCheckpoint();
+          writingActivityRef.current = createWritingTimeState();
           goBackSafely();
           return;
         }
@@ -3107,6 +3557,14 @@ export default function Editor() {
     }
   };
 
+  const finalizeWritingForLifecycle = useCallback((reason: PersistCurrentEntryOptions['reason']) => {
+    if (reason === 'visibility' || reason === 'pagehide') {
+      closeCurrentWritingSegment('page_hidden');
+      return;
+    }
+    closeCurrentWritingSegment('interruption');
+  }, [closeCurrentWritingSegment]);
+
   useDiaryLifecycleAutosave({
     isEditing,
     previewHashActive,
@@ -3116,6 +3574,7 @@ export default function Editor() {
     backgroundId,
     themeId: selectedTheme?.id,
     persistEntry: persistCurrentEntry,
+    beforeLifecyclePersist: finalizeWritingForLifecycle,
   });
 
   const displayDate = existingJournal
@@ -3137,7 +3596,8 @@ export default function Editor() {
 
   const fixedViewportHeightCss = fixedViewportHeight > 0 ? `${fixedViewportHeight}px` : '100vh';
   const editorChromeHeight = 'calc(64px + env(safe-area-inset-top))';
-  const editorContentTopGap = '12px';
+  const editorContentClipTop = 'calc(56px + env(safe-area-inset-top))';
+  const editorContentTopGap = '20px';
   // bugfix: 杞敭鐩樺脊鍑烘椂锛宭ayout viewport 鍦ㄩ儴鍒嗗畨鍗撴祻瑙堝櫒涓笉浼氱缉灏忥紝
   // 瀵艰嚧 <main> 娌℃湁婧㈠嚭銆佸畬鍏ㄦ棤娉曟粴鍔紝鐭枃妗堟椂鍏夋爣浼氳杈撳叆娉曢伄鎸°€?
   // 杩欓噷鎶?keyboardInset 鍔犲埌搴曢儴 padding锛岀‘淇濇湁瓒冲鐨勫彲婊氬姩绌洪棿鎶婂厜鏍囨粴鍒板彲瑙嗗尯銆?
@@ -3175,7 +3635,7 @@ export default function Editor() {
     : '0px';
   const editorScrollStyle: React.CSSProperties = {
     ...(selectedTheme ? { backgroundColor: selectedTheme.paperColor || 'transparent' } : {}),
-    top: editorChromeHeight,
+    top: editorContentClipTop,
     paddingTop: editorContentTopGap,
     paddingBottom: editorContentBottomPadding,
     WebkitOverflowScrolling: 'touch',
@@ -3780,9 +4240,12 @@ export default function Editor() {
       <DailyEchoFloatingCard
         echo={dailyEcho}
         isGenerating={isEchoGenerating}
+        streamingContent={dailyEchoStreamingContent}
+        isRetrying={isDailyEchoRetrying}
         isSavingImage={isEchoImageSaving}
         completionStats={dailyEchoCompletionStats}
         hidden={shouldHideDailyEchoCard}
+        openRequestKey={echoJobQueryId || undefined}
         onSave={dailyEcho?.status === 'draft' ? handleSaveDailyEcho : undefined}
         onRegenerate={existingJournal ? handleRegenerateDailyEcho : undefined}
         onDismiss={existingJournal ? handleDismissDailyEcho : undefined}
@@ -4157,6 +4620,8 @@ export default function Editor() {
               <button 
                 onClick={async () => {
                   setIsAbandonConfirmOpen(false);
+                  closeCurrentWritingSegment('abandon');
+                  const activeWritingSeconds = getWritingSeconds(writingActivityRef.current);
                   const currentContent = normalizeContentForStorage(editorInstanceRef.current?.getHTML() || contentRef.current);
                   const currentImages = imagesRef.current.filter((img: string) => typeof img === 'string' && img.trim() !== '');
                   const currentEntry = existingJournalRef.current;
@@ -4166,6 +4631,7 @@ export default function Editor() {
                       images: currentImages,
                       backgroundId: backgroundIdRef.current,
                       themeId: selectedThemeRef.current?.id,
+                      activeWritingSeconds,
                       status: 'trashed',
                       trashReason: 'abandoned',
                       trashedAt: new Date().toISOString()
@@ -4179,12 +4645,14 @@ export default function Editor() {
                       createdAt: draftCreatedAtRef.current,
                       backgroundId: backgroundIdRef.current,
                       themeId: selectedThemeRef.current?.id,
+                      activeWritingSeconds,
                       status: 'trashed',
                       trashReason: 'abandoned',
                       trashedAt: new Date().toISOString()
                     }, { saveHistory: true, immediateSync: true });
                   }
                   hasUnsavedChanges.current = false;
+                  clearCurrentWritingCheckpoint();
                   navigate(-1);
                 }}
                 className="px-5 py-2.5 rounded-full font-medium text-white bg-red-500 hover:bg-red-600 transition-colors"
@@ -4584,6 +5052,51 @@ export default function Editor() {
           )}
         </AnimatePresence>,
         document.body,
+      )}
+
+      {showDailyEchoNotificationPrompt && (
+        <div className="fixed inset-0 z-[120] flex items-end bg-black/25" role="dialog" aria-modal="true" aria-label="开启每日回声提醒">
+          <button
+            type="button"
+            aria-label="暂不开启提醒"
+            className="absolute inset-0"
+            onClick={() => {
+              localStorage.setItem(DAILY_ECHO_NOTIFICATION_PROMPT_KEY, 'handled');
+              setShowDailyEchoNotificationPrompt(false);
+            }}
+          />
+          <div className="relative w-full rounded-t-[24px] bg-[#FFFDF7] px-5 pb-[max(24px,env(safe-area-inset-bottom))] pt-5 shadow-2xl">
+            <h2 className="text-[17px] font-semibold text-[#31402E]">回声会在后台继续生成</h2>
+            <p className="mt-2 text-[14px] leading-6 text-[#5F6B57]">
+              允许通知后，即使你先去看别的页面，小象读完这一天时也会轻轻提醒你。
+            </p>
+            <div className="mt-5 flex gap-3">
+              <button
+                type="button"
+                className="flex-1 rounded-full bg-[#446733]/10 px-4 py-3 text-[14px] font-medium text-[#446733]"
+                onClick={() => {
+                  localStorage.setItem(DAILY_ECHO_NOTIFICATION_PROMPT_KEY, 'handled');
+                  setShowDailyEchoNotificationPrompt(false);
+                }}
+              >
+                暂不
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-full bg-[#446733] px-4 py-3 text-[14px] font-medium text-white"
+                onClick={() => {
+                  localStorage.setItem(DAILY_ECHO_NOTIFICATION_PROMPT_KEY, 'handled');
+                  setShowDailyEchoNotificationPrompt(false);
+                  void requestBrowserNotificationPermission().then((permission) => {
+                    showToast(permission === 'granted' ? '回声完成后会提醒你' : '可稍后在设置中开启通知');
+                  });
+                }}
+              >
+                允许提醒
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <AppToast message={toastMessage} />

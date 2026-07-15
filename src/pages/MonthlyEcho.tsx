@@ -8,6 +8,12 @@ import { useOptionalAuth } from '../contexts/AuthContext';
 import { AppToast } from '../components/AppToast';
 import { sanitizeModernColors } from '../utils/exportImage';
 import { downloadBlob } from '../utils/exportFile';
+import { buildMonthlyEchoExactPages, MonthlyEchoExactStyle } from '../components/monthly-echo/MonthlyEchoExactPages';
+import {
+  applyMonthlyEchoEdgeResistance,
+  clampMonthlyEchoPage,
+  resolveMonthlyEchoSwipe,
+} from '../utils/monthlyEchoPager';
 import {
   monthKeyToLabel,
   normalizeMonthKey,
@@ -18,10 +24,16 @@ import {
 const storyFont = '"Noto Sans SC", "Microsoft YaHei", "PingFang SC", "Inter", sans-serif';
 const serifFont = '"Noto Serif SC", "Songti SC", "SimSun", serif';
 const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const entranceCoverBackground = '/monthly-echo/entrance-cover.png?v=20260623-entry-cover';
+const entranceCoverBackground = '/monthly-echo/monthly-echo-cover-reference.png?v=20260701-monthly-echo-cover';
+const storyArtwork = '/monthly-echo/monthly-echo-story-reference.png?v=20260710-monthly-echo-story';
+const mapArtwork = '/monthly-echo/monthly-echo-map-reference.png?v=20260711-monthly-echo-map';
+const momentsArtwork = '/monthly-echo/monthly-echo-moments-reference.png?v=20260712-monthly-echo-moments';
+const actionsArtwork = '/monthly-echo/monthly-echo-actions-reference.png?v=20260712-monthly-echo-actions';
+const themeArtwork = '/monthly-echo/monthly-echo-theme-reference.png?v=20260712-monthly-echo-theme';
+const letterArtwork = '/monthly-echo/monthly-echo-letter-reference.png?v=20260712-monthly-echo-letter';
 const chineseMonthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
 const actionIcons = ['说', 'Ⅱ', '记', '心', '芽'];
-const storyPages = ['cover', 'map', 'moments', 'actions', 'theme', 'letter'] as const;
+const storyPages = ['cover', 'story', 'map', 'moments', 'actions', 'theme', 'letter'] as const;
 
 type StoryPage = typeof storyPages[number];
 
@@ -397,6 +409,119 @@ function EntranceCoverFrame({
   );
 }
 
+function MonthlyEchoStoryArtworkFrame({ onNext }: { onNext: () => void }) {
+  return (
+    <section
+      className="echo-frame monthly-echo-story-artwork-frame"
+      data-page-index={1}
+      data-name="PAGE 2 / 六月的回响"
+      aria-label="六月的回响"
+    >
+      <img
+        className="monthly-echo-story-artwork"
+        src={storyArtwork}
+        alt="六月的回响，记录从担心自己够不够好，到重新思考真正想守住什么"
+        draggable={false}
+      />
+      <button
+        type="button"
+        className="monthly-echo-story-next"
+        onClick={onNext}
+        aria-label="继续查看月之回响"
+      />
+    </section>
+  );
+}
+
+function MonthlyEchoMapArtworkFrame({ onNext }: { onNext: () => void }) {
+  return (
+    <section
+      className="echo-frame monthly-echo-map-artwork-frame"
+      data-page-index={2}
+      data-name="PAGE 3 / 本月地图"
+      aria-label="本月回响地图"
+    >
+      <img
+        className="monthly-echo-map-artwork"
+        src={mapArtwork}
+        alt="本月回响地图，记录工作学习、关系和自我状态三条支线"
+        draggable={false}
+      />
+      <button
+        type="button"
+        className="monthly-echo-map-next"
+        onClick={onNext}
+        aria-label="继续查看月之回响"
+      />
+    </section>
+  );
+}
+
+function MonthlyEchoMomentsArtworkFrame({ onNext }: { onNext: () => void }) {
+  return (
+    <section
+      className="echo-frame monthly-echo-moments-artwork-frame"
+      data-page-index={3}
+      data-name="PAGE 4 / 三个关键时刻"
+      aria-label="三个关键时刻"
+    >
+      <img
+        className="monthly-echo-moments-artwork"
+        src={momentsArtwork}
+        alt="这个月，小象想帮你留下三个时刻"
+        draggable={false}
+      />
+      <button
+        type="button"
+        className="monthly-echo-moments-next"
+        onClick={onNext}
+        aria-label="继续查看月之回响"
+      />
+    </section>
+  );
+}
+
+function MonthlyEchoActionsArtworkFrame({ onNext }: { onNext: () => void }) {
+  return (
+    <section
+      className="echo-frame monthly-echo-actions-artwork-frame"
+      data-page-index={4}
+      data-name="PAGE 5 / 行动轨迹"
+      aria-label="行动轨迹"
+    >
+      <img
+        className="monthly-echo-actions-artwork"
+        src={actionsArtwork}
+        alt="这个月，你不是只是在想，记录五个细小却重要的行动"
+        draggable={false}
+      />
+      <button
+        type="button"
+        className="monthly-echo-actions-next"
+        onClick={onNext}
+        aria-label="继续查看月之回响"
+      />
+    </section>
+  );
+}
+
+function MonthlyEchoThemeArtworkFrame({ onNext }: { onNext: () => void }) {
+  return (
+    <section className="echo-frame monthly-echo-theme-artwork-frame" data-page-index={5} data-name="PAGE 6 / 反复主题" aria-label="反复主题">
+      <img className="monthly-echo-theme-artwork" src={themeArtwork} alt="这个月，有一个问题反复出现，以及你开始重新问自己真正想要什么" draggable={false} />
+      <button type="button" className="monthly-echo-theme-next" onClick={onNext} aria-label="继续查看月之回响" />
+    </section>
+  );
+}
+
+function MonthlyEchoLetterArtworkFrame() {
+  return (
+    <section className="echo-frame monthly-echo-letter-artwork-frame" data-page-index={6} data-name="PAGE 7 / 回声信" aria-label="回声信">
+      <img className="monthly-echo-letter-artwork" src={letterArtwork} alt="亲爱的自己，这个月你已经开始看见自己真正想守住的东西。爱你的小象。" draggable={false} />
+    </section>
+  );
+}
+
 function EntranceFloralDecor() {
   return (
     <div className="entrance-floral" aria-hidden="true">
@@ -572,11 +697,15 @@ function StatusStoryFrame({
   title,
   message,
   loading,
+  actionLabel,
+  onAction,
 }: {
   title: string;
   message: string;
   loading?: boolean;
   onBack?: () => void;
+  actionLabel?: string;
+  onAction?: () => void;
 }) {
   return (
     <section className="echo-frame status-frame">
@@ -586,6 +715,11 @@ function StatusStoryFrame({
         {loading ? <Loader2 className="status-icon animate-spin" /> : <Sparkle className="status-icon" />}
         <h1>{title}</h1>
         <p>{message}</p>
+        {actionLabel && onAction && (
+          <button type="button" className="status-action" onClick={onAction} disabled={loading}>
+            {actionLabel}
+          </button>
+        )}
       </div>
     </section>
   );
@@ -604,27 +738,47 @@ function StoryStyle() {
           font-family: ${storyFont};
         }
         .monthly-echo-scroll {
+          position: relative;
           height: 100dvh;
-          overflow-y: auto;
-          overflow-x: hidden;
-          scroll-snap-type: y mandatory;
-          overscroll-behavior: contain;
+          overflow: hidden;
+          overscroll-behavior: none;
+          touch-action: pan-x;
           scrollbar-width: none;
           background: #f6efe2;
+          outline: none;
         }
         .monthly-echo-scroll::-webkit-scrollbar {
           display: none;
         }
         .monthly-echo-slot {
-          height: 100dvh;
-          min-height: 100dvh;
+          height: 100%;
+          min-height: 100%;
+          flex: 0 0 100%;
           display: flex;
           align-items: center;
           justify-content: center;
-          scroll-snap-align: start;
-          scroll-snap-stop: always;
           overflow: hidden;
           background: #f6efe2;
+        }
+        .monthly-echo-track {
+          width: 100%;
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          transform: translate3d(0, 0, 0);
+          will-change: transform;
+          backface-visibility: hidden;
+        }
+        .monthly-echo-scroll.is-dragging,
+        .monthly-echo-scroll.is-dragging * {
+          cursor: grabbing !important;
+          user-select: none !important;
+          -webkit-user-select: none !important;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .monthly-echo-track {
+            transition-duration: 1ms !important;
+          }
         }
         .echo-scale-box {
           transform-origin: top center;
@@ -855,7 +1009,7 @@ function StoryStyle() {
           background-image: url("${entranceCoverBackground}");
           background-position: center center;
           background-repeat: no-repeat;
-          background-size: 100% 100%;
+          background-size: contain;
           font-family: ${serifFont};
         }
         .entrance-cover-next {
@@ -867,8 +1021,153 @@ function StoryStyle() {
           height: 150px;
           border: 0;
           background: transparent;
+          touch-action: pan-y;
           cursor: pointer;
           touch-action: manipulation;
+        }
+        .monthly-echo-story-artwork-frame {
+          display: grid;
+          place-items: center;
+          background: #f2eadc;
+        }
+        .monthly-echo-story-artwork {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          image-rendering: auto;
+          user-select: none;
+          -webkit-user-drag: none;
+        }
+        .monthly-echo-story-next {
+          position: absolute;
+          z-index: 20;
+          left: 0;
+          bottom: 0;
+          width: 100%;
+          height: 150px;
+          border: 0;
+          background: transparent;
+          cursor: pointer;
+          touch-action: manipulation;
+        }
+        .monthly-echo-map-artwork-frame {
+          display: grid;
+          place-items: center;
+          background: #f2eadc;
+        }
+        .monthly-echo-map-artwork {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          image-rendering: auto;
+          user-select: none;
+          -webkit-user-drag: none;
+        }
+        .monthly-echo-map-next {
+          position: absolute;
+          z-index: 20;
+          left: 0;
+          bottom: 0;
+          width: 100%;
+          height: 150px;
+          border: 0;
+          background: transparent;
+          cursor: pointer;
+          touch-action: manipulation;
+        }
+        .monthly-echo-moments-artwork-frame {
+          display: grid;
+          place-items: center;
+          background: #f2eadc;
+        }
+        .monthly-echo-moments-artwork {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          image-rendering: auto;
+          user-select: none;
+          -webkit-user-drag: none;
+        }
+        .monthly-echo-moments-next {
+          position: absolute;
+          z-index: 20;
+          left: 0;
+          bottom: 0;
+          width: 100%;
+          height: 150px;
+          border: 0;
+          background: transparent;
+          cursor: pointer;
+          touch-action: manipulation;
+        }
+        .monthly-echo-actions-artwork-frame {
+          display: grid;
+          place-items: center;
+          background: #f2eadc;
+        }
+        .monthly-echo-actions-artwork {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          image-rendering: auto;
+          user-select: none;
+          -webkit-user-drag: none;
+        }
+        .monthly-echo-actions-next {
+          position: absolute;
+          z-index: 20;
+          left: 0;
+          bottom: 0;
+          width: 100%;
+          height: 150px;
+          border: 0;
+          background: transparent;
+          cursor: pointer;
+          touch-action: manipulation;
+        }
+        .monthly-echo-theme-artwork-frame {
+          display: grid;
+          place-items: center;
+          background: #f2eadc;
+        }
+        .monthly-echo-theme-artwork {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          image-rendering: auto;
+          user-select: none;
+          -webkit-user-drag: none;
+        }
+        .monthly-echo-theme-next {
+          position: absolute;
+          z-index: 20;
+          left: 0;
+          bottom: 0;
+          width: 100%;
+          height: 150px;
+          border: 0;
+          background: transparent;
+          cursor: pointer;
+          touch-action: manipulation;
+        }
+        .monthly-echo-letter-artwork-frame {
+          display: grid;
+          place-items: center;
+          background: #f2eadc;
+        }
+        .monthly-echo-letter-artwork {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          image-rendering: auto;
+          user-select: none;
+          -webkit-user-drag: none;
         }
         .entrance-wash {
           pointer-events: none;
@@ -1645,6 +1944,19 @@ function StoryStyle() {
           font-size: 16px;
           line-height: 30px;
         }
+        .status-action {
+          margin-top: 28px;
+          min-width: 132px;
+          min-height: 44px;
+          padding: 0 22px;
+          border: 1px solid rgba(47, 90, 53, 0.28);
+          border-radius: 999px;
+          background: rgba(255, 253, 247, 0.78);
+          color: #244b2b;
+          font: 600 15px/1 ${storyFont};
+          cursor: pointer;
+        }
+        .status-action:disabled { opacity: .55; cursor: default; }
       `}
     </style>
   );
@@ -1662,25 +1974,166 @@ export default function MonthlyEcho() {
   const [toast, setToast] = useState<string | null>(null);
   const [frameScale, setFrameScale] = useState(getFrameScale);
   const [frameWidth, setFrameWidth] = useState(getFrameWidth);
-  const scrollerRef = useRef<HTMLDivElement | null>(null);
-  const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const [activePage, setActivePage] = useState(0);
+  const pagerRef = useRef<HTMLDivElement | null>(null);
+  const trackRef = useRef<HTMLDivElement | null>(null);
   const posterRef = useRef<HTMLDivElement | null>(null);
+  const activePageRef = useRef(0);
+  const transitionTimerRef = useRef<number | null>(null);
+  const wheelResetTimerRef = useRef<number | null>(null);
+  const wheelDeltaRef = useRef(0);
+  const isTransitioningRef = useRef(false);
+  const didDragRef = useRef(false);
+  const gestureRef = useRef({
+    active: false,
+    pointerId: -1,
+    startY: 0,
+    lastY: 0,
+    lastAt: 0,
+    velocityY: 0,
+  });
 
   const displayName = formatDisplayName(auth?.user?.nickname);
   const sections: MonthlyEchoSections = payload?.sections || {};
+  const report = payload?.report || null;
   const storyData = useMemo(() => deriveStoryData(payload, sections), [payload, sections]);
-  const letterParagraphs = useMemo(() => splitLetterParagraphs(storyData.letterText), [storyData.letterText]);
-  const hasReadableEcho = Boolean(
-    payload && (payload.fullText || sections.mainArcSection || sections.keyMomentsSection || sections.finalInsightSentence),
-  );
+  const hasReadableEcho = Boolean(report?.schemaVersion === 2);
+
+  const setTrackPosition = (index: number, dragOffset = 0, animated = false) => {
+    const track = trackRef.current;
+    const pager = pagerRef.current;
+    if (!track || !pager) return;
+
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    track.style.transition = animated && !reducedMotion
+      ? 'transform 360ms cubic-bezier(0.22, 1, 0.36, 1)'
+      : 'none';
+    track.style.transform = `translate3d(0, ${(-index * pager.clientHeight) + dragOffset}px, 0)`;
+  };
+
+  const settleOnPage = (index: number, animated = true) => {
+    const next = clampMonthlyEchoPage(index, storyPages.length);
+    pagerRef.current?.focus({ preventScroll: true });
+    activePageRef.current = next;
+    setActivePage(next);
+    setTrackPosition(next, 0, animated);
+
+    if (transitionTimerRef.current !== null) window.clearTimeout(transitionTimerRef.current);
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    isTransitioningRef.current = animated && !reducedMotion;
+    transitionTimerRef.current = window.setTimeout(() => {
+      isTransitioningRef.current = false;
+      transitionTimerRef.current = null;
+    }, animated && !reducedMotion ? 380 : 0);
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!hasReadableEcho || !event.isPrimary) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+
+    if (transitionTimerRef.current !== null) {
+      window.clearTimeout(transitionTimerRef.current);
+      transitionTimerRef.current = null;
+    }
+    isTransitioningRef.current = false;
+    didDragRef.current = false;
+    gestureRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      lastY: event.clientY,
+      lastAt: event.timeStamp,
+      velocityY: 0,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.classList.add('is-dragging');
+    setTrackPosition(activePageRef.current, 0, false);
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = gestureRef.current;
+    if (!gesture.active || gesture.pointerId !== event.pointerId) return;
+
+    const deltaY = event.clientY - gesture.startY;
+    const elapsed = Math.max(1, event.timeStamp - gesture.lastAt);
+    const instantVelocity = (event.clientY - gesture.lastY) / elapsed;
+    gesture.velocityY = (gesture.velocityY * 0.35) + (instantVelocity * 0.65);
+    gesture.lastY = event.clientY;
+    gesture.lastAt = event.timeStamp;
+    didDragRef.current = didDragRef.current || Math.abs(deltaY) > 7;
+
+    const resistedDelta = applyMonthlyEchoEdgeResistance(
+      deltaY,
+      activePageRef.current,
+      storyPages.length,
+    );
+    setTrackPosition(activePageRef.current, resistedDelta, false);
+  };
+
+  const finishPointerGesture = (event: React.PointerEvent<HTMLDivElement>, cancelled = false) => {
+    const gesture = gestureRef.current;
+    if (!gesture.active || gesture.pointerId !== event.pointerId) return;
+
+    const deltaY = event.clientY - gesture.startY;
+    gesture.active = false;
+    event.currentTarget.classList.remove('is-dragging');
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    const decision = cancelled
+      ? { targetIndex: activePageRef.current, shouldAdvance: false }
+      : resolveMonthlyEchoSwipe({
+          currentIndex: activePageRef.current,
+          pageCount: storyPages.length,
+          deltaY,
+          velocityY: gesture.velocityY,
+          viewportHeight: event.currentTarget.clientHeight,
+        });
+    settleOnPage(decision.targetIndex, true);
+
+    window.setTimeout(() => {
+      didDragRef.current = false;
+    }, 0);
+  };
+
+  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!hasReadableEcho) return;
+    event.preventDefault();
+    if (isTransitioningRef.current) return;
+
+    wheelDeltaRef.current += event.deltaY;
+    if (wheelResetTimerRef.current !== null) window.clearTimeout(wheelResetTimerRef.current);
+    wheelResetTimerRef.current = window.setTimeout(() => {
+      wheelDeltaRef.current = 0;
+      wheelResetTimerRef.current = null;
+    }, 140);
+
+    if (Math.abs(wheelDeltaRef.current) < 48) return;
+    const direction = wheelDeltaRef.current > 0 ? 1 : -1;
+    wheelDeltaRef.current = 0;
+    settleOnPage(activePageRef.current + direction, true);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!hasReadableEcho || isTransitioningRef.current) return;
+    let next: number | null = null;
+    if (event.key === 'ArrowDown' || event.key === 'PageDown' || (event.key === ' ' && !event.shiftKey)) next = activePageRef.current + 1;
+    if (event.key === 'ArrowUp' || event.key === 'PageUp' || (event.key === ' ' && event.shiftKey)) next = activePageRef.current - 1;
+    if (event.key === 'Home') next = 0;
+    if (event.key === 'End') next = storyPages.length - 1;
+    if (next === null) return;
+    event.preventDefault();
+    settleOnPage(next, true);
+  };
 
   const showToast = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(null), 2400);
   };
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       setPayload(await monthlyEchoService.loadMonthlyEcho(monthKey));
     } catch (error: any) {
@@ -1688,7 +2141,7 @@ export default function MonthlyEcho() {
       showToast(error?.message || '月之回响暂时不可用');
       setPayload({ status: 'failed', monthKey, message: error?.message || '月之回响暂时不可用' });
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -1697,18 +2150,42 @@ export default function MonthlyEcho() {
   }, [monthKey]);
 
   useEffect(() => {
+    if (payload?.status !== 'generating') return;
+    const timer = window.setTimeout(() => {
+      void load(true);
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [monthKey, payload]);
+
+  useEffect(() => {
     const onResize = () => {
       setFrameScale(getFrameScale());
       setFrameWidth(getFrameWidth());
+      window.requestAnimationFrame(() => setTrackPosition(activePageRef.current, 0, false));
     };
     onResize();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  useEffect(() => {
+    if (!hasReadableEcho) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      activePageRef.current = 0;
+      setActivePage(0);
+      setTrackPosition(0, 0, false);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [monthKey, hasReadableEcho]);
+
+  useEffect(() => () => {
+    if (transitionTimerRef.current !== null) window.clearTimeout(transitionTimerRef.current);
+    if (wheelResetTimerRef.current !== null) window.clearTimeout(wheelResetTimerRef.current);
+  }, []);
+
   const scrollToPage = (index: number) => {
-    const next = Math.min(storyPages.length - 1, Math.max(0, index));
-    pageRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    settleOnPage(index, true);
   };
 
   const handleRegenerate = async () => {
@@ -1763,105 +2240,6 @@ export default function MonthlyEcho() {
     }
   };
 
-  const commonFrameProps = {
-    onBack: () => navigate(-1),
-  };
-
-  const renderReadablePages = () => (
-    <>
-      <EntranceCoverFrame monthKey={payload!.monthKey} onNext={() => scrollToPage(1)} />
-
-      <EchoStoryFrame index={1} name="PAGE 2 / 02 本月地图" {...commonFrameProps}>
-        <p className="map-lead">如果把这个月看成一张地图</p>
-        <div className="map-label">本月主线</div>
-        <h2 className="map-headline" style={clampStyle(3)}>{storyData.mapHeadline}</h2>
-        <div className="map-route">
-          <svg viewBox="0 0 390 844" fill="none" aria-hidden="true">
-            <path
-              d="M60 336C120 300 150 350 166 356C218 374 226 432 176 456C132 478 126 538 138 572C152 612 112 632 98 650"
-              stroke="#DBECCC"
-              strokeOpacity="0.25"
-              strokeWidth="14"
-              strokeLinecap="round"
-            />
-            <path
-              d="M58 336.888C118.984 300.989 149.477 350.848 165.739 356.831C218.592 374.78 226.723 432.616 175.903 456.548C131.181 478.486 125.083 538.317 137.28 572.221C151.509 612.107 110.853 632.051 96.623 650"
-              stroke="#DBECCC"
-              strokeOpacity="0.9"
-              strokeWidth="5"
-              strokeLinecap="round"
-            />
-          </svg>
-          <span className="map-dot" style={{ left: 157, top: 351, opacity: 0.88 }} />
-          <span className="map-dot" style={{ left: 170, top: 452, opacity: 0.74 }} />
-          <span className="map-dot" style={{ left: 130, top: 564, opacity: 0.58 }} />
-        </div>
-        <h3 className="map-title" style={{ left: 188, top: 293, width: 140 }}>{storyData.mapNodes[0].title}</h3>
-        <p className="map-desc map-desc-two" style={{ left: 188, top: 318, width: 145 }}>{storyData.mapNodes[0].text}</p>
-        <h3 className="map-title" style={{ left: 132, top: 394, width: 80 }}>{storyData.mapNodes[1].title}</h3>
-        <p className="map-desc map-desc-two" style={{ left: 78, top: 422, width: 145 }}>{storyData.mapNodes[1].text}</p>
-        <h3 className="map-title" style={{ left: 174, top: 504, width: 110 }}>{storyData.mapNodes[2].title}</h3>
-        <p className="map-desc map-desc-three" style={{ left: 174, top: 530, width: 155 }}>{storyData.mapNodes[2].text}</p>
-        <div className="map-summary" style={clampStyle(3)}>{storyData.mapSummary}</div>
-        <DownCue onClick={() => scrollToPage(2)} />
-      </EchoStoryFrame>
-
-      <EchoStoryFrame index={2} name="PAGE 3 / 03 三个关键时刻" {...commonFrameProps}>
-        <EchoRings left={196} top={63} />
-        <p className="moments-lead">这个月，<br />小象想帮你留下三个时刻：</p>
-        {storyData.moments.map((moment, index) => (
-          <MomentCard
-            key={`${index}-${moment.dateLabel}-${moment.title}`}
-            index={index}
-            moment={moment}
-            top={[154, 326, 498][index]}
-            rotate={[0.5, -0.7, 0.6][index]}
-          />
-        ))}
-        <p className="moments-end" style={clampStyle(3)}>{storyData.momentsSummary}</p>
-        <DownCue onClick={() => scrollToPage(3)} />
-      </EchoStoryFrame>
-
-      <EchoStoryFrame index={3} name="PAGE 4 / 04 行动轨迹" {...commonFrameProps}>
-        <h2 className="actions-title">这个月，<br />你不是只是在想。</h2>
-        <ActionTrail actions={storyData.actions} />
-        <div className="action-paper" style={clampStyle(3)}>
-          {storyData.actionSummary}
-          <span className="stamp">小象</span>
-        </div>
-        <DownCue onClick={() => scrollToPage(4)} />
-      </EchoStoryFrame>
-
-      <EchoStoryFrame index={4} name="PAGE 5 / 05 反复主题" {...commonFrameProps}>
-        <EchoRings left={222} top={48} sizes={[60, 80, 100, 120, 140]} />
-        <EchoRings left={257} top={244} sizes={[70, 90, 110, 130, 150]} />
-        <h2 className="theme-lead">这个月，<br />有一个问题一再出现：</h2>
-        <p className="theme-desc" style={clampStyle(3)}>{storyData.repeatedLead}</p>
-        <BrushQuote className="left-[34px] top-[378px] text-[22px] leading-[29px]" width="calc(var(--echo-frame-width, 390px) - 68px)">
-          「{storyData.repeatedQuestion}」
-        </BrushQuote>
-        <p className="theme-turn" style={clampStyle(2)}>{storyData.repeatedTurn}</p>
-        <BrushQuote className="left-[34px] top-[636px] text-[19px] leading-[29px]" width="calc(var(--echo-frame-width, 390px) - 68px)" green>
-          「{storyData.nextQuestion}」
-        </BrushQuote>
-        <DownCue onClick={() => scrollToPage(5)} />
-      </EchoStoryFrame>
-
-      <EchoStoryFrame index={5} name="PAGE 6 / 06 回声信" {...commonFrameProps}>
-        <div className="letter-card">
-          <div className="letter-greeting">亲爱的 {displayName}：</div>
-          <div className="letter-body">
-            {letterParagraphs.map((paragraph, index) => (
-              <p key={`${index}-${paragraph.slice(0, 8)}`}>{paragraph}</p>
-            ))}
-          </div>
-          <div className="letter-sign">爱你的小象</div>
-          <div className="letter-date">{payload!.monthKey.replace('-', ' · ')}</div>
-        </div>
-      </EchoStoryFrame>
-    </>
-  );
-
   const renderStatusPage = () => {
     if (loading) {
       return <StatusStoryFrame title="月之回响" message="小象正在翻看这个月的回声。" loading onBack={() => navigate(-1)} />;
@@ -1881,11 +2259,23 @@ export default function MonthlyEcho() {
       );
     }
 
+    if (!hasReadableEcho && payload?.status === 'failed') {
+      return (
+        <StatusStoryFrame
+          title={`${monthKeyToLabel(monthKey)}月之回响`}
+          message={payload.message || '本次生成没有完成，已经停止自动重试。'}
+          actionLabel={regenerating ? '正在重新生成' : '重新生成'}
+          onAction={() => void handleRegenerate()}
+          onBack={() => navigate(-1)}
+        />
+      );
+    }
+
     return (
       <StatusStoryFrame
         title={`${monthKeyToLabel(monthKey)}月之回响`}
         message={payload?.message || '已经加入生成队列。你可以先去写日记，整理好后再回来。'}
-        loading
+        loading={payload?.status === 'generating'}
         onBack={() => navigate(-1)}
       />
     );
@@ -1896,10 +2286,9 @@ export default function MonthlyEcho() {
       return (
         <div
           key={index}
-          ref={node => {
-            pageRefs.current[index] = node;
-          }}
           className="monthly-echo-slot monthly-echo-entrance-slot"
+          aria-hidden={index !== activePage}
+          inert={index !== activePage}
         >
           {content}
         </div>
@@ -1909,10 +2298,9 @@ export default function MonthlyEcho() {
     return (
       <div
         key={index}
-        ref={node => {
-          pageRefs.current[index] = node;
-        }}
         className="monthly-echo-slot"
+        aria-hidden={index !== activePage}
+        inert={index !== activePage}
       >
         <div style={{ width: frameWidth * frameScale, height: 844 * frameScale }}>
           <div
@@ -1929,16 +2317,38 @@ export default function MonthlyEcho() {
     );
   };
 
-  const storyContent = hasReadableEcho && payload
-    ? React.Children.toArray(renderReadablePages().props.children)
+  const storyContent = hasReadableEcho && report
+    ? buildMonthlyEchoExactPages(report, scrollToPage)
     : [renderStatusPage()];
 
   return (
     <div className="monthly-echo-root">
       <StoryStyle />
-      <div ref={scrollerRef} className="monthly-echo-scroll">
-        {storyContent.map((content, index) => renderSlot(content, index, Boolean(hasReadableEcho && payload && index === 0)))}
+      <MonthlyEchoExactStyle />
+      <div
+        ref={pagerRef}
+        className="monthly-echo-scroll"
+        role="region"
+        aria-roledescription="carousel"
+        aria-label="月度回声，纵向滑动查看七页报告"
+        tabIndex={0}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={event => finishPointerGesture(event)}
+        onPointerCancel={event => finishPointerGesture(event, true)}
+        onWheel={handleWheel}
+        onKeyDown={handleKeyDown}
+        onClickCapture={event => {
+          if (!didDragRef.current) return;
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+      >
+        <div ref={trackRef} className="monthly-echo-track">
+          {storyContent.map((content, index) => renderSlot(content, index))}
+        </div>
       </div>
+      <div className="sr-only" aria-live="polite">第 {activePage + 1} 页，共 {storyContent.length} 页</div>
       <div ref={posterRef} className="pointer-events-none fixed left-[-9999px] top-0">
         {payload && hasReadableEcho && (
           <MonthlyEchoPoster payload={payload} storyData={storyData} displayName={displayName} />

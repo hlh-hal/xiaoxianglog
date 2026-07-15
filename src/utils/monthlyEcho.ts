@@ -1,5 +1,27 @@
 export type MonthlyEchoStatus = 'disabled' | 'empty' | 'generating' | 'ready' | 'pushed' | 'stale' | 'failed';
 
+export type MonthlyEchoContentState = 'ready' | 'partial' | 'fallback';
+export type MonthlyEchoIconHint = 'express' | 'pause' | 'organize' | 'refuse' | 'try' | 'persist' | 'adjust' | 'restart' | 'askHelp' | 'record' | 'exercise' | 'create' | 'accompany' | 'clean' | 'repair' | 'boundary' | 'other';
+export type MonthlyEchoOccurrence = { date: string; scene: string; evidence: string; text: string; evidenceIds: string[] };
+export type MonthlyEchoMoment = { date: string; title: string; event: string; meaning: string; evidence: string; text: string; evidenceIds: string[] };
+export type MonthlyEchoAction = { date: string; action: string; scene: string; meaning: string; evidence: string; iconHint: MonthlyEchoIconHint; text: string; evidenceIds: string[] };
+export type MonthlyEchoSideTheme = { date: string; title: string; scene: string; meaning: string; evidence: string; text: string; evidenceIds: string[] };
+export type MonthlyEchoPageBase = { contentState: MonthlyEchoContentState; fallbackMessage?: string };
+
+export type MonthlyEchoRenderPayload = {
+  schemaVersion: 2;
+  monthKey: string;
+  pages: {
+    entrance: MonthlyEchoPageBase & { month: string; monthEn: string; diaryCount: number };
+    overview: MonthlyEchoPageBase & { initialQuestion: string; occurrences: MonthlyEchoOccurrence[]; evolvedQuestion: string; mainArc: string; conclusion: string };
+    map: MonthlyEchoPageBase & { mainArc: string; sideThemes: MonthlyEchoSideTheme[]; summary: string };
+    moments: MonthlyEchoPageBase & { items: MonthlyEchoMoment[]; summary: string };
+    actions: MonthlyEchoPageBase & { items: MonthlyEchoAction[]; summary: string };
+    recurring: MonthlyEchoPageBase & { lead: string; question: string; occurrences: MonthlyEchoOccurrence[]; evolvedQuestion: string; conclusion: string };
+    letter: MonthlyEchoPageBase & { salutation: string; paragraphs: string[]; finalInsight: string; signature: string };
+  };
+};
+
 export type MonthlyEchoSections = {
   opening?: string | null;
   mainArcSection?: string | null;
@@ -24,6 +46,13 @@ export type MonthlyEchoPayload = {
   pushedAt?: string | null;
   entryCount?: number;
   message?: string;
+  retryable?: boolean;
+  progress?: {
+    completed: number;
+    total: number;
+    attempt: number;
+  };
+  report?: MonthlyEchoRenderPayload | null;
 };
 
 export function normalizeMonthKey(value: string | null | undefined, now = new Date()): string {

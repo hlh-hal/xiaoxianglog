@@ -1,6 +1,8 @@
 import type { DailyEcho, DiaryEntry } from '../diary/model';
 import { diaryService, isEmptyInsightDraft } from '../../services/diaryService';
+import type { CreateDailyEchoJobInput } from '../../services/dailyEchoService';
 import {
+  buildPromptMemoryPack,
   ensureEchoHotMemoryUpdated,
   ensureInsightDraftUpdated,
   generateDiaryEcho,
@@ -15,7 +17,56 @@ export function getDiaryPlainText(entry: DiaryEntry): string {
   return (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
-/** 汇集回声所需上下文并返回可直接持久化的领域对象。 */
+/**
+ * Select the smallest relevant local memory pack before enqueueing. Raw hot-memory
+ * records stay on-device; the durable job receives only the prompt context and ids.
+ */
+export async function buildDailyEchoJobInput(
+  entry: DiaryEntry,
+  regenerateCount: number,
+): Promise<CreateDailyEchoJobInput> {
+  const diaryText = getDiaryPlainText(entry);
+  const hotMemory = await diaryService.getEchoHotMemory();
+  const memoryPack = buildPromptMemoryPack(diaryText, hotMemory);
+  return {
+    entryId: entry.id,
+    diaryText,
+    diaryDate: entry.diaryDate,
+    sourceEntryUpdatedAt: entry.updatedAt,
+    regenerateCount,
+    memoryContext: memoryPack.context,
+    selectedMemoryEntryIds: memoryPack.selectedEntryIds,
+  };
+}
+
+/** Mark only memory entries that were actually attached to a successful server job. */
+export async function markDailyEchoMemoryEntriesUsed(
+  selectedEntryIds: string[],
+  usedAt = new Date().toISOString(),
+): Promise<void> {
+  if (selectedEntryIds.length === 0) return;
+  const hotMemory = await diaryService.getEchoHotMemory();
+  if (!hotMemory) return;
+
+  const selected = new Set(selectedEntryIds);
+  let changed = false;
+  const entries = hotMemory.entries.map(entry => {
+    if (!selected.has(entry.id)) return entry;
+    if (entry.lastUsedInPromptAt && entry.lastUsedInPromptAt >= usedAt) return entry;
+    changed = true;
+    return { ...entry, lastUsedInPromptAt: usedAt };
+  });
+  if (!changed) return;
+
+  await diaryService.saveEchoHotMemory({
+    ...hotMemory,
+    version: hotMemory.version + 1,
+    updatedAt: usedAt,
+    entries,
+  });
+}
+
+/** Local-only compatibility path. It remains foreground-bound by design. */
 export async function generateDailyEchoForEntry(
   entry: DiaryEntry,
   regenerateCount: number,

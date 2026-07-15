@@ -20,6 +20,8 @@ export type AiCompletionResult = {
   provider: string;
 };
 
+export type AiStreamCompletionResult = AiCompletionResult;
+
 export class AiProviderError extends Error {
   status?: number;
   body?: string;
@@ -162,6 +164,159 @@ export async function completeAiText(args: {
   } catch (error) {
     if (error instanceof AiProviderError) throw error;
     throw new AiProviderError('AI provider request failed', { cause: error });
+  } finally {
+    clearTimeout(timeout);
+    release();
+  }
+}
+
+function getVisibleDeltaContent(delta: unknown): string {
+  if (!delta || typeof delta !== 'object') return '';
+  const content = (delta as { content?: unknown }).content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  return content
+    .map((part) => {
+      if (!part || typeof part !== 'object') return '';
+      const block = part as { type?: unknown; text?: unknown; content?: unknown };
+      const type = typeof block.type === 'string' ? block.type.toLowerCase() : '';
+      if (type.includes('reason') || type.includes('think')) return '';
+      if (typeof block.text === 'string') return block.text;
+      return typeof block.content === 'string' ? block.content : '';
+    })
+    .join('');
+}
+
+/**
+ * Stream only user-visible content deltas. Provider reasoning/thinking fields are
+ * deliberately ignored and never forwarded to callers or persisted previews.
+ */
+export async function streamAiText(args: {
+  userId: string;
+  messages: AiMessage[];
+  modelId?: string;
+  temperature?: number;
+  maxTokens?: number;
+  responseFormat?: unknown;
+  timeoutMs?: number;
+  onDelta?: (delta: string, accumulated: string) => void | Promise<void>;
+}): Promise<AiStreamCompletionResult> {
+  const provider = getProviderConfig(args.modelId);
+  if (!provider.apiKey) throw new AiProviderError('AI provider API key is not configured', { status: 503 });
+  if (!provider.baseUrl) throw new AiProviderError('AI provider base URL is not configured', { status: 503 });
+
+  const release = acquireAiSlot(args.userId);
+  if (!release) throw new AiProviderError('AI concurrency limit reached', { status: 429 });
+
+  const controller = new AbortController();
+  const timeoutMs = Number.isFinite(args.timeoutMs) && Number(args.timeoutMs) > 0
+    ? Number(args.timeoutMs)
+    : getProviderTimeoutMs(provider);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
+
+  try {
+    const response = await fetch(buildChatCompletionsUrl(provider), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${provider.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        messages: args.messages,
+        max_tokens: args.maxTokens,
+        temperature: args.temperature,
+        response_format: args.responseFormat,
+        stream: true,
+        stream_options: { include_usage: true },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new AiProviderError('AI provider returned an error', {
+        status: response.status,
+        body: await response.text().catch(() => ''),
+      });
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('text/event-stream')) {
+      const data = await response.json() as any;
+      const choice = data.choices?.[0];
+      const content = typeof choice?.message?.content === 'string' ? choice.message.content : '';
+      if (content && args.onDelta) await args.onDelta(content, content);
+      return {
+        content,
+        finishReason: choice?.finish_reason || null,
+        aiModel: data.model || provider.model,
+        provider: provider.name,
+      };
+    }
+
+    if (!response.body) {
+      throw new AiProviderError('AI provider returned an empty stream', { status: 502 });
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let content = '';
+    let finishReason: string | null = null;
+    let responseModel = provider.model;
+
+    const consumeLine = async (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) return;
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === '[DONE]') return;
+
+      let event: any;
+      try {
+        event = JSON.parse(payload);
+      } catch {
+        return;
+      }
+
+      if (typeof event.model === 'string' && event.model) responseModel = event.model;
+      const choice = event.choices?.[0];
+      if (choice?.finish_reason != null) finishReason = String(choice.finish_reason);
+      // Only delta.content is visible output. reasoning_content/reasoning/thinking
+      // fields intentionally remain unread.
+      const delta = getVisibleDeltaContent(choice?.delta);
+      if (!delta) return;
+      content += delta;
+      if (args.onDelta) await args.onDelta(delta, content);
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      for (const line of lines) await consumeLine(line);
+      if (done) break;
+    }
+    if (buffer.trim()) await consumeLine(buffer);
+
+    console.log(
+      `[ai] stream provider=${provider.name} targetModel=${provider.model} elapsedMs=${Date.now() - startedAt}`,
+    );
+    return {
+      content,
+      finishReason,
+      aiModel: responseModel,
+      provider: provider.name,
+    };
+  } catch (error) {
+    if (error instanceof AiProviderError) throw error;
+    if (controller.signal.aborted) {
+      throw new AiProviderError('AI provider request timed out', { status: 504, cause: error });
+    }
+    throw new AiProviderError('AI provider stream failed', { cause: error });
   } finally {
     clearTimeout(timeout);
     release();

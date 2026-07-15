@@ -9,23 +9,23 @@ export type AppRelease = {
 
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
 
-export const currentVersion = '1.0.20';
-export const currentVersionCode = 22;
+export const currentVersion = '1.0.21';
+export const currentVersionCode = 23;
 export const updateManifestUrl = viteEnv?.VITE_APP_UPDATE_URL || 'https://xiaoxianglog.cn/app-update.json';
 
 export const latestRelease: AppRelease = {
-  version: '1.0.20',
-  versionCode: 22,
-  releasedAt: '2026-06-24',
+  version: '1.0.21',
+  versionCode: 23,
+  releasedAt: '2026-06-30',
   downloadUrl: 'https://xiaoxianglog.cn/download/xiaoxiang-log-latest.apk',
   highlights: [
-    '还原 Android 编辑器选中文字和光标手柄的系统默认图标，不再显示错误的绿色水滴样式。',
-    '移除误加的原生 textSelectHandle 绑定，避免系统选择控件被替换成自定义图形。',
-    '保留顶部遮挡和 WebView 深色合成修复，继续减少正文重叠和原生选区白底问题。',
+    '修复日记导出图片中英文混排偶发重叠问题，让导出文字排版与浏览器/WebView 实际渲染保持一致。',
+    '优化导出背景图片渲染一致性，减少不同 Android 机型和系统字号设置下的错位和裁切。',
+    '导出前会等待字体、图片和文字几何稳定，并内嵌当前字体，进一步降低 fallback 漂移。',
   ],
   fixes: [
-    '删除自定义 text_select_handle 资源引用，恢复系统默认文本选择手柄。',
-    '本次只修正图标样式误改，不改编辑器正文、工具栏或主题布局。',
-    '白色方块问题后续继续按原生 WebView/资源合成方向排查，不再通过更换手柄形状处理。',
+    '日记导出不再依赖 html2canvas 的文本测量，改为 html-to-image 的 browser-native foreignObject 渲染。',
+    '统一收紧导出排版约束，避免不同系统字体和字号设置把中文、英文和数字压到一起。',
+    '本次修复重点集中在导出文字和背景图，不改编辑器正文、工具栏或主题逻辑。',
   ],
 };

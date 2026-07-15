@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { sendBrowserNotification } from '../utils/notify';
 import { api } from '../services/apiClient';
 import { AppToast } from '../components/AppToast';
 import { UserAvatar } from '../components/UserAvatar';
@@ -21,14 +20,50 @@ export interface Notification {
     id: string;
     content: string;
   } | null;
+  refDiaryId: string | null;
+  createdAt: string;
+  isRead: boolean;
+}
+
+export interface NotificationApiItem {
+  id: string;
+  type: string;
+  fromUser?: {
+    id?: string | null;
+    name?: string | null;
+    avatar?: string | null;
+  } | null;
+  content?: string | null;
+  friendStatus?: FriendStatus | null;
+  refPostId?: string | null;
+  refDiaryId?: string | null;
   createdAt: string;
   isRead: boolean;
 }
 
 const TABS = [
-  { label: '通知', types: ['like', 'comment', 'poke'] },
+  { label: '通知', types: ['like', 'comment', 'poke', 'daily_echo_ready'] },
   { label: '好友申请', types: ['friend_request'] },
 ];
+
+export function formatInboxNotification(item: NotificationApiItem): Notification {
+  const isDailyEchoReady = item.type === 'daily_echo_ready';
+  return {
+    id: item.id,
+    type: item.type,
+    sourceUser: {
+      id: item.fromUser?.id || '',
+      nickname: item.fromUser?.name || (isDailyEchoReady ? '小象' : '未知'),
+      avatarUrl: item.fromUser?.avatar || null,
+    },
+    content: item.content || null,
+    friendStatus: item.friendStatus || undefined,
+    post: item.refPostId ? { id: item.refPostId, content: '' } : null,
+    refDiaryId: item.refDiaryId || null,
+    createdAt: item.createdAt,
+    isRead: item.isRead,
+  };
+}
 
 const getDisplayTitle = (item: Notification): string => {
   const dateStr = item.createdAt;
@@ -38,15 +73,34 @@ const getDisplayTitle = (item: Notification): string => {
   return `${month}月${day}日的日记`;
 };
 
-const typeText = (item: Notification) => {
+export const getInboxNotificationText = (item: Notification) => {
   const title = getDisplayTitle(item);
   return {
     friend_request: ' 申请添加你为好友',
     like: item.post ? ` 赞了你的日记` : ' 赞了你的日志排行榜',
     comment: ` 评论了你的日记`,
     poke: ' 戳了戳你',
-  }[item.type as keyof typeof typeText] || ' 有新互动';
+    daily_echo_ready: item.content?.trim() || '每日回声已生成，点击查看',
+  }[item.type as keyof typeof getInboxNotificationText] || ' 有新互动';
 };
+
+export function getInboxNotificationTarget(item: Notification): string | null {
+  if (item.type === 'friend_request') return null;
+  if (item.type === 'daily_echo_ready') {
+    return item.refDiaryId ? `/editor?id=${encodeURIComponent(item.refDiaryId)}` : null;
+  }
+  if (item.type === 'poke') {
+    return `/leaderboard?focusUser=${encodeURIComponent(item.sourceUser.nickname)}`;
+  }
+  if (item.type === 'like' && !item.post?.id) return '/leaderboard';
+
+  const search = item.type === 'comment'
+    ? '?focus=comments'
+    : item.type === 'like'
+      ? '?tab=likes'
+      : '';
+  return `/post/${item.post?.id || 'post-001'}${search}`;
+}
 
 const formatTime = (iso: string) => {
   const diff = Date.now() - new Date(iso).getTime();
@@ -76,21 +130,8 @@ export default function Inbox() {
   useEffect(() => {
     const fetchNotifications = async () => {
       try {
-        const data = await api.get<any[]>('/notifications');
-        const formatted = (data || []).map(n => ({
-          id: n.id,
-          type: n.type,
-          sourceUser: {
-            id: n.fromUser?.id || '',
-            nickname: n.fromUser?.name || '未知',
-            avatarUrl: n.fromUser?.avatar || null,
-          },
-          content: n.content,
-          friendStatus: n.friendStatus || undefined,
-          post: n.refPostId ? { id: n.refPostId, content: '' } : null,
-          createdAt: n.createdAt,
-          isRead: n.isRead,
-        }));
+        const data = await api.get<NotificationApiItem[]>('/notifications');
+        const formatted = (data || []).map(formatInboxNotification);
         setNotifications(formatted);
         
         if (formatted.some(n => !n.isRead)) {
@@ -155,28 +196,8 @@ export default function Inbox() {
       api.post(`/notifications/${item.id}/read`).catch(console.error);
     }
     
-    // 戳一戳
-    if (item.type === 'poke') {
-       navigate(`/leaderboard?focusUser=${encodeURIComponent(item.sourceUser.nickname)}`);
-       return;
-    }
-
-    // 排行榜点赞 (没有 post ID)
-    if (item.type === 'like' && !item.post?.id) {
-      navigate('/leaderboard');
-      return;
-    }
-
-    // 日记点赞 / 评论
-    let search = '';
-    if (item.type === 'comment') {
-      search = '?focus=comments';
-    } else if (item.type === 'like') {
-      search = '?tab=likes';
-    }
-    
-    const targetId = item.post?.id || 'post-001';
-    navigate(`/post/${targetId}${search}`);
+    const target = getInboxNotificationTarget(item);
+    if (target) navigate(target);
   };
 
   const currentFilterTypes = TABS[activeTab].types;
@@ -321,7 +342,8 @@ export default function Inbox() {
                 {item.type === 'comment' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#A1A1A6' }}><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></svg>}
                 {item.type === 'poke' && <span style={{ fontSize: 14 }}>👋</span>}
                 {item.type === 'friend_request' && <span style={{ fontSize: 14 }}>👋</span>}
-                <span>{item.type === 'friend_request' ? '申请添加你为好友' : String(typeText(item)).trim()}</span>
+                {item.type === 'daily_echo_ready' && <span style={{ fontSize: 14 }}>🐘</span>}
+                <span>{item.type === 'friend_request' ? '申请添加你为好友' : String(getInboxNotificationText(item)).trim()}</span>
               </div>
 
               {/* Row 3: Content Snippet */}

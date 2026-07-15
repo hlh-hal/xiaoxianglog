@@ -112,22 +112,21 @@ page.on('request', request => {
 });
 
 async function insertText(text, mockNow) {
-  await page.evaluate(() => {
-    window.__xiaoxiangMockNow = undefined;
-  });
+  await page.evaluate(now => {
+    window.__xiaoxiangMockNow = now;
+  }, mockNow);
   await sleep(700);
   await page.click('.ProseMirror');
   await page.waitForFunction(() => document.querySelector('.ProseMirror')?.getAttribute('contenteditable') === 'true', {
     timeout: 15000,
   });
-  await page.evaluate(now => {
-    window.__xiaoxiangMockNow = now;
+  await page.evaluate(() => {
     const editor = document.querySelector('.ProseMirror');
     if (!(editor instanceof HTMLElement)) {
       throw new Error('ProseMirror editor not found');
     }
     editor.focus();
-  }, mockNow);
+  });
   await page.keyboard.type(text, { delay: 0 });
 }
 
@@ -289,6 +288,8 @@ try {
   await page.waitForSelector('.ProseMirror', { timeout: 15000 });
   console.log('[writing-time] five minute edit');
   await insertText(' first stretch', 0);
+  // 真实等待超过 1.5 秒自动保存窗口，防止验证脚本再次绕过“自动保存截断思考时间”的回归。
+  await sleep(1700);
   await insertText(' second stretch', 65_000);
   await insertText(' third stretch', 145_000);
   await insertText(' fourth stretch', 225_000);

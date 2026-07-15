@@ -8,6 +8,7 @@ export interface DailyEcho {
   styleId: 'gentle';
   generatedAt: string;
   sourceEntryUpdatedAt: string;
+  sourceHash?: string;
   regenerateCount: number;
   card?: {
     imageUrl?: string;

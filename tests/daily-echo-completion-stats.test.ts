@@ -10,6 +10,7 @@ import {
   pauseWritingActivity,
   recordWritingInput,
 } from '../src/utils/dailyEchoCompletionStats';
+import { projectTotal } from '../src/features/editor/writingTimeTracker';
 
 function test(name: string, fn: () => void): void {
   try {
@@ -51,7 +52,7 @@ test('caps active writing time at 180 seconds and ignores inactive gaps', () => 
   activity = recordWritingInput(activity, 11_000);
   activity = recordWritingInput(activity, 81_000);
 
-  assert.equal(activity.elapsedMs, 80_000);
+  assert.equal(projectTotal(activity, 81_000), 80_000);
   assert.equal(getActiveWritingMinutes(activity, 82_000), 1);
 });
 
@@ -61,7 +62,7 @@ test('completion minutes ignore wall-clock gaps and use capped active writing ti
   activity = recordWritingInput(activity, 6 * 60_000);
   activity = recordWritingInput(activity, 12 * 60_000);
 
-  assert.equal(activity.elapsedMs, 360_000);
+  assert.equal(projectTotal(activity, 12 * 60_000), 360_000);
   assert.equal(getActiveWritingSeconds(activity, 12 * 60_000), 360);
   assert.equal(getActiveWritingMinutes(activity, 12 * 60_000), 6);
 });
@@ -71,7 +72,7 @@ test('counts thinking pauses up to three minutes between writing actions', () =>
   activity = recordWritingInput(activity, 0);
   activity = recordWritingInput(activity, 2 * 60_000 + 30_000);
 
-  assert.equal(activity.elapsedMs, 150_000);
+  assert.equal(projectTotal(activity, 2 * 60_000 + 30_000), 150_000);
   assert.equal(getActiveWritingMinutes(activity, 2 * 60_000 + 31_000), 3);
 });
 
@@ -80,7 +81,7 @@ test('caps long thinking pauses at three minutes without counting the full absen
   activity = recordWritingInput(activity, 0);
   activity = recordWritingInput(activity, 10 * 60_000);
 
-  assert.equal(activity.elapsedMs, 180_000);
+  assert.equal(projectTotal(activity, 10 * 60_000), 180_000);
   assert.equal(getActiveWritingSeconds(activity, 10 * 60_000), 180);
   assert.equal(getActiveWritingMinutes(activity, 10 * 60_000), 3);
 });
@@ -108,7 +109,7 @@ test('pause stops background or blur time from accumulating', () => {
   activity = pauseWritingActivity(activity, 606_000);
 
   assert.equal(activity.elapsedMs, 11_000);
-  assert.equal(activity.lastInputAt, null);
+  assert.equal(activity.activeSegment, null);
 });
 
 test('active writing minutes round up after the half-minute mark with a one minute minimum', () => {
@@ -183,7 +184,7 @@ test('builds completion stats from saved entry, active writing, and entries', ()
   activity = recordWritingInput(activity, 0);
   activity = recordWritingInput(activity, 20_000);
 
-  const stats = buildDailyEchoCompletionStats(current, entries, activity, 21_000);
+  const stats = buildDailyEchoCompletionStats(current, entries, getActiveWritingSeconds(activity, 21_000));
   assert.deepEqual(stats, {
     wordCount: 6,
     activeWritingMinutes: 1,

@@ -54,6 +54,7 @@ model User {
   monthlyArcDrafts MonthlyArcDraft[]
   monthlyEchoes MonthlyEcho[]
   monthlyEchoJobLogs MonthlyEchoJobLog[]
+  dailyEchoJobs DailyEchoJob[]
 
   @@map("users")
 }
@@ -385,6 +386,7 @@ model DailyTraceNode {
   unfinishedQuestions  String    @default("[]") @map("unfinished_questions")
   changeSignals        String    @default("[]") @map("change_signals")
   evidenceQuotes       String    @default("[]") @map("evidence_quotes")
+  tracePayload         String    @default("{}") @map("trace_payload")
   confidence           Float     @default(0)
   aiModel              String?   @map("ai_model")
   promptVersion        String    @default("daily_trace_v1") @map("prompt_version")
@@ -426,6 +428,7 @@ model MonthlyArcDraft {
   growthDirection        String    @default("") @map("growth_direction")
   monthlyInsightSentence String    @default("") @map("monthly_insight_sentence")
   evidenceMap            String    @default("[]") @map("evidence_map")
+  arcPayload              String    @default("{}") @map("arc_payload")
   confidence             Float     @default(0)
   aiModel                String?   @map("ai_model")
   promptVersion          String    @default("monthly_arc_v1") @map("prompt_version")
@@ -461,6 +464,7 @@ model MonthlyEcho {
   nextMonthQuestion        String    @default("") @map("next_month_question")
   finalInsightSentence     String    @default("") @map("final_insight_sentence")
   fullText                 String    @default("") @map("full_text")
+  renderPayload            String    @default("{}") @map("render_payload")
   posterQuote              String?   @map("poster_quote")
   posterThemeLine          String?   @map("poster_theme_line")
   pushTitle                String?   @map("push_title")
@@ -502,6 +506,7 @@ model MonthlyEchoJobLog {
   generatedTraceNodes   Int       @default(0) @map("generated_trace_nodes")
   monthlyArcDraftStatus String?   @map("monthly_arc_draft_status")
   monthlyEchoStatus     String?   @map("monthly_echo_status")
+  promptVersion         String    @default("") @map("prompt_version")
   lastError             String?   @map("last_error")
   startedAt             DateTime? @map("started_at")
   finishedAt            DateTime? @map("finished_at")
@@ -513,4 +518,43 @@ model MonthlyEchoJobLog {
   @@unique([userId, monthKey, jobType])
   @@index([status, lockedUntil])
   @@map("monthly_echo_job_logs")
+}
+
+// ============================================
+// 20. 每日回声：可恢复的后台生成任务
+// ============================================
+model DailyEchoJob {
+  id                     String    @id @default(uuid())
+  userId                 String    @map("user_id")
+  entryId                String    @map("entry_id")
+  activeKey              String?   @unique @map("active_key") // queued/running 时占用，终态释放
+  runKey                 String?   @unique @map("run_key") // running 时按用户占用，限制单用户并发
+  dedupeKey              String    @unique @map("dedupe_key")
+  sourceHash             String    @map("source_hash")
+  sourceEntryUpdatedAt   String    @map("source_entry_updated_at")
+  regenerateCount        Int       @default(0) @map("regenerate_count")
+  status                 String    @default("queued") // queued | running | succeeded | failed | stale
+  promptInput            String?   @map("prompt_input") // 仅 queued/running 保留的 JSON 文本
+  selectedMemoryEntryIds String    @default("[]") @map("selected_memory_entry_ids")
+  previewContent         String    @default("") @map("preview_content")
+  finalContent           String?   @map("final_content")
+  promptVersion          String    @default("daily_echo_v1") @map("prompt_version")
+  model                   String?
+  provider                String?
+  attemptCount            Int       @default(0) @map("attempt_count")
+  lockToken               String?   @map("lock_token")
+  lockedUntil             DateTime? @map("locked_until")
+  errorCode               String?   @map("error_code")
+  errorMessage            String?   @map("error_message")
+  startedAt               DateTime? @map("started_at")
+  finishedAt              DateTime? @map("finished_at")
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, entryId, createdAt])
+  @@index([status, lockedUntil])
+  @@index([userId, updatedAt])
+  @@map("daily_echo_jobs")
 }

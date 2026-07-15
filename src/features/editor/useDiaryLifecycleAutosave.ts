@@ -13,6 +13,7 @@ interface UseDiaryLifecycleAutosaveOptions {
   backgroundId?: string;
   themeId?: string;
   persistEntry: PersistEntry;
+  beforeLifecyclePersist?: (reason: PersistReason) => void;
 }
 
 /** 统一管理编辑器的防抖自动保存与页面生命周期 flush。 */
@@ -25,6 +26,7 @@ export function useDiaryLifecycleAutosave({
   backgroundId,
   themeId,
   persistEntry,
+  beforeLifecyclePersist,
 }: UseDiaryLifecycleAutosaveOptions): void {
   useEffect(() => {
     if (!isEditing || previewHashActive || !hasUnsavedChanges.current) return;
@@ -41,6 +43,7 @@ export function useDiaryLifecycleAutosave({
 
   useEffect(() => {
     const flush = (reason: PersistReason) => {
+      beforeLifecyclePersist?.(reason);
       void persistEntry({
         reason,
         saveHistory: true,
@@ -66,5 +69,5 @@ export function useDiaryLifecycleAutosave({
       window.removeEventListener('pagehide', handlePageHide);
       document.removeEventListener('freeze', handleFreeze);
     };
-  }, [persistEntry]);
+  }, [beforeLifecyclePersist, persistEntry]);
 }

@@ -774,6 +774,11 @@ type StyleMutation = {
   priority: string;
 };
 
+type AttributeMutation = {
+  node: HTMLElement;
+  value: string | null;
+};
+
 function setTemporaryStyle(mutations: StyleMutation[], node: HTMLElement, property: string, value: string): void {
   mutations.push({
     node,
@@ -782,6 +787,39 @@ function setTemporaryStyle(mutations: StyleMutation[], node: HTMLElement, proper
     priority: node.style.getPropertyPriority(property),
   });
   node.style.setProperty(property, value);
+}
+
+export function __materializeExportListMarkers(root: HTMLElement): () => void {
+  const mutations: AttributeMutation[] = [];
+  const content = root.querySelector<HTMLElement>('[data-export-content="true"]') || root;
+
+  for (const list of content.querySelectorAll<HTMLOListElement>('ol')) {
+    const items = Array.from(list.children).filter(
+      (child): child is HTMLLIElement => child.tagName === 'LI',
+    );
+    const reversed = list.hasAttribute('reversed');
+    const parsedStart = Number.parseInt(list.getAttribute('start') || '', 10);
+    let current = Number.isFinite(parsedStart) ? parsedStart : reversed ? items.length : 1;
+
+    for (const item of items) {
+      const parsedValue = Number.parseInt(item.getAttribute('value') || '', 10);
+      if (Number.isFinite(parsedValue)) current = parsedValue;
+      mutations.push({ node: item, value: item.getAttribute('data-export-list-marker') });
+      item.setAttribute('data-export-list-marker', `${current}.`);
+      current += reversed ? -1 : 1;
+    }
+  }
+
+  return () => {
+    for (let i = mutations.length - 1; i >= 0; i--) {
+      const mutation = mutations[i];
+      if (mutation.value === null) {
+        mutation.node.removeAttribute('data-export-list-marker');
+      } else {
+        mutation.node.setAttribute('data-export-list-marker', mutation.value);
+      }
+    }
+  };
 }
 
 function applyExportTypographySafety(root: HTMLElement): () => void {
@@ -843,6 +881,7 @@ export async function renderExportPng(
   scale: 1 | 1.5 | 2,
   fontEmbedCSS?: string,
 ): Promise<ExportPngResult> {
+  const restoreListMarkers = __materializeExportListMarkers(el);
   const restoreTypography = applyExportTypographySafety(el);
   try {
     await waitForExportRenderReady(el);
@@ -877,6 +916,7 @@ export async function renderExportPng(
     return { dataUrl, ...dimensions };
   } finally {
     restoreTypography();
+    restoreListMarkers();
   }
 }
 

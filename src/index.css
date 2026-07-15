@@ -388,6 +388,10 @@ html[data-platform="android"] .home-timeline-card {
   text-align: right;
 }
 
+.ProseMirror[data-export-content="true"] ol > li[data-export-list-marker]::before {
+  content: attr(data-export-list-marker);
+}
+
 .ProseMirror[data-export-content="true"] li > p:first-child {
   min-height: 0;
 }

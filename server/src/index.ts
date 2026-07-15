@@ -17,11 +17,14 @@ import friendRoutes from './routes/friends.js';
 import notificationRoutes from './routes/notifications.js';
 import leaderboardRoutes from './routes/leaderboard.js';
 import monthlyEchoRoutes from './routes/monthlyEcho.js';
+import dailyEchoRoutes from './routes/dailyEcho.js';
 import uploadRoutes from './routes/upload.js';
 import syncRoutes from './routes/sync.js';
 import { configureSqlite } from './lib/prisma.js';
 import { startDailyReminderScheduler } from './lib/dailyReminderScheduler.js';
 import { startMonthlyEchoScheduler } from './lib/monthlyEchoScheduler.js';
+import { startDailyEchoScheduler } from './lib/dailyEchoScheduler.js';
+import { isDailyEchoBackgroundEnabled } from './lib/dailyEchoService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,7 +49,7 @@ function getPort() {
 
 const PORT = getPort();
 const BODY_LIMIT_BYTES = 50 * 1024 * 1024;
-const SERVER_BUILD_ID = 'cpamc-only-20260520';
+const SERVER_BUILD_ID = 'daily-echo-background-20260711';
 
 await configureSqlite();
 
@@ -129,6 +132,7 @@ function mountRoutes(prefix = '') {
   app.use(`${prefix}/notifications`, notificationRoutes);
   app.use(`${prefix}/leaderboard`, leaderboardRoutes);
   app.use(`${prefix}/monthly-echo`, monthlyEchoRoutes);
+  app.use(`${prefix}/daily-echo`, dailyEchoRoutes);
   app.use(`${prefix}/upload`, uploadRoutes);
   app.use(`${prefix}/sync`, syncRoutes);
 }
@@ -145,6 +149,9 @@ app.get(['/api/health', '/health'], (_req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     build: SERVER_BUILD_ID,
+    capabilities: {
+      dailyEchoBackground: isDailyEchoBackgroundEnabled(),
+    },
     pid: process.pid,
   });
 });
@@ -164,6 +171,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`濡絽鍟幉?闂佽桨鑳舵晶妤€鐣垫担瑙勫劅? ${process.env.DATABASE_URL}`);
   startDailyReminderScheduler();
   startMonthlyEchoScheduler();
+  startDailyEchoScheduler();
 });
 
 export default app;

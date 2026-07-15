@@ -17,6 +17,16 @@ const API_BASE = (
 const ACCESS_TOKEN_KEY = 'xiang_access_token';
 const REFRESH_TOKEN_KEY = 'xiang_refresh_token';
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 /**
  * 获取存储的 Token
  */
@@ -146,7 +156,7 @@ export async function apiRequest<T = any>(
 
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({ error: '请求失败' }));
-    throw new Error(errorData.error || `HTTP ${res.status}`);
+    throw new ApiError(errorData.error || `HTTP ${res.status}`, res.status);
   }
 
   return res.json();
@@ -191,7 +201,7 @@ export async function apiStreamRequest(
     const errorData = await res.json().catch(async () => ({
       error: await res.text().catch(() => '请求失败'),
     }));
-    throw new Error(errorData.error || `HTTP ${res.status}`);
+    throw new ApiError(errorData.error || `HTTP ${res.status}`, res.status);
   }
 
   const reader = res.body!.getReader();

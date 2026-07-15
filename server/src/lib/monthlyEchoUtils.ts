@@ -4,9 +4,9 @@ import { parseJsonText, stringifyJsonText } from './jsonText.js';
 
 export const DEFAULT_MONTHLY_ECHO_TIMEZONE = 'Asia/Shanghai';
 export const DEFAULT_MONTHLY_ECHO_PUSH_TIME = '20:00';
-export const MONTHLY_TRACE_PROMPT_VERSION = 'daily_trace_v1';
-export const MONTHLY_ARC_PROMPT_VERSION = 'monthly_arc_v1';
-export const MONTHLY_ECHO_PROMPT_VERSION = 'monthly_echo_v1';
+export const MONTHLY_TRACE_PROMPT_VERSION = 'daily_trace_v2';
+export const MONTHLY_ARC_PROMPT_VERSION = 'monthly_arc_v2_2';
+export const MONTHLY_ECHO_PROMPT_VERSION = 'monthly_echo_render_v2_2';
 export const DEFAULT_MONTHLY_PUSH_TITLE = '你这个月的回声来了';
 export const DEFAULT_MONTHLY_PUSH_BODY = '小象帮你整理好了这个月的生活轨迹。';
 
@@ -225,9 +225,7 @@ export function safeJsonObject(value: string): Record<string, unknown> | null {
 }
 
 export function buildEntrySourceText(entry: Pick<DiaryEntry, 'content' | 'dailyEcho'>): string {
-  const dailyEcho = parseJsonText<Record<string, unknown> | null>(entry.dailyEcho, null);
-  const echoText = typeof dailyEcho?.content === 'string' ? dailyEcho.content : '';
-  return [stripMarkup(entry.content || ''), stripMarkup(echoText)].filter(Boolean).join('\n');
+  return stripMarkup(entry.content || '');
 }
 
 export function buildEntrySourceHash(entry: Pick<DiaryEntry, 'id' | 'content' | 'dailyEcho' | 'diaryDate' | 'updatedAt'>): string {
@@ -237,7 +235,6 @@ export function buildEntrySourceHash(entry: Pick<DiaryEntry, 'id' | 'content' | 
       entry.diaryDate,
       entry.updatedAt instanceof Date ? entry.updatedAt.toISOString() : String(entry.updatedAt || ''),
       entry.content || '',
-      entry.dailyEcho || '',
     ].join('\n---\n'))
     .digest('hex');
 }
