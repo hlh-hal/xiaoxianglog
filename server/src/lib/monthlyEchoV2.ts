@@ -86,6 +86,8 @@ export type MonthlyArcPayloadV2 = {
     question: string;
     occurrences: RecurringOccurrenceV2[];
     evolvedQuestion: string;
+    evolvedQuestionEvidenceIds: string[];
+    evolvedDate: string;
     conclusion: string;
     evidenceIds: string[];
   } | null;
@@ -118,6 +120,7 @@ export type MonthlyEchoRenderPayloadV2 = {
       question: string;
       occurrences: RecurringOccurrenceV2[];
       evolvedQuestion: string;
+      turnDate: string;
       conclusion: string;
     } & PageBase;
     letter: { salutation: string; paragraphs: string[]; finalInsight: string; signature: string } & PageBase;
@@ -185,9 +188,13 @@ function normalizeIconHint(value: unknown): ActionIconHint {
 const ACTION_PATTERN = /(?:写|记录|停|休息|表达|告诉|沟通|打(?:了)?电话|发(?:了)?消息|回复|整理|规划|拒绝|尝试|坚持|调整|重新开始|求助|联系|运动|跑|走|散步|创作|画|陪伴|清理|修复|建立|完成|开始|继续|做|去|读|学习|练习|没有责怪|放慢)/;
 const EMOTION_ONLY_PATTERN = /^(?:难过|开心|焦虑|害怕|担心|疲惫|累|失望|委屈|愤怒|平静|孤独|迷茫|紧张|兴奋|压抑|烦躁)[了。！!？?]*$/;
 
+const ADDITIONAL_ACTION_PATTERN = /(?:处理|协商|复习|推进|安排|准备|确认|提交|修改|删除|关闭|打开|制定|拆分|检查|观察|收拾|申请|分享|约|制作|搭建|搜索|查找|观看|照顾)/;
+
 export function isObservableAction(value: string): boolean {
   const text = sanitizeShortText(value, 80);
-  return Boolean(text) && ACTION_PATTERN.test(text) && !EMOTION_ONLY_PATTERN.test(text);
+  return Boolean(text)
+    && (ACTION_PATTERN.test(text) || ADDITIONAL_ACTION_PATTERN.test(text))
+    && !EMOTION_ONLY_PATTERN.test(text);
 }
 
 export function normalizeDailyTraceV2(
@@ -250,9 +257,42 @@ function resolveEvidence(ids: string[], registry: EvidenceRegistry): EvidenceQuo
   return ids.map(id => registry.get(id)).find((item): item is EvidenceQuoteV2 => Boolean(item)) || null;
 }
 
+function actionTraceFromDaily(
+  traces: DailyTracePayloadV2[],
+  registry: EvidenceRegistry,
+): ActionTraceV2[] {
+  return traces.flatMap(trace => trace.actions.map(item => {
+    const action = sanitizeShortText(item.action, 32);
+    const evidenceIds = validEvidenceIds(item.evidenceIds, registry);
+    const evidence = resolveEvidence(evidenceIds, registry);
+    if (!action || !evidence || !isObservableAction(action)) return null;
+    return {
+      text: action,
+      evidenceIds,
+      date: evidence.date,
+      action,
+      scene: sanitizeShortText(item.scene, 70),
+      meaning: sanitizeShortText(item.text || action, 80),
+      evidence: evidence.quote,
+      iconHint: normalizeIconHint(item.iconHint),
+    };
+  })).filter((item): item is ActionTraceV2 => Boolean(item));
+}
+
+function mergeActionTrace(primary: ActionTraceV2[], fallback: ActionTraceV2[]): ActionTraceV2[] {
+  const seen = new Set<string>();
+  return [...primary, ...fallback].filter(item => {
+    const key = item.evidenceIds[0] || `${item.date}:${normalizeEvidenceText(item.action)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function normalizeMonthlyArcV2(
   value: Record<string, unknown>,
   registry: EvidenceRegistry,
+  traces: DailyTracePayloadV2[] = [],
 ): MonthlyArcPayloadV2 {
   const mainArcRaw = value.mainArc && typeof value.mainArc === 'object' ? value.mainArc as Record<string, unknown> : {};
   const keyMoments = objectArray(value.keyMoments).map(item => {
@@ -268,7 +308,7 @@ export function normalizeMonthlyArcV2(
       evidence: evidence.quote,
     };
   }).filter((item): item is KeyMomentV2 => Boolean(item)).slice(0, 3);
-  const actionTrace = objectArray(value.actionTrace).map(item => {
+  const normalizedActionTrace = objectArray(value.actionTrace).map(item => {
     const action = sanitizeShortText(item.action, 32);
     const claim = claimFromArc({ text: action, evidenceIds: item.evidenceIds }, registry, 40);
     const evidence = claim ? resolveEvidence(claim.evidenceIds, registry) : null;
@@ -282,7 +322,11 @@ export function normalizeMonthlyArcV2(
       evidence: evidence.quote,
       iconHint: normalizeIconHint(item.iconHint),
     };
-  }).filter((item): item is ActionTraceV2 => Boolean(item)).slice(0, 6);
+  }).filter((item): item is ActionTraceV2 => Boolean(item));
+  const actionTrace = mergeActionTrace(
+    normalizedActionTrace,
+    actionTraceFromDaily(traces, registry),
+  ).slice(0, 6);
   const sideThemes = objectArray(value.sideThemes).map(item => {
     const claim = claimFromArc({ text: item.title, evidenceIds: item.evidenceIds }, registry, 40);
     const evidence = claim ? resolveEvidence(claim.evidenceIds, registry) : null;
@@ -306,12 +350,27 @@ export function normalizeMonthlyArcV2(
     return evidence && scene ? { text: scene, evidenceIds, date: evidence.date, scene, evidence: evidence.quote } : null;
   }).filter((item): item is RecurringOccurrenceV2 => Boolean(item)).slice(0, 3) : [];
   const recurringEvidenceIds = recurringRaw ? validEvidenceIds(recurringRaw.evidenceIds, registry, 6) : [];
+  const evolvedQuestionRaw = recurringRaw?.evolvedQuestion && typeof recurringRaw.evolvedQuestion === 'object'
+    ? recurringRaw.evolvedQuestion as Record<string, unknown>
+    : null;
+  const evolvedQuestionClaim = evolvedQuestionRaw
+    ? claimFromArc(evolvedQuestionRaw, registry, 80)
+    : null;
+  const evolvedQuestion = evolvedQuestionClaim?.text
+    || (typeof recurringRaw?.evolvedQuestion === 'string'
+      ? sanitizeShortText(recurringRaw.evolvedQuestion, 80)
+      : '');
+  const evolvedQuestionEvidence = evolvedQuestionClaim
+    ? resolveEvidence(evolvedQuestionClaim.evidenceIds, registry)
+    : null;
   const recurringPattern = recurringRaw && recurringEvidenceIds.length > 0
     ? {
         lead: sanitizeShortText(recurringRaw.lead, 110),
         question: sanitizeShortText(recurringRaw.question, 48),
         occurrences,
-        evolvedQuestion: sanitizeShortText(recurringRaw.evolvedQuestion, 80),
+        evolvedQuestion,
+        evolvedQuestionEvidenceIds: evolvedQuestionClaim?.evidenceIds || [],
+        evolvedDate: evolvedQuestionEvidence?.date || '',
         conclusion: sanitizeShortText(recurringRaw.conclusion, 90),
         evidenceIds: recurringEvidenceIds,
       }
@@ -361,7 +420,12 @@ export function compileMonthlyEchoReport(
   const mapState = state(arc.sideThemes.length, 2);
   const momentsState = state(arc.keyMoments.length, 3);
   const actionsState = state(arc.actionTrace.length, 4);
-  const recurringState = arc.recurringPattern && arc.recurringPattern.occurrences.length >= 2 ? 'ready' : arc.recurringPattern ? 'partial' : 'fallback';
+  const recurringState = arc.recurringPattern
+    && arc.recurringPattern.occurrences.length >= 2
+    && Boolean(arc.recurringPattern.evolvedQuestion)
+    && Boolean(arc.recurringPattern.evolvedDate)
+    ? 'ready'
+    : arc.recurringPattern ? 'partial' : 'fallback';
   const letterState = state(arc.letter.length, 6);
   const recurring = arc.recurringPattern;
 
@@ -405,6 +469,7 @@ export function compileMonthlyEchoReport(
         question: recurring?.question || '',
         occurrences: recurring?.occurrences || [],
         evolvedQuestion: recurring?.evolvedQuestion || '',
+        turnDate: recurring?.evolvedDate || '',
         conclusion: recurring?.conclusion || arc.growthDirection?.text || '',
       },
       letter: {

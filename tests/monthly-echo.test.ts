@@ -32,6 +32,10 @@ import {
   clampMonthlyEchoPage,
   resolveMonthlyEchoSwipe,
 } from '../src/utils/monthlyEchoPager';
+import {
+  buildOverviewOccurrenceSummary,
+  buildRecurringLeadLines,
+} from '../src/components/monthly-echo/MonthlyEchoExactPages';
 
 const monthlyEchoServiceSource = readFileSync(
   new URL('../server/src/lib/monthlyEchoService.ts', import.meta.url),
@@ -47,6 +51,93 @@ function test(name: string, fn: () => void): void {
     throw error;
   }
 }
+
+test('overview occurrence summary groups dates and extracts the shared recurring context', () => {
+  assert.deepEqual(
+    buildOverviewOccurrenceSummary(
+      [
+        { date: '2026-06-05' },
+        { date: '2026-06-14' },
+        { date: '2026-06-21' },
+      ],
+      '当你很在意一段关系，或很想做好一件事时，你会很快开始问：',
+      '我是不是做得还不够？',
+    ),
+    {
+      dates: ['06.05', '06.14', '06.21'],
+      context: '很在意一段关系，或很想做好一件事',
+    },
+  );
+});
+
+test('recurring lead is rendered as two stable lines', () => {
+  assert.deepEqual(
+    buildRecurringLeadLines('当你很在意一段关系，或很想做好一件事时，你会很快开始问：'),
+    ['当你很在意一段关系，或很想做好一件事时，', '你会很快开始问：'],
+  );
+});
+
+test('recurring turn date comes from the evolved question own evidence', () => {
+  const makeTrace = (quote: string, entryId: string, date: string) => normalizeDailyTraceV2({
+    evidenceQuotes: [quote],
+    importantEvents: [], emotionTone: [], actions: [], conflicts: [], relationships: [],
+    smallChange: null, unfinishedQuestions: [], confidence: 0.8,
+  }, quote, entryId, date);
+  const traces = [
+    makeTrace('我又担心自己做得不够好。', 'entry-r1', '2026-06-05'),
+    makeTrace('我又去确认别人有没有失望。', 'entry-r2', '2026-06-14'),
+    makeTrace('我开始问这真的是我想要的吗。', 'entry-r3', '2026-06-26'),
+  ];
+  const registry = evidenceRegistryFromTraces(traces);
+  const [firstId, secondId, evolvedId] = traces.map(trace => trace.evidenceQuotes[0].id);
+  const arc = normalizeMonthlyArcV2({
+    mainArc: null, keyMoments: [], actionTrace: [], emotionArc: null,
+    recurringPattern: {
+      lead: '当你很想做好一件事时，你会很快开始问：',
+      question: '我是不是做得还不够？',
+      occurrences: [
+        { scene: '担心自己没有做好', evidenceIds: [firstId] },
+        { scene: '反复确认别人是否失望', evidenceIds: [secondId] },
+      ],
+      evolvedQuestion: { text: '这真的是我想要的吗？', evidenceIds: [evolvedId] },
+      conclusion: '问题没有立刻消失，但你开始换了一个问法。',
+      evidenceIds: [firstId, secondId, evolvedId],
+    },
+    sideThemes: [], growthDirection: null, finalInsight: null, letter: [], confidence: 0.8,
+  }, registry, traces);
+  const report = compileMonthlyEchoReport('2026-06', 3, arc);
+
+  assert.equal(arc.recurringPattern?.evolvedDate, '2026-06-26');
+  assert.deepEqual(arc.recurringPattern?.evolvedQuestionEvidenceIds, [evolvedId]);
+  assert.equal(report.pages.recurring.turnDate, '2026-06-26');
+  assert.equal(report.pages.recurring.contentState, 'ready');
+});
+
+test('recurring page stays partial when the new question has no independent evidence date', () => {
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: ['我又担心自己做得不够好。'],
+    importantEvents: [], emotionTone: [], actions: [], conflicts: [], relationships: [],
+    smallChange: null, unfinishedQuestions: [], confidence: 0.8,
+  }, '我又担心自己做得不够好。', 'entry-r4', '2026-06-05');
+  const registry = evidenceRegistryFromTraces([trace]);
+  const evidenceId = trace.evidenceQuotes[0].id;
+  const arc = normalizeMonthlyArcV2({
+    mainArc: null, keyMoments: [], actionTrace: [], emotionArc: null,
+    recurringPattern: {
+      lead: '当你想做好时，你会很快开始问：', question: '我是不是还不够好？',
+      occurrences: [
+        { scene: '第一次担心', evidenceIds: [evidenceId] },
+        { scene: '又一次担心', evidenceIds: [evidenceId] },
+      ],
+      evolvedQuestion: '这是我想要的吗？', conclusion: '你开始留意自己的问法。', evidenceIds: [evidenceId],
+    },
+    sideThemes: [], growthDirection: null, finalInsight: null, letter: [], confidence: 0.8,
+  }, registry, [trace]);
+  const report = compileMonthlyEchoReport('2026-06', 1, arc);
+
+  assert.equal(report.pages.recurring.turnDate, '');
+  assert.equal(report.pages.recurring.contentState, 'partial');
+});
 
 test('monthKey is derived from diaryDate calendar key, not createdAt or server timezone', () => {
   assert.equal(getMonthKeyForDiaryDate('2026-05-31'), '2026-05');
@@ -211,6 +302,65 @@ test('frontend polls generating reports and renders failed reports without a spi
   assert.match(pageSource, /payload\?\.status === 'failed'[\s\S]+actionLabel=[\s\S]+handleRegenerate/);
 });
 
+test('monthly echo exact pages use a two-layer next hint and omit it from the letter', () => {
+  const exactPagesSource = readFileSync(new URL('../src/components/monthly-echo/MonthlyEchoExactPages.tsx', import.meta.url), 'utf8');
+  assert.match(exactPagesSource, /exact-next-arrow-trail[\s\S]+exact-next-arrow-main/);
+  assert.match(exactPagesSource, /exact-next-main 2\.2s ease-in-out infinite/);
+  assert.match(exactPagesSource, /exact-next-trail 2\.2s ease-in-out infinite/);
+  assert.match(exactPagesSource, /exact-next-repair[^>]+backgroundImage: `url/);
+  assert.match(exactPagesSource, /exact-next-repair[^>]+\/>\}\s+<\/div>\s+\{onNext && \(\s+<button/);
+  assert.match(exactPagesSource, /\.exact-next-repair\{[^}]+background-size:var\(--exact-next-artboard-width\) var\(--exact-next-artboard-height\)/);
+  assert.match(exactPagesSource, /\.exact-next-repair\{z-index:29/);
+  assert.match(exactPagesSource, /M 173\.7 275\.2 C 190 279, 217 298, 224\.6 311\.1/);
+  assert.match(exactPagesSource, /\.exact-next-repair\{z-index:29;width:48px;height:46px/);
+  assert.match(exactPagesSource, /background-position:calc\(50% \+ 50px\) calc\(100% \+ 24px\)/);
+  assert.match(exactPagesSource, /mask-image:radial-gradient\(ellipse 70% 55% at 50% 35%,#000 48%,transparent 100%\)/);
+  assert.match(exactPagesSource, /\.exact-moments \.exact-artboard>img\{clip-path:inset\(0 0 4% 0\)\}/);
+  assert.match(exactPagesSource, /\.exact-overview \.exact-next-repair\{background-image:none!important;background-color:#faf0e2\}/);
+  assert.match(exactPagesSource, /\.exact-recurring \.exact-next-repair\{background-image:none!important;background-color:#f5eadd\}/);
+  assert.match(exactPagesSource, /\.map-node-patch-1\{left:12%;top:33\.5%\}/);
+  assert.match(exactPagesSource, /\.exact-next-visual\{[^}]+place-items:center;pointer-events:none\}/);
+  assert.match(exactPagesSource, /\.cover-month-patch:before\{[^}]+inset:0[^}]+box-shadow:0 0 5px 3px #f7efe2/);
+  assert.match(exactPagesSource, /prefers-reduced-motion:reduce/);
+  assert.match(exactPagesSource, /\.exact-letter \.exact-artboard:after\{[^}]+width:50px;height:38px[^}]+background:#f3e9dd/);
+  assert.match(exactPagesSource, /function Letter[\s\S]+<ExactPage[^>]+className=\{`exact-letter[^>]+>[\s\S]+<\/ExactPage>/);
+  assert.doesNotMatch(exactPagesSource.match(/function Letter[\s\S]+?\n\}/)?.[0] || '', /onNext=/);
+});
+
+test('monthly echo moments summary grows naturally without clipping the last line', () => {
+  const exactPagesSource = readFileSync(new URL('../src/components/monthly-echo/MonthlyEchoExactPages.tsx', import.meta.url), 'utf8');
+  const momentsSource = exactPagesSource.match(/function Moments[\s\S]+?\n\}/)?.[0] || '';
+  const summaryStyle = exactPagesSource.match(/\.moments-summary-patch\{([^}]+)\}/)?.[1] || '';
+
+  assert.match(momentsSource, /className="exact-patch exact-paper-aged moments-summary-patch"/);
+  assert.match(momentsSource, /moments-summary-\$\{summaryDensity\}/);
+  assert.doesNotMatch(momentsSource, /moments-summary-patch" style=\{clamp\(/);
+  assert.match(summaryStyle, /bottom:7\.5%/);
+  assert.match(summaryStyle, /height:auto/);
+  assert.match(summaryStyle, /min-height:10\.5%/);
+  assert.match(summaryStyle, /max-height:14\.5%/);
+  assert.match(summaryStyle, /overflow-y:auto/);
+  assert.match(exactPagesSource, /\.moments-summary-compact \.moments-summary-patch\{[^}]+font-size:11\.5px/);
+  assert.match(exactPagesSource, /\.moments-summary-dense \.moments-summary-patch\{[^}]+font-size:10\.5px/);
+});
+
+test('monthly echo recurring page uses a timeline and adaptive uncropped conclusion', () => {
+  const exactPagesSource = readFileSync(new URL('../src/components/monthly-echo/MonthlyEchoExactPages.tsx', import.meta.url), 'utf8');
+  const recurringSource = exactPagesSource.match(/function Recurring[\s\S]+?\n\}/)?.[0] || '';
+  const conclusionStyle = exactPagesSource.match(/\.recurring-conclusion-patch\{([^}]+)\}/)?.[1] || '';
+
+  assert.match(recurringSource, /<span>\{leadContext\}<\/span><span>\{leadPrompt\}<\/span>/);
+  assert.match(recurringSource, /<i aria-hidden="true" \/><b>\{shortDate\(item\.date\)\}<\/b><span>\{item\.scene\}<\/span>/);
+  assert.match(recurringSource, /page\.turnDate && <>\u5230 <b>\{shortDate\(page\.turnDate\)\}<\/b>/);
+  assert.doesNotMatch(recurringSource, /recurring-conclusion-patch" style=\{clamp/);
+  assert.match(conclusionStyle, /height:auto/);
+  assert.match(conclusionStyle, /min-height:9%/);
+  assert.match(conclusionStyle, /max-height:11\.5%/);
+  assert.match(conclusionStyle, /overflow-y:auto/);
+  assert.match(exactPagesSource, /\.recurring-events-patch p:not\(:last-child\):after\{[^}]+background:rgba/);
+  assert.match(exactPagesSource, /\.recurring-density-dense \.recurring-conclusion-patch\{[^}]*font-size:10\.5px/);
+});
+
 test('month-end push path locks runtime and checks pushedAt before sending', () => {
   assert.match(
     monthlyEchoServiceSource,
@@ -247,6 +397,89 @@ test('DailyTraceNode V2 keeps only exact diary evidence and observable actions',
   assert.equal(trace.actions.length, 1);
   assert.equal(trace.actions[0].iconHint, 'record');
   assert.equal(isObservableAction('难过'), false);
+});
+
+test('observable action recognition includes concrete work that was previously filtered out', () => {
+  assert.equal(isObservableAction('处理琐碎冲突'), true);
+  assert.equal(isObservableAction('用番茄钟推进下一章复习'), true);
+  assert.equal(isObservableAction('焦虑'), false);
+});
+
+test('MonthlyArcDraft fills missing actionTrace from evidence-linked daily actions', () => {
+  const quote = '今天我用番茄钟推进下一章复习。';
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: [quote],
+    importantEvents: [],
+    emotionTone: [],
+    actions: [{
+      action: '用番茄钟推进下一章复习',
+      scene: '晚上复习时',
+      iconHint: 'persist',
+      evidenceQuotes: [quote],
+    }],
+    conflicts: [],
+    relationships: [],
+    smallChange: null,
+    unfinishedQuestions: [],
+    confidence: 0.8,
+  }, quote, 'entry-action-fallback', '2026-07-11');
+  const registry = evidenceRegistryFromTraces([trace]);
+  const arc = normalizeMonthlyArcV2({
+    mainArc: null,
+    keyMoments: [],
+    actionTrace: [],
+    emotionArc: null,
+    recurringPattern: null,
+    sideThemes: [],
+    growthDirection: null,
+    finalInsight: null,
+    letter: [],
+    confidence: 0.8,
+  }, registry, [trace]);
+
+  assert.equal(arc.actionTrace.length, 1);
+  assert.equal(arc.actionTrace[0].action, '用番茄钟推进下一章复习');
+  assert.equal(arc.actionTrace[0].date, '2026-07-11');
+  assert.equal(arc.actionTrace[0].evidence, quote);
+});
+
+test('MonthlyArcDraft does not duplicate differently worded actions from the same evidence', () => {
+  const quote = '今天我停了一下，然后告诉同事实际完成时间。';
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: [quote],
+    importantEvents: [],
+    emotionTone: [],
+    actions: [{
+      action: '告诉同事实际完成时间',
+      scene: '沟通交付时间',
+      iconHint: 'express',
+      evidenceQuotes: [quote],
+    }],
+    conflicts: [], relationships: [], smallChange: null, unfinishedQuestions: [], confidence: 0.8,
+  }, quote, 'entry-dedupe', '2026-07-02');
+  const registry = evidenceRegistryFromTraces([trace]);
+  const evidenceId = trace.evidenceQuotes[0].id;
+  const arc = normalizeMonthlyArcV2({
+    mainArc: null,
+    keyMoments: [],
+    actionTrace: [{
+      action: '停顿并表达真实时间',
+      scene: '同事询问交付时间',
+      meaning: '先确认自己的时间需求',
+      iconHint: 'express',
+      evidenceIds: [evidenceId],
+    }],
+    emotionArc: null,
+    recurringPattern: null,
+    sideThemes: [],
+    growthDirection: null,
+    finalInsight: null,
+    letter: [],
+    confidence: 0.8,
+  }, registry, [trace]);
+
+  assert.equal(arc.actionTrace.length, 1);
+  assert.equal(arc.actionTrace[0].action, '停顿并表达真实时间');
 });
 
 test('MonthlyArcDraft V2 resolves dates from valid evidence ids and drops invalid claims', () => {

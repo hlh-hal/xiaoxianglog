@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, LogOut, Trash2 } from 'lucide-react';
+import { ArrowLeft, Loader2, LogOut, MessageCircle, Trash2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { authService } from '../services/authService';
 import { uploadImages } from '../services/apiClient';
 import { UserAvatar } from '../components/UserAvatar';
+import { wechatAuthService, type WechatConfig } from '../services/wechatAuthService';
 
 const LEGACY_DEFAULT_AVATAR_URL = 'https://lh3.googleusercontent.com/aida-public/AB6AXuCLrgyJjoLOhXcdpz-ATOd8-V3r4KJzkUQ8jxVRvevVMC3A6pTnkZGdzP3HsDKANHbREyg4hzW3lFTQQQUGlaWYDLdS36DO-lLNL5qLfTu_mrBz0UfsXxUHeJFcM6r3iByBMnldeR0sv_NRA3lXCikSRr41q2e7zEghDtjsn7OOXEeljufixUqDDS0C1gFPnZMzIjhHvxFbX2nE8L6vLiFcEiOZvaVrv54xBeawd88O1xCh6gKQENXA4OkVICYsxHYBPlyEtXLHO6s';
 const LEGACY_DEFAULT_BIOS = new Set(['用文字滋养正念。', '鐢ㄦ枃瀛楁粙鍏绘蹇点€?']);
@@ -68,6 +69,13 @@ export default function EditProfile() {
   const [nickname, setNickname] = useState(user?.nickname || '');
   const [bio, setBio] = useState(normalizeBio(user?.bio));
   const [avatarUrl, setAvatarUrl] = useState(normalizeAvatarUrl(user?.avatarUrl));
+  const [wechatConfig, setWechatConfig] = useState<WechatConfig | null>(null);
+  const [wechatBound, setWechatBound] = useState(false);
+  const [wechatAction, setWechatAction] = useState<'link' | 'unlink' | null>(null);
+  const [wechatEmailCode, setWechatEmailCode] = useState('');
+  const [wechatMessage, setWechatMessage] = useState('');
+  const [wechatError, setWechatError] = useState('');
+  const [wechatBusy, setWechatBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -76,6 +84,23 @@ export default function EditProfile() {
     setNickname(user.nickname || '');
     setBio(normalizeBio(user.bio));
     setAvatarUrl(normalizeAvatarUrl(user.avatarUrl));
+  }, [user?.userId]);
+
+  useEffect(() => {
+    if (!user || !wechatAuthService.isAndroidNative()) return;
+    let cancelled = false;
+    Promise.all([wechatAuthService.getConfig(), wechatAuthService.getBinding()])
+      .then(([config, binding]) => {
+        if (cancelled || !config.enabled) return;
+        setWechatConfig(config);
+        setWechatBound(binding.bound);
+      })
+      .catch((error) => {
+        if (!cancelled) console.warn('读取微信绑定状态失败:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [user?.userId]);
 
   useEffect(() => {
@@ -132,6 +157,52 @@ export default function EditProfile() {
 
   const handleChangeAvatar = () => {
     fileInputRef.current?.click();
+  };
+
+  const beginWechatVerification = async (action: 'link' | 'unlink') => {
+    if (!wechatConfig) return;
+    setWechatBusy(true);
+    setWechatError('');
+    setWechatMessage('');
+    try {
+      if (action === 'link') await wechatAuthService.ensureInstalled(wechatConfig);
+      const result = await wechatAuthService.requestBindingEmailCode(action);
+      setWechatAction(action);
+      setWechatEmailCode('');
+      setWechatMessage(result.devCode
+        ? `开发环境验证码：${result.devCode}`
+        : `验证码已发送到 ${user.email}`);
+    } catch (error: any) {
+      setWechatError(error?.message || '验证码发送失败，请稍后重试');
+    } finally {
+      setWechatBusy(false);
+    }
+  };
+
+  const confirmWechatAction = async () => {
+    if (!wechatAction || !wechatConfig || !/^\d{6}$/.test(wechatEmailCode)) {
+      setWechatError('请输入邮箱收到的 6 位验证码');
+      return;
+    }
+    setWechatBusy(true);
+    setWechatError('');
+    try {
+      if (wechatAction === 'link') {
+        await wechatAuthService.link(wechatConfig, wechatEmailCode);
+        setWechatBound(true);
+        setWechatMessage('微信绑定成功，以后可以直接使用微信登录');
+      } else {
+        await wechatAuthService.unlink(wechatEmailCode);
+        setWechatBound(false);
+        setWechatMessage('微信绑定已解除，邮箱登录不受影响');
+      }
+      setWechatAction(null);
+      setWechatEmailCode('');
+    } catch (error: any) {
+      setWechatError(error?.message || '微信账号操作失败，请稍后重试');
+    } finally {
+      setWechatBusy(false);
+    }
   };
 
   const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -220,6 +291,75 @@ export default function EditProfile() {
             />
           </div>
         </section>
+
+        {wechatConfig && (
+          <section className="bg-surface-container-lowest/60 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.04)] rounded-2xl overflow-hidden border border-outline-variant/10">
+            <div className="px-5 py-4 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-[#07C160]/10 text-[#16843D] flex items-center justify-center shrink-0">
+                <MessageCircle className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[15px] font-semibold text-on-surface">微信登录</p>
+                <p className="text-[12px] text-outline mt-0.5">
+                  {wechatBound ? '已绑定到当前邮箱账号' : '绑定后可用微信登录同一个账号'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => beginWechatVerification(wechatBound ? 'unlink' : 'link')}
+                disabled={wechatBusy}
+                className={`px-3.5 h-9 rounded-xl text-sm font-medium disabled:opacity-50 ${wechatBound ? 'bg-error-container/30 text-error' : 'bg-[#07C160]/10 text-[#16843D]'}`}
+              >
+                {wechatBusy && !wechatAction ? <Loader2 className="w-4 h-4 animate-spin" /> : (wechatBound ? '解除绑定' : '绑定微信')}
+              </button>
+            </div>
+
+            {wechatAction && (
+              <div className="border-t border-outline-variant/10 px-5 py-4 bg-surface-container-low/40">
+                <p className="text-[13px] text-on-surface-variant mb-3">
+                  {wechatAction === 'link'
+                    ? '先验证当前账号邮箱，确认后会打开微信授权。'
+                    : '验证当前账号邮箱后解除绑定，日记和邮箱登录不会被删除。'}
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    value={wechatEmailCode}
+                    onChange={event => setWechatEmailCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                    inputMode="numeric"
+                    placeholder="6 位邮箱验证码"
+                    className="h-11 flex-1 min-w-0 px-3 rounded-xl bg-surface border border-outline-variant/30 outline-none focus:border-primary text-[15px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={confirmWechatAction}
+                    disabled={wechatBusy}
+                    className="h-11 px-4 rounded-xl bg-primary text-white text-sm font-medium disabled:opacity-50"
+                  >
+                    {wechatBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : '确认'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWechatAction(null);
+                      setWechatEmailCode('');
+                      setWechatError('');
+                    }}
+                    disabled={wechatBusy}
+                    className="h-11 px-3 rounded-xl text-outline text-sm"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {(wechatMessage || wechatError) && (
+              <p className={`px-5 pb-4 text-[12px] ${wechatError ? 'text-error' : 'text-[#446733]'}`}>
+                {wechatError || wechatMessage}
+              </p>
+            )}
+          </section>
+        )}
 
         <section className="mt-8 flex flex-col gap-3">
           <button

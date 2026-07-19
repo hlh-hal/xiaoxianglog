@@ -25,6 +25,7 @@ import Trash from './pages/Trash';
 import Search from './pages/Search';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import WechatRegister from './pages/WechatRegister';
 import ForgotPassword from './pages/ForgotPassword';
 import FirstRunVaultOnboarding from './pages/FirstRunVaultOnboarding';
 import AIChat from './pages/AIChat';
@@ -92,6 +93,7 @@ export default function App() {
             <Route path="search" element={<Search />} />
             <Route path="login" element={<Login />} />
             <Route path="register" element={<Register />} />
+            <Route path="wechat-register" element={<WechatRegister />} />
             <Route path="forgot-password" element={<ForgotPassword />} />
             <Route path="ai-chat" element={<AIChat />} />
             <Route path="leaderboard" element={<Leaderboard />} />

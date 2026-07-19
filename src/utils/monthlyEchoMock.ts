@@ -65,6 +65,7 @@ export const monthlyEchoMockReport: MonthlyEchoRenderPayload = {
         occurrence('2026-06-21', '要求自己再努力一点。', 17),
       ],
       evolvedQuestion: '这真的是我想要的吗，还是我在回应别人的期待？',
+      turnDate: '2026-06-26',
       conclusion: '问题没有立刻消失，但你已经开始不再完全被它带着走。',
     },
     letter: {

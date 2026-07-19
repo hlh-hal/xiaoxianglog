@@ -18,6 +18,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(XiangNotificationsPlugin.class);
         registerPlugin(XiangImageSaverPlugin.class);
         registerPlugin(XiangUpdaterPlugin.class);
+        registerPlugin(XiangWechatPlugin.class);
         super.onCreate(savedInstanceState);
         configureSystemBars();
         disableWebViewOverscroll();

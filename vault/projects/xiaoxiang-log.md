@@ -373,3 +373,41 @@
 - 本地 2026-07 报告已真实跑通，当前任务版本为 `monthly_arc_v2_2|monthly_echo_render_v2_2`，生成 6 段、356 字、3 个日期锚点；任务一次成功。
 - Android `Pixel_8` 模拟器已完成七页 H5 验证，第七页签名和小象图标完整，底部绿色残影已消除。复测地址为 `http://127.0.0.1:3000/monthly-echo?monthKey=2026-07`，需要保持前端 3000、后端 3001 并执行两条 `adb reverse`。
 - 验证命令：`npm run test:monthly-echo`、`npm run lint`、`npm run build`、`cd server && npm run build`、`git diff --check`。
+
+## 2026-07-15 Android v1.0.22 发布
+
+- 已发布 `1.0.22 / versionCode 24`：小象回声实时流式呈现、七页动态月度回声和手势翻页，以及导出图片有序列表编号修复；线上更新公告和自有服务器 APK 均已验证。
+- 前端、月度回声资源与后端运行模块已经上传；服务器已完成 `npx prisma generate`、`npm run db:push` 和 Node 重启。线上健康检查为 `daily-echo-background-20260711`，月度回声/小象回声接口均已由 404 变为 401，确认服务端新路由已接管；FTP 部署仍不会执行远程命令。
+
+## 2026-07-16 月度回声回声信真机布局修复
+
+- 第七页回声信已从“上下两段正文 + 独立绿色结论块”改为单一连续正文流；`finalInsight` 作为正文最后一段，不再生成会与正文重叠的绿色字块。
+- 正文容器使用 `min-height + max-height` 和四档内容密度；右侧 `shape-outside` 安全区会依次避开照片、花束和花茎，长文仍限制在单页署名上方。
+- 画板向右补偿左侧裁切后，落款文字和小象图标分别向左移动 8%，使用 `darken` 融合纸张纹理；小象不再被视口右边缘截断。
+- Pixel_8 模拟器以 448 字中文长文验证：正文 `clientHeight=scrollHeight=576`，末段完整，末段底部约为 `740.84px`，署名安全区从约 `814.64px` 开始；花束和正文无交叠。
+- 验证通过：`npm run lint`、`npm run test:monthly-echo`（23 项）、`npm run build`、`npm run android:sync`、`gradlew assembleDebug`、APK 覆盖安装；模拟器测试包为 `1.0.22`。
+
+## 2026-07-16 月度回声行动轨迹空白修复
+
+- 根因不是整份月报生成失败：底部总结有内容但 `actionTrace` 为空，是行动识别白名单漏掉“处理、复习、推进、协商”等真实行为，聚合清洗后前端只剩五个固定图标。
+- `normalizeMonthlyArcV2` 现在会优先使用 AI 的有效行动，并从带有效 `evidenceId` 的 `DailyTraceNode.actions` 确定性补齐；日期和原句均从证据注册表解析，不允许推测。相同证据只保留一条行动，避免换一种说法重复占位。
+- 前端第五页在确实没有有效行动时显示页级 fallback，不再出现无解释的空时间线。视觉资产、图标、干花和底部纸卡保持不变。
+- 生成版本升级为 `daily_trace_v2_1`、`monthly_arc_v2_4`、`monthly_echo_render_v2_4`，旧报告首次打开会按需重生。
+- 本地真实 2026-07 报告重生为 `ready`，返回 6 条不重复行动，正式页面按五个图标上限展示前 5 条；390×844 截图见 `tmp/monthly-echo-runtime/actions-ready-390x844.png`。
+
+## 2026-07-17 Android 微信登录基础能力
+
+- 已实现 Android 微信登录、微信新用户邮箱注册、已有邮箱账号设置页绑定/解绑以及统一 `userId` 数据归属；邮箱登录、JWT 和 local-first 同步契约保持不变。
+- Prisma 新增 `ExternalIdentity`、`ExternalAuthGrant`，本地数据库已备份并 `db:push`；线上尚未执行任何 schema、环境变量或服务部署。
+- Android 已接官方 OpenSDK `6.8.40` 和自研 Capacitor 回调桥接；服务端配置缺失或开关关闭时，普通 Web/PWA 与 Android 均不会暴露可用入口。
+- 自动化与构建已通过。下一阶段不是继续改代码，而是完成微信开放平台移动应用审核、配置线上密钥、同步线上 Prisma schema，并用正式签名 APK + 微信真机验证授权、绑定、解绑和同一 `userId` 数据恢复。
+
+## 2026-07-18 Android v1.0.23 月度回声 UI 发布
+
+- 已发布 `1.0.23 / versionCode 25`，只包含月度回声 UI：回声信连续正文流、封面/翻页提示细节和行动轨迹空状态，未包含尚在开发的微信登录功能。
+- 线上 `app-update.json` 与主下载 APK 已反向验证为 `1.0.23 / 25`，APK SHA256 为 `728A4123A0E64DD990EE6C722F67DB20444956D63D51BE46F6D04AB196ADEF43`，包名和备案签名均正确。
+
+## 2026-07-19 Android v1.0.24 月度回声 UI 发布
+
+- 已发布 `1.0.24 / versionCode 26`：重复事件归纳、反复主题时间轴和自适应结论、关键时刻长摘要、封面清晰度与行动页箭头纹理修复；微信登录和后端 v2.5 生成链路未随此版本发布。
+- 主下载 APK 和线上更新公告已反向验证通过。FTP 对约 47MB 文件会在约 95 秒重置；可先上传得到部分文件，再在 FTP 连接冷却后使用断点续传补齐。当前备用服务器目录仍未更新，主 Nginx 下载路径可用。

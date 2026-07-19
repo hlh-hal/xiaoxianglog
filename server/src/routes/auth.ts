@@ -15,11 +15,18 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import prisma from '../lib/prisma.js';
 import { deleteStoredUrls } from '../lib/objectStorage.js';
+import {
+  buildWechatUnionKey,
+  exchangeWechatCode,
+  getWechatConfig,
+  WechatAuthError,
+  type WechatProfile,
+} from '../lib/wechatAuth.js';
 import { requireAuth, generateTokens, verifyRefreshToken, AuthPayload } from '../middleware/auth.js';
 import { emailIpKey, rateLimit, userOrIpKey } from '../middleware/rateLimit.js';
 
 const router = Router();
-type VerifyType = 'register' | 'reset';
+type VerifyType = 'register' | 'reset' | 'wechat_link' | 'wechat_unlink';
 
 const authWriteLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -44,6 +51,21 @@ const accountDeleteLimit = rateLimit({
   keyGenerator: userOrIpKey,
 });
 
+const wechatPublicLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 12,
+  keyPrefix: 'wechat-public',
+  message: '微信登录请求太频繁，请稍后再试',
+});
+
+const wechatAccountLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  keyPrefix: 'wechat-account',
+  keyGenerator: userOrIpKey,
+  message: '微信账号操作太频繁，请稍后再试',
+});
+
 type CodeRecord = {
   email: string;
   type: VerifyType;
@@ -62,6 +84,8 @@ const emailCodes = new Map<string, CodeRecord>();
 const verificationTokens = new Map<string, TokenRecord>();
 const CODE_TTL_MS = 5 * 60 * 1000;
 const TOKEN_TTL_MS = 10 * 60 * 1000;
+const WECHAT_GRANT_TTL_MS = 10 * 60 * 1000;
+const WECHAT_PROVIDER = 'wechat';
 
 function normalizeEmail(email: string) {
   return String(email || '').trim().toLowerCase();
@@ -77,6 +101,10 @@ function codeKey(email: string, type: VerifyType) {
 
 function hashCode(code: string) {
   return crypto.createHash('sha256').update(code).digest('hex');
+}
+
+function hashOpaqueToken(token: string) {
+  return crypto.createHash('sha256').update(token).digest('hex');
 }
 
 function cleanupExpiredVerificationData() {
@@ -174,8 +202,13 @@ async function sendVerificationEmail(email: string, code: string, type: VerifyTy
     throw new Error('邮件服务未配置，请先配置 SMTP_HOST、SMTP_USER、SMTP_PASS');
   }
 
-  const subject = type === 'register' ? '小象日志注册验证码' : '小象日志重置密码验证码';
-  const action = type === 'register' ? '注册小象日志账号' : '重置小象日志密码';
+  const copy = {
+    register: ['小象日志注册验证码', '注册小象日志账号'],
+    reset: ['小象日志重置密码验证码', '重置小象日志密码'],
+    wechat_link: ['小象日志绑定微信验证码', '为小象日志账号绑定微信'],
+    wechat_unlink: ['小象日志解绑微信验证码', '解除小象日志账号的微信绑定'],
+  } satisfies Record<VerifyType, [string, string]>;
+  const [subject, action] = copy[type];
   await transporter.sendMail({
     from: process.env.MAIL_FROM || process.env.SMTP_USER,
     to: email,
@@ -189,6 +222,99 @@ async function sendVerificationEmail(email: string, code: string, type: VerifyTy
     </div>`,
   });
   return { delivered: true, devCode: devReturnCode ? code : undefined };
+}
+
+async function createVerificationCode(email: string, type: VerifyType) {
+  cleanupExpiredVerificationData();
+  const key = codeKey(email, type);
+  const current = emailCodes.get(key);
+  if (current && current.expiresAt - Date.now() > CODE_TTL_MS - 60 * 1000) {
+    return { status: 429, error: '验证码发送太频繁，请稍后再试' } as const;
+  }
+
+  const code = crypto.randomInt(100000, 1000000).toString();
+  emailCodes.set(key, {
+    email,
+    type,
+    codeHash: hashCode(code),
+    expiresAt: Date.now() + CODE_TTL_MS,
+    attempts: 0,
+  });
+
+  try {
+    const result = await sendVerificationEmail(email, code, type);
+    return { status: 200, result } as const;
+  } catch (error) {
+    emailCodes.delete(key);
+    throw error;
+  }
+}
+
+function validateEmailCode(email: string, type: VerifyType, code: string, consume: boolean) {
+  cleanupExpiredVerificationData();
+  if (!/^\d{6}$/.test(code)) {
+    return { ok: false, status: 400, error: '请输入正确的 6 位邮箱验证码' } as const;
+  }
+
+  const key = codeKey(email, type);
+  const record = emailCodes.get(key);
+  if (!record || record.expiresAt <= Date.now()) {
+    emailCodes.delete(key);
+    return { ok: false, status: 400, error: '验证码已过期，请重新获取' } as const;
+  }
+  if (record.attempts >= 5) {
+    emailCodes.delete(key);
+    return { ok: false, status: 429, error: '验证码错误次数过多，请重新获取' } as const;
+  }
+  if (record.codeHash !== hashCode(code)) {
+    record.attempts += 1;
+    return { ok: false, status: 400, error: '邮箱验证码错误' } as const;
+  }
+  if (consume) emailCodes.delete(key);
+  return { ok: true, status: 200 } as const;
+}
+
+function wechatIdentityFilters(profile: WechatProfile) {
+  const filters: Array<Record<string, unknown>> = [
+    { provider: WECHAT_PROVIDER, appId: profile.appId, openId: profile.openId },
+  ];
+  const providerUnionKey = buildWechatUnionKey(profile.unionId);
+  if (providerUnionKey) filters.push({ providerUnionKey });
+  return filters;
+}
+
+function userSessionResponse(user: {
+  id: string;
+  email: string;
+  nickname: string;
+  avatarUrl: string | null;
+  bio: string | null;
+}) {
+  const payload: AuthPayload = { userId: user.id, email: user.email, nickname: user.nickname };
+  return {
+    user: {
+      id: user.id,
+      email: user.email,
+      nickname: user.nickname,
+      avatarUrl: user.avatarUrl,
+      bio: user.bio,
+    },
+    ...generateTokens(payload),
+  };
+}
+
+function isPrismaUniqueConstraintError(error: unknown) {
+  return !!error && typeof error === 'object' && 'code' in error && error.code === 'P2002';
+}
+
+function wechatErrorResponse(res: Response, error: unknown) {
+  if (error instanceof WechatAuthError) {
+    const status = error.publicMessage === '微信登录尚未启用' ? 503 : 400;
+    res.status(status).json({ error: error.publicMessage });
+    return;
+  }
+  console.error('微信认证操作失败:', error);
+  res.status(500).json({ error: '微信认证失败，请稍后重试' });
 }
 
 // 发送邮箱验证码
@@ -212,24 +338,15 @@ router.post('/send-code', emailCodeLimit, async (req: Request, res: Response) =>
       return;
     }
 
-    const key = codeKey(email, type);
-    const current = emailCodes.get(key);
-    if (current && current.expiresAt - Date.now() > CODE_TTL_MS - 60 * 1000) {
-      res.status(429).json({ error: '验证码发送太频繁，请稍后再试' });
+    const created = await createVerificationCode(email, type);
+    if ('error' in created) {
+      res.status(created.status).json({ error: created.error });
       return;
     }
-
-    const code = crypto.randomInt(100000, 1000000).toString();
-    emailCodes.set(key, {
-      email,
-      type,
-      codeHash: hashCode(code),
-      expiresAt: Date.now() + CODE_TTL_MS,
-      attempts: 0,
+    res.json({
+      message: created.result.delivered ? '验证码已发送' : '开发环境验证码已生成',
+      devCode: created.result.devCode,
     });
-
-    const result = await sendVerificationEmail(email, code, type);
-    res.json({ message: result.delivered ? '验证码已发送' : '开发环境验证码已生成', devCode: result.devCode });
   } catch (err: any) {
     console.error('发送验证码失败:', err);
     res.status(500).json({ error: err.message || '发送验证码失败' });
@@ -279,6 +396,325 @@ router.post('/verify-code', authWriteLimit, async (req: Request, res: Response) 
   } catch (err: any) {
     console.error('校验验证码失败:', err);
     res.status(500).json({ error: '验证码校验失败' });
+  }
+});
+
+// 微信登录能力配置。AppID 不是密钥，AppSecret 永不返回客户端。
+router.get('/wechat/config', (_req: Request, res: Response) => {
+  const config = getWechatConfig();
+  res.json({ enabled: config.enabled, appId: config.enabled ? config.appId : '' });
+});
+
+// Android 微信授权登录：已绑定则登录，未绑定只签发一次性注册凭证。
+router.post('/wechat/login', wechatPublicLimit, async (req: Request, res: Response) => {
+  try {
+    const profile = await exchangeWechatCode(req.body.code);
+    const identity = await prisma.externalIdentity.findFirst({
+      where: { OR: wechatIdentityFilters(profile) as any },
+      include: { user: true },
+    });
+
+    if (identity) {
+      const providerUnionKey = buildWechatUnionKey(profile.unionId);
+      await prisma.externalIdentity.update({
+        where: { id: identity.id },
+        data: {
+          lastLoginAt: new Date(),
+          ...(!identity.providerUnionKey && providerUnionKey
+            ? { unionId: profile.unionId, providerUnionKey }
+            : {}),
+        },
+      });
+      res.json({ status: 'authenticated', ...userSessionResponse(identity.user) });
+      return;
+    }
+
+    const now = new Date();
+    await prisma.externalAuthGrant.deleteMany({ where: { expiresAt: { lte: now } } });
+    const registrationToken = crypto.randomBytes(32).toString('hex');
+    await prisma.externalAuthGrant.create({
+      data: {
+        tokenHash: hashOpaqueToken(registrationToken),
+        provider: WECHAT_PROVIDER,
+        appId: profile.appId,
+        openId: profile.openId,
+        unionId: profile.unionId,
+        nickname: profile.nickname,
+        avatarUrl: profile.avatarUrl,
+        expiresAt: new Date(Date.now() + WECHAT_GRANT_TTL_MS),
+      },
+    });
+
+    res.json({
+      status: 'registration_required',
+      registrationToken,
+      wechatProfile: {
+        nickname: profile.nickname,
+        avatarUrl: profile.avatarUrl,
+      },
+      expiresIn: WECHAT_GRANT_TTL_MS / 1000,
+    });
+  } catch (error) {
+    wechatErrorResponse(res, error);
+  }
+});
+
+// 微信新用户注册。已注册邮箱不能在这里认领，必须先邮箱登录后从设置绑定。
+router.post('/wechat/register', wechatPublicLimit, async (req: Request, res: Response) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const nickname = String(req.body.nickname || '').trim();
+    const password = String(req.body.password || '');
+    const registrationToken = String(req.body.registrationToken || '').trim();
+    const verificationToken = String(req.body.verificationToken || '').trim();
+    const acceptedTerms = req.body.acceptedTerms === true;
+
+    if (!isValidEmail(email) || !registrationToken || !verificationToken) {
+      res.status(400).json({ error: '微信注册信息不完整' });
+      return;
+    }
+    if (!acceptedTerms) {
+      res.status(400).json({ error: '请先阅读并同意用户协议与隐私政策' });
+      return;
+    }
+    if (Array.from(nickname).length < 2 || Array.from(nickname).length > 16) {
+      res.status(400).json({ error: '昵称长度需在 2-16 个字符之间' });
+      return;
+    }
+    if (password.length < 6 || password.length > 128) {
+      res.status(400).json({ error: '密码长度需在 6-128 位之间' });
+      return;
+    }
+
+    const grant = await prisma.externalAuthGrant.findUnique({
+      where: { tokenHash: hashOpaqueToken(registrationToken) },
+    });
+    if (!grant || grant.provider !== WECHAT_PROVIDER || grant.expiresAt <= new Date()) {
+      if (grant) await prisma.externalAuthGrant.delete({ where: { id: grant.id } });
+      res.status(400).json({ error: '微信注册授权已过期，请重新授权' });
+      return;
+    }
+
+    const existingEmail = await prisma.user.findUnique({ where: { email } });
+    if (existingEmail) {
+      res.status(409).json({ error: '该邮箱已注册，请先使用邮箱登录，再到个人信息绑定微信' });
+      return;
+    }
+
+    const profile: WechatProfile = {
+      appId: grant.appId,
+      openId: grant.openId,
+      unionId: grant.unionId || undefined,
+      nickname: grant.nickname || undefined,
+      avatarUrl: grant.avatarUrl || undefined,
+    };
+    const existingIdentity = await prisma.externalIdentity.findFirst({
+      where: { OR: wechatIdentityFilters(profile) as any },
+    });
+    if (existingIdentity) {
+      res.status(409).json({ error: '该微信已绑定账号，请直接使用微信登录' });
+      return;
+    }
+    if (!consumeVerificationToken(verificationToken, email, 'register')) {
+      res.status(400).json({ error: '请重新完成邮箱验证码验证' });
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const transactionResult = await prisma.$transaction(async (tx) => {
+      const consumed = await tx.externalAuthGrant.deleteMany({
+        where: { id: grant.id, tokenHash: grant.tokenHash, expiresAt: { gt: new Date() } },
+      });
+      if (consumed.count !== 1) return null;
+
+      const user = await tx.user.create({
+        data: {
+          email,
+          nickname,
+          passwordHash,
+          avatarUrl: grant.avatarUrl,
+        },
+      });
+      await tx.externalIdentity.create({
+        data: {
+          userId: user.id,
+          provider: WECHAT_PROVIDER,
+          appId: grant.appId,
+          openId: grant.openId,
+          unionId: grant.unionId,
+          providerUnionKey: buildWechatUnionKey(grant.unionId),
+        },
+      });
+      return user;
+    });
+
+    if (!transactionResult) {
+      res.status(400).json({ error: '微信注册授权已失效，请重新授权' });
+      return;
+    }
+    res.status(201).json(userSessionResponse(transactionResult));
+  } catch (error) {
+    if (isPrismaUniqueConstraintError(error)) {
+      res.status(409).json({ error: '邮箱或微信已绑定其他账号，请勿重复注册' });
+      return;
+    }
+    wechatErrorResponse(res, error);
+  }
+});
+
+router.get('/wechat/binding', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const identity = await prisma.externalIdentity.findFirst({
+      where: { userId: req.user!.userId, provider: WECHAT_PROVIDER },
+      select: { createdAt: true },
+    });
+    res.json({ bound: !!identity, boundAt: identity?.createdAt || null });
+  } catch (error) {
+    console.error('读取微信绑定状态失败:', error);
+    res.status(500).json({ error: '读取微信绑定状态失败' });
+  }
+});
+
+router.post('/wechat/email-code', requireAuth, wechatAccountLimit, async (req: Request, res: Response) => {
+  try {
+    const action = req.body.action === 'unlink' ? 'unlink' : req.body.action === 'link' ? 'link' : null;
+    if (!action) {
+      res.status(400).json({ error: '微信账号操作类型不正确' });
+      return;
+    }
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) {
+      res.status(404).json({ error: '用户不存在' });
+      return;
+    }
+    const binding = await prisma.externalIdentity.findFirst({
+      where: { userId: user.id, provider: WECHAT_PROVIDER },
+    });
+    if (action === 'link' && binding) {
+      res.status(409).json({ error: '当前账号已绑定微信' });
+      return;
+    }
+    if (action === 'unlink' && !binding) {
+      res.status(409).json({ error: '当前账号尚未绑定微信' });
+      return;
+    }
+
+    const type: VerifyType = action === 'link' ? 'wechat_link' : 'wechat_unlink';
+    const created = await createVerificationCode(user.email, type);
+    if ('error' in created) {
+      res.status(created.status).json({ error: created.error });
+      return;
+    }
+    res.json({
+      message: created.result.delivered ? '验证码已发送到当前账号邮箱' : '开发环境验证码已生成',
+      devCode: created.result.devCode,
+    });
+  } catch (error) {
+    console.error('发送微信绑定验证码失败:', error);
+    res.status(500).json({ error: '验证码发送失败，请稍后重试' });
+  }
+});
+
+router.post('/wechat/link', requireAuth, wechatAccountLimit, async (req: Request, res: Response) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) {
+      res.status(404).json({ error: '用户不存在' });
+      return;
+    }
+    const emailCode = String(req.body.emailCode || '').trim();
+    const precheck = validateEmailCode(user.email, 'wechat_link', emailCode, false);
+    if (!precheck.ok) {
+      res.status(precheck.status).json({ error: precheck.error });
+      return;
+    }
+
+    const profile = await exchangeWechatCode(req.body.wechatCode);
+    const consumed = validateEmailCode(user.email, 'wechat_link', emailCode, true);
+    if (!consumed.ok) {
+      res.status(consumed.status).json({ error: consumed.error });
+      return;
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const matched = await tx.externalIdentity.findFirst({
+        where: { OR: wechatIdentityFilters(profile) as any },
+      });
+      if (matched) {
+        if (matched.userId !== user.id) return 'bound_to_other' as const;
+        const providerUnionKey = buildWechatUnionKey(profile.unionId);
+        await tx.externalIdentity.update({
+          where: { id: matched.id },
+          data: {
+            lastLoginAt: new Date(),
+            ...(!matched.providerUnionKey && providerUnionKey
+              ? { unionId: profile.unionId, providerUnionKey }
+              : {}),
+          },
+        });
+        return 'linked' as const;
+      }
+
+      const current = await tx.externalIdentity.findFirst({
+        where: { userId: user.id, provider: WECHAT_PROVIDER },
+      });
+      if (current) return 'different_wechat' as const;
+
+      await tx.externalIdentity.create({
+        data: {
+          userId: user.id,
+          provider: WECHAT_PROVIDER,
+          appId: profile.appId,
+          openId: profile.openId,
+          unionId: profile.unionId,
+          providerUnionKey: buildWechatUnionKey(profile.unionId),
+        },
+      });
+      return 'linked' as const;
+    });
+
+    if (result === 'bound_to_other') {
+      res.status(409).json({ error: '该微信已绑定其他小象日志账号，不能自动合并数据' });
+      return;
+    }
+    if (result === 'different_wechat') {
+      res.status(409).json({ error: '当前账号已绑定其他微信，请先解除原绑定' });
+      return;
+    }
+    res.json({ bound: true, message: '微信绑定成功' });
+  } catch (error) {
+    if (isPrismaUniqueConstraintError(error)) {
+      res.status(409).json({ error: '该微信已绑定其他账号，不能自动合并数据' });
+      return;
+    }
+    wechatErrorResponse(res, error);
+  }
+});
+
+router.post('/wechat/unlink', requireAuth, wechatAccountLimit, async (req: Request, res: Response) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) {
+      res.status(404).json({ error: '用户不存在' });
+      return;
+    }
+    const checked = validateEmailCode(
+      user.email,
+      'wechat_unlink',
+      String(req.body.emailCode || '').trim(),
+      true,
+    );
+    if (!checked.ok) {
+      res.status(checked.status).json({ error: checked.error });
+      return;
+    }
+    await prisma.externalIdentity.deleteMany({
+      where: { userId: user.id, provider: WECHAT_PROVIDER },
+    });
+    res.json({ bound: false, message: '微信绑定已解除' });
+  } catch (error) {
+    console.error('解除微信绑定失败:', error);
+    res.status(500).json({ error: '解除微信绑定失败，请稍后重试' });
   }
 });
 

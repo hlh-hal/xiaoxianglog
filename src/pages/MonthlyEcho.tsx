@@ -24,7 +24,7 @@ import {
 const storyFont = '"Noto Sans SC", "Microsoft YaHei", "PingFang SC", "Inter", sans-serif';
 const serifFont = '"Noto Serif SC", "Songti SC", "SimSun", serif';
 const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const entranceCoverBackground = '/monthly-echo/monthly-echo-cover-reference.png?v=20260701-monthly-echo-cover';
+const entranceCoverBackground = '/monthly-echo/monthly-echo-cover-clean-v2.png?v=20260717-monthly-echo-cover-clean';
 const storyArtwork = '/monthly-echo/monthly-echo-story-reference.png?v=20260710-monthly-echo-story';
 const mapArtwork = '/monthly-echo/monthly-echo-map-reference.png?v=20260711-monthly-echo-map';
 const momentsArtwork = '/monthly-echo/monthly-echo-moments-reference.png?v=20260712-monthly-echo-moments';
@@ -321,10 +321,6 @@ function getFrameScale(): number {
 }
 
 function getFrameWidth(): number {
-  if (typeof window === 'undefined') return 390;
-  if (window.innerWidth <= 640) {
-    return Math.max(390, Math.min(window.innerWidth, 480));
-  }
   return 390;
 }
 
@@ -781,7 +777,9 @@ function StoryStyle() {
           }
         }
         .echo-scale-box {
-          transform-origin: top center;
+          width: var(--echo-frame-width, 390px);
+          height: 844px;
+          transform-origin: top left;
         }
         .echo-frame {
           box-sizing: border-box;

@@ -17,7 +17,7 @@ export type MonthlyEchoRenderPayload = {
     map: MonthlyEchoPageBase & { mainArc: string; sideThemes: MonthlyEchoSideTheme[]; summary: string };
     moments: MonthlyEchoPageBase & { items: MonthlyEchoMoment[]; summary: string };
     actions: MonthlyEchoPageBase & { items: MonthlyEchoAction[]; summary: string };
-    recurring: MonthlyEchoPageBase & { lead: string; question: string; occurrences: MonthlyEchoOccurrence[]; evolvedQuestion: string; conclusion: string };
+    recurring: MonthlyEchoPageBase & { lead: string; question: string; occurrences: MonthlyEchoOccurrence[]; evolvedQuestion: string; turnDate: string; conclusion: string };
     letter: MonthlyEchoPageBase & { salutation: string; paragraphs: string[]; finalInsight: string; signature: string };
   };
 };

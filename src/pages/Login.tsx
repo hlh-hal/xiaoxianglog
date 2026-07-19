@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Mail, Lock, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, Mail, Lock, Eye, EyeOff, MessageCircle } from 'lucide-react';
 import { authService } from '../services/authService';
+import { wechatAuthService, type WechatConfig } from '../services/wechatAuthService';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function Login() {
@@ -11,7 +12,45 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [wechatLoading, setWechatLoading] = useState(false);
+  const [wechatConfig, setWechatConfig] = useState<WechatConfig | null>(null);
   const [error, setError] = useState('');
+
+  const finishWechatLogin = useCallback(async (code: string) => {
+    const result = await wechatAuthService.loginWithCode(code);
+    if (result.status === 'authenticated') {
+      login(result.session);
+      navigate('/profile', { replace: true });
+      return;
+    }
+    navigate('/wechat-register');
+  }, [login, navigate]);
+
+  useEffect(() => {
+    if (!wechatAuthService.isAndroidNative()) return;
+    let cancelled = false;
+    wechatAuthService.getConfig()
+      .then(async (config) => {
+        if (cancelled) return;
+        setWechatConfig(config.enabled ? config : null);
+        if (!config.enabled) return;
+        const pendingCode = await wechatAuthService.consumePendingAuthorization();
+        if (!pendingCode || cancelled) return;
+        setWechatLoading(true);
+        await finishWechatLogin(pendingCode);
+      })
+      .catch((err) => {
+        if (!cancelled && String(err?.message || '').includes('状态校验失败')) {
+          setError('微信授权状态已失效，请重新授权');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setWechatLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [finishWechatLogin]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,6 +75,20 @@ export default function Login() {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleWechatLogin = async () => {
+    if (!wechatConfig) return;
+    setWechatLoading(true);
+    setError('');
+    try {
+      const code = await wechatAuthService.authorize(wechatConfig);
+      await finishWechatLogin(code);
+    } catch (err: any) {
+      setError(err?.message || '微信登录失败，请稍后重试');
+    } finally {
+      setWechatLoading(false);
     }
   };
 
@@ -121,6 +174,25 @@ export default function Login() {
             {loading ? '登录中...' : '登录'}
           </button>
         </form>
+
+        {wechatConfig && (
+          <div className="mt-6">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="h-px flex-1 bg-black/10" />
+              <span className="text-[12px] text-[#A1A1A6]">其他登录方式</span>
+              <span className="h-px flex-1 bg-black/10" />
+            </div>
+            <button
+              type="button"
+              onClick={handleWechatLogin}
+              disabled={wechatLoading || loading}
+              className="w-full h-14 rounded-[16px] border border-[#07C160]/25 bg-[#07C160]/10 text-[#16843D] text-[16px] font-medium flex items-center justify-center gap-2 active:scale-[0.98] transition-transform disabled:opacity-50"
+            >
+              <MessageCircle className="w-5 h-5" />
+              {wechatLoading ? '正在打开微信...' : '微信登录'}
+            </button>
+          </div>
+        )}
 
         <div className="mt-6 flex justify-between items-center px-2">
           <button 

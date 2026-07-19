@@ -544,7 +544,7 @@ JSON 结构：
   "keyMoments": [{"title":"标题","event":"发生了什么","meaning":"为什么重要","evidenceIds":["ev_xxx"]}],
   "actionTrace": [{"action":"真实行动","scene":"场景","meaning":"意义","iconHint":"express|pause|organize|refuse|try|persist|adjust|restart|askHelp|record|exercise|create|accompany|clean|repair|boundary|other","evidenceIds":["ev_xxx"]}],
   "emotionArc": {"text":"情绪如何流动","evidenceIds":["ev_xxx"]},
-  "recurringPattern": {"lead":"出现背景","question":"反复问题","occurrences":[{"scene":"一次具体出现","evidenceIds":["ev_xxx"]}],"evolvedQuestion":"后来出现的新问题","conclusion":"克制总结","evidenceIds":["ev_xxx"]},
+  "recurringPattern": {"lead":"当你……时，你会很快开始问：","question":"反复问题","occurrences":[{"scene":"一次具体出现","evidenceIds":["ev_xxx"]}],"evolvedQuestion":{"text":"后来出现的新问题","evidenceIds":["ev_xxx"]},"conclusion":"克制总结","evidenceIds":["ev_xxx"]},
   "sideThemes": [{"title":"真实支线名称","scene":"具体场景","meaning":"它指向什么","evidenceIds":["ev_xxx"]}],
   "growthDirection": {"text":"本月变化方向","evidenceIds":["ev_xxx"]},
   "finalInsight": {"text":"一句克制洞察","evidenceIds":["ev_xxx"]},
@@ -554,7 +554,7 @@ JSON 结构：
 
 信件要求：letter 在证据充分时严格输出 6 个段落，全文合计 350-430 个汉字。第1段用1-2句话概括本月真实状态；第2-4段分别写一个真实日期事件及用户当时如何回应；第5段承认仍未解决的问题，不强行圆满；第6段收束用户正在从什么状态慢慢走向什么状态。全文必须出现2-3个来自证据节点的日期锚点，格式为“小象记得，MM.DD 那天，……”。每段只引用输入中存在的 evidenceId，不写“你很努力”“你成长了”等空泛判断，不为了凑字重复观点。证据不足时宁可输出更少的真实段落，也不要编造内容。finalInsight 控制在28-52个汉字，写成一句可收藏但克制的洞察。
 
-规则：所有内容必须引用输入中存在的 evidenceId。不要编造日期，日期由系统从证据节点填写。actionTrace 只写真实行为，不能把情绪当行动。keyMoments 最多3条，actionTrace 4-6条（证据不足可以更少），sideThemes 必须来自真实日志，不固定成工作/关系/自我状态。不诊断、不贴人格标签、不把短期状态写成永久结论。语气温柔、克制、具体。
+规则：所有内容必须引用输入中存在的 evidenceId。不要编造日期，日期由系统从证据节点填写。recurringPattern.lead 必须使用“当你……时，你会很快开始问：”句式；evolvedQuestion 必须引用一条能够独立证明新问题出现的证据，转折日期只由该 evidenceId 解析，不能复用最后一次旧问题日期冒充。actionTrace 只写真实行为，不能把情绪当行动。keyMoments 最多3条，actionTrace 4-6条（证据不足可以更少），sideThemes 必须来自真实日志，不固定成工作/关系/自我状态。不诊断、不贴人格标签、不把短期状态写成永久结论。语气温柔、克制、具体。
 
 monthKey：${monthKey}
 entryCount：${entryCount}
@@ -608,7 +608,7 @@ export async function generateMonthlyArcDraft(userId: string, monthKey: string):
       });
       const parsed = safeJsonObject(result.content);
       if (!parsed) throw new Error('monthly arc AI returned invalid JSON');
-      payload = normalizeMonthlyArcV2(parsed, registry);
+      payload = normalizeMonthlyArcV2(parsed, registry, traces);
     }
     assertSafePayloadText(payload, 'MonthlyArcDraft');
     const range = getMonthRange(monthKey);
