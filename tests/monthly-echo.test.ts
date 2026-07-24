@@ -12,6 +12,9 @@ import {
   isAtOrAfterLocalTime,
   isFirstDayInZone,
   isLastDayInZone,
+  MONTHLY_ARC_PROMPT_VERSION,
+  MONTHLY_ECHO_PROMPT_VERSION,
+  MONTHLY_TRACE_PROMPT_VERSION,
   normalizeEchoPayload,
   normalizePushTime,
   normalizeTracePayload,
@@ -23,6 +26,7 @@ import {
   compileMonthlyEchoReport,
   evidenceRegistryFromTraces,
   injectCurrentNickname,
+  isExplicitEmotionLabel,
   isObservableAction,
   normalizeDailyTraceV2,
   normalizeMonthlyArcV2,
@@ -33,12 +37,16 @@ import {
   resolveMonthlyEchoSwipe,
 } from '../src/utils/monthlyEchoPager';
 import {
-  buildOverviewOccurrenceSummary,
   buildRecurringLeadLines,
+  normalizeOverviewEmotions,
 } from '../src/components/monthly-echo/MonthlyEchoExactPages';
 
 const monthlyEchoServiceSource = readFileSync(
   new URL('../server/src/lib/monthlyEchoService.ts', import.meta.url),
+  'utf8',
+);
+const monthlyEchoExactPagesSource = readFileSync(
+  new URL('../src/components/monthly-echo/MonthlyEchoExactPages.tsx', import.meta.url),
   'utf8',
 );
 
@@ -52,22 +60,206 @@ function test(name: string, fn: () => void): void {
   }
 }
 
-test('overview occurrence summary groups dates and extracts the shared recurring context', () => {
-  assert.deepEqual(
-    buildOverviewOccurrenceSummary(
-      [
-        { date: '2026-06-05' },
-        { date: '2026-06-14' },
-        { date: '2026-06-21' },
-      ],
-      '当你很在意一段关系，或很想做好一件事时，你会很快开始问：',
-      '我是不是做得还不够？',
-    ),
-    {
-      dates: ['06.05', '06.14', '06.21'],
-      context: '很在意一段关系，或很想做好一件事',
+test('overview is driven by evidence emotions and stays honest when none are valid', () => {
+  const evidenceEmotion = {
+    text: '疲惫', emotion: '疲惫', dates: ['2026-06-08'], evidence: '今天真的很累。',
+    event: '连续准备两场客户演示', eventEvidence: '今天连续准备了两场客户演示。', eventEvidenceIds: ['ev-event'],
+    meaning: '几件事情同时压在了一起。', evidenceIds: ['ev-emotion'],
+  };
+  const partialReport = compileMonthlyEchoReport('2026-06', 3, {
+    schemaVersion: 2,
+    mainArc: null,
+    keyMoments: [],
+    actionTrace: [],
+    emotionArc: { text: '这个月浮现过疲惫', evidenceIds: ['ev-emotion'] },
+    emotionPattern: 'unclear',
+    emotions: [evidenceEmotion],
+    recurringPattern: null,
+    sideThemes: [],
+    growthDirection: null,
+    finalInsight: null,
+    letter: [],
+    confidence: 0.8,
+  });
+  const fallbackReport = compileMonthlyEchoReport('2026-06', 3, {
+    schemaVersion: 2,
+    mainArc: { text: '这个月仍然有一条清楚的主线。', evidenceIds: ['ev-main'] },
+    keyMoments: [],
+    actionTrace: [],
+    emotionArc: null,
+    recurringPattern: null,
+    sideThemes: [],
+    growthDirection: null,
+    finalInsight: null,
+    letter: [],
+    confidence: 0.8,
+  });
+
+  assert.equal(partialReport.pages.overview.contentState, 'partial');
+  assert.equal(partialReport.pages.overview.emotions.length, 1);
+  assert.equal(partialReport.pages.overview.emotions[0].evidence, '今天真的很累。');
+  assert.equal(partialReport.pages.overview.fallback, false);
+  assert.equal(fallbackReport.pages.overview.contentState, 'fallback');
+  assert.equal(fallbackReport.pages.overview.emotions.length, 0);
+  assert.equal(fallbackReport.pages.overview.fallback, true);
+});
+
+test('overview UI renders exactly the evidence emotions without trends or recurring fields', () => {
+  const overviewSource = monthlyEchoExactPagesSource.match(/function Overview[\s\S]+?\n\}/)?.[0] || '';
+
+  assert.match(overviewSource, /normalizeOverviewEmotions\(page\.emotions\)/);
+  assert.match(overviewSource, /overview-count-\$\{emotions\.length\}/);
+  assert.match(overviewSource, /你的内心出现了这些关键词/);
+  assert.match(overviewSource, /有些情绪反复出现/);
+  assert.match(overviewSource, /有些情绪只是短暂停留/);
+  assert.match(overviewSource, /情绪被记录下来/);
+  assert.match(overviewSource, /情绪没有标准答案/);
+  assert.match(overviewSource, /没有写出来的部分/);
+  assert.match(monthlyEchoExactPagesSource, /item\.event \? `当时：\$\{item\.event\}` : item\.meaning/);
+  assert.doesNotMatch(overviewSource, /emotionArc|initialQuestion|occurrences|evolvedQuestion|pages\.recurring|phase|trend/);
+  assert.equal(MONTHLY_TRACE_PROMPT_VERSION, 'daily_trace_v2_4');
+  assert.equal(MONTHLY_ARC_PROMPT_VERSION, 'monthly_arc_v2_11');
+  assert.equal(MONTHLY_ECHO_PROMPT_VERSION, 'monthly_echo_render_v2_12');
+});
+
+test('overview safely renders legacy reports without an emotions field', () => {
+  assert.deepEqual(normalizeOverviewEmotions(undefined), []);
+  assert.deepEqual(normalizeOverviewEmotions(null), []);
+  assert.deepEqual(normalizeOverviewEmotions({}), []);
+  assert.equal(normalizeOverviewEmotions(Array.from({ length: 6 }, (_, index) => ({ emotion: String(index) }))).length, 5);
+});
+
+test('action page extends the fifth timeline segment when the fourth title is long', () => {
+  assert.match(monthlyEchoExactPagesSource, /Array\.from\(item\.action \|\| ''\)\.length > 18/);
+  assert.match(monthlyEchoExactPagesSource, /hasLongFourthAction/);
+  assert.match(monthlyEchoExactPagesSource, /<p style=\{clamp\(hasLongTitle \? 1 : 3\)\}>\{scene\}<\/p>/);
+  assert.match(monthlyEchoExactPagesSource, /actions-line-five-extension/);
+  assert.match(monthlyEchoExactPagesSource, /actions-node-five-shifted/);
+  assert.match(monthlyEchoExactPagesSource, /actions-long-fourth \.action-copy-patch-5\{top:65\.4%\}/);
+  assert.match(monthlyEchoExactPagesSource, /actions-line-five-extension\{[^}]+top:56\.6%[^}]+height:10\.4%/);
+});
+
+test('monthly emotions attach a concrete event only from the same diary evidence', () => {
+  const eventQuote = '下午给客户演示了刚做完的新方案。';
+  const emotionQuote = '想到演示时的几个卡顿，我还是有些紧张。';
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: [eventQuote, emotionQuote],
+    importantEvents: [{ text: '给客户演示新方案', evidenceQuotes: [eventQuote] }],
+    emotionTone: [{ text: '紧张', evidenceQuotes: [emotionQuote] }],
+    actions: [], conflicts: [], relationships: [], smallChange: null, unfinishedQuestions: [], confidence: 0.8,
+  }, `${eventQuote}${emotionQuote}`, 'emotion-with-event', '2026-06-18');
+  const registry = evidenceRegistryFromTraces([trace]);
+  const emotionEvidenceId = trace.evidenceQuotes.find(item => item.quote === emotionQuote)?.id || '';
+  const eventEvidenceId = trace.evidenceQuotes.find(item => item.quote === eventQuote)?.id || '';
+  const arc = normalizeMonthlyArcV2({
+    emotions: [{ emotion: '紧张', meaning: '演示中的卡顿仍让自己在意', evidenceIds: [emotionEvidenceId] }],
+    emotionPattern: 'unclear', mainArc: null, keyMoments: [], actionTrace: [], recurringPattern: null,
+    sideThemes: [], growthDirection: null, finalInsight: null, letter: [], confidence: 0.8,
+  }, registry, [trace]);
+
+  assert.equal(arc.emotions?.[0].event, '给客户演示新方案');
+  assert.equal(arc.emotions?.[0].eventEvidence, eventQuote);
+  assert.deepEqual(arc.emotions?.[0].eventEvidenceIds, [eventEvidenceId]);
+  assert.notEqual(arc.emotions?.[0].eventEvidenceIds[0], emotionEvidenceId);
+});
+
+test('monthly emotions fall back to explicit DailyTrace emotion claims when the arc omits them', () => {
+  const eventQuote = '晚上把积压的报销材料重新整理了一遍。';
+  const emotionQuote = '看着桌面和待办，我心里还是很乱。';
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: [eventQuote, emotionQuote],
+    importantEvents: [{ text: '整理积压的报销材料', evidenceQuotes: [eventQuote] }],
+    emotionTone: [{ text: '乱', evidenceQuotes: [emotionQuote] }],
+    actions: [], conflicts: [], relationships: [], smallChange: null, unfinishedQuestions: [], confidence: 0.8,
+  }, `${eventQuote}${emotionQuote}`, 'emotion-fallback', '2026-06-19');
+  const registry = evidenceRegistryFromTraces([trace]);
+  const arc = normalizeMonthlyArcV2({
+    emotions: [], emotionPattern: 'unclear', mainArc: null, keyMoments: [], actionTrace: [], recurringPattern: null,
+    sideThemes: [], growthDirection: null, finalInsight: null, letter: [], confidence: 0.8,
+  }, registry, [trace]);
+
+  assert.equal(arc.emotions?.[0].emotion, '混乱');
+  assert.equal(arc.emotions?.[0].event, '整理积压的报销材料');
+  assert.equal(arc.emotions?.[0].evidence, emotionQuote);
+});
+
+test('monthly emotions keep only explicit evidence-backed labels, sort by date, and cap at five', () => {
+  const labels = ['疲惫', '期待', '迟疑', '开心', '平静', '担心'];
+  const traces = labels.map((label, index) => normalizeDailyTraceV2({
+    evidenceQuotes: [`06.${String(index + 1).padStart(2, '0')} 我感到${label}。`],
+    importantEvents: [], emotionTone: [], actions: [], conflicts: [], relationships: [],
+    smallChange: null, unfinishedQuestions: [], confidence: 0.8,
+  }, `06.${String(index + 1).padStart(2, '0')} 我感到${label}。`, `emotion-${index}`, `2026-06-${String(index + 1).padStart(2, '0')}`));
+  const registry = evidenceRegistryFromTraces(traces);
+  const ids = traces.map(trace => trace.evidenceQuotes[0].id);
+  const arc = normalizeMonthlyArcV2({
+    emotions: labels.map((emotion, index) => ({ emotion, meaning: `记录明确写下了${emotion}`, evidenceIds: [ids[index]] })).reverse(),
+    emotionPattern: 'improving',
+    mainArc: null, keyMoments: [], actionTrace: [], recurringPattern: null, sideThemes: [], growthDirection: null, finalInsight: null, letter: [], confidence: 0.8,
+  }, registry, traces);
+
+  assert.equal(arc.emotions?.length, 5);
+  assert.deepEqual(arc.emotions?.map(item => item.dates[0]), ['2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05']);
+  assert.equal(arc.emotions?.[0].evidence, '06.01 我感到疲惫。');
+  assert.equal(arc.emotionPattern, 'improving');
+  assert.equal(isExplicitEmotionLabel('加班'), false);
+  assert.equal(isExplicitEmotionLabel('疲惫'), true);
+});
+
+test('monthly emotions reject event labels and do not reuse the same evidence', () => {
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: ['今天加班到很晚，我真的很疲惫。'], importantEvents: [], emotionTone: [], actions: [], conflicts: [], relationships: [],
+    smallChange: null, unfinishedQuestions: [], confidence: 0.8,
+  }, '今天加班到很晚，我真的很疲惫。', 'emotion-dedupe', '2026-06-18');
+  const registry = evidenceRegistryFromTraces([trace]);
+  const evidenceId = trace.evidenceQuotes[0].id;
+  const arc = normalizeMonthlyArcV2({
+    emotions: [
+      { emotion: '加班', meaning: '发生了一次加班', evidenceIds: [evidenceId] },
+      { emotion: '疲惫', meaning: '这一天明确写到很累', evidenceIds: [evidenceId] },
+      { emotion: '担心', meaning: '同一句被包装成另一个情绪', evidenceIds: [evidenceId] },
+    ],
+    emotionPattern: 'fluctuating',
+    mainArc: null, keyMoments: [], actionTrace: [], recurringPattern: null, sideThemes: [], growthDirection: null, finalInsight: null, letter: [], confidence: 0.8,
+  }, registry, [trace]);
+
+  assert.deepEqual(arc.emotions?.map(item => item.emotion), ['疲惫']);
+  assert.equal(arc.emotionPattern, 'unclear');
+});
+
+test('emotion prompts prohibit inferred events, fixed phases, and forced improvement', () => {
+  assert.match(monthlyEchoServiceSource, /emotionTone 只提取正文明确写出的情绪或感受/);
+  assert.match(monthlyEchoServiceSource, /不能根据加班、旅行、沟通、完成任务等事件自行推断情绪/);
+  assert.match(monthlyEchoServiceSource, /同时写入 importantEvents 与 emotionTone/);
+  assert.match(monthlyEchoServiceSource, /用户本人已经做出的可观察行为，也必须同时写入 actions/);
+  assert.match(monthlyEchoServiceSource, /不要强凑月初\/月中\/月末/);
+  assert.match(monthlyEchoServiceSource, /不要默认紧绷、拉扯、松动、变好、改善、治愈/);
+  assert.match(monthlyEchoServiceSource, /meaning 只解释该情绪出现的具体背景，不写建议、教训、性格、成长/);
+  assert.match(monthlyEchoServiceSource, /同一篇日志中确定性关联 importantEvents/);
+  assert.match(monthlyEchoServiceSource, /不要在 meaning 中编造或补写事件/);
+  assert.match(monthlyEchoServiceSource, /禁止直接输出“当你……时”/);
+});
+
+test('recurring placeholder lead is rebuilt from evidence-backed occurrence context', () => {
+  const quote = '期末周复习时，我尝试使用番茄钟来提高效率。';
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: [quote], importantEvents: [], emotionTone: [], actions: [], conflicts: [], relationships: [],
+    smallChange: null, unfinishedQuestions: [], confidence: 0.8,
+  }, quote, 'entry-recurring-placeholder', '2026-07-04');
+  const evidenceId = trace.evidenceQuotes[0].id;
+  const arc = normalizeMonthlyArcV2({
+    mainArc: null, keyMoments: [], actionTrace: [], emotionArc: null,
+    recurringPattern: {
+      lead: '当你……时，你会很快开始问：',
+      question: '如何更高效地完成这件事？',
+      occurrences: [{ scene: '期末周复习时，尝试使用番茄钟提高效率', evidenceIds: [evidenceId] }],
+      evolvedQuestion: '', conclusion: '开始重新审视方法。', evidenceIds: [evidenceId],
     },
-  );
+    sideThemes: [], growthDirection: null, finalInsight: null, letter: [], confidence: 0.8,
+  }, evidenceRegistryFromTraces([trace]), [trace]);
+
+  assert.equal(arc.recurringPattern?.lead, '当你期末周复习时，你会很快开始问：');
+  assert.doesNotMatch(arc.recurringPattern?.lead || '', /…|\.\.\./);
 });
 
 test('recurring lead is rendered as two stable lines', () => {
@@ -317,7 +509,7 @@ test('monthly echo exact pages use a two-layer next hint and omit it from the le
   assert.match(exactPagesSource, /mask-image:radial-gradient\(ellipse 70% 55% at 50% 35%,#000 48%,transparent 100%\)/);
   assert.match(exactPagesSource, /\.exact-moments \.exact-artboard>img\{clip-path:inset\(0 0 4% 0\)\}/);
   assert.match(exactPagesSource, /\.exact-overview \.exact-next-repair\{background-image:none!important;background-color:#faf0e2\}/);
-  assert.match(exactPagesSource, /\.exact-recurring \.exact-next-repair\{background-image:none!important;background-color:#f5eadd\}/);
+  assert.match(exactPagesSource, /\.exact-recurring \.exact-next-repair\{display:none\}/);
   assert.match(exactPagesSource, /\.map-node-patch-1\{left:12%;top:33\.5%\}/);
   assert.match(exactPagesSource, /\.exact-next-visual\{[^}]+place-items:center;pointer-events:none\}/);
   assert.match(exactPagesSource, /\.cover-month-patch:before\{[^}]+inset:0[^}]+box-shadow:0 0 5px 3px #f7efe2/);
@@ -403,6 +595,52 @@ test('observable action recognition includes concrete work that was previously f
   assert.equal(isObservableAction('处理琐碎冲突'), true);
   assert.equal(isObservableAction('用番茄钟推进下一章复习'), true);
   assert.equal(isObservableAction('焦虑'), false);
+});
+
+test('DailyTraceNode promotes evidence-backed user actions that AI only classified as events', () => {
+  const quote = '我把桌面和待办列表一起清理了。';
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: [quote],
+    importantEvents: [{ text: '清理桌面和待办列表', evidenceQuotes: [quote] }],
+    emotionTone: [], actions: [], conflicts: [], relationships: [], smallChange: null,
+    unfinishedQuestions: [], confidence: 0.9,
+  }, quote, 'entry-event-action', '2026-07-07');
+
+  assert.equal(trace.actions.length, 1);
+  assert.equal(trace.actions[0].action, '清理桌面和待办列表');
+  assert.equal(trace.actions[0].scene, quote);
+  assert.equal(trace.actions[0].iconHint, 'clean');
+});
+
+test('DailyTraceNode does not turn another persons event into the users action', () => {
+  const quote = '朋友指出是信息层级的问题。';
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: [quote],
+    importantEvents: [{ text: '朋友指出页面结构问题', evidenceQuotes: [quote] }],
+    emotionTone: [], actions: [], conflicts: [], relationships: [], smallChange: null,
+    unfinishedQuestions: [], confidence: 0.9,
+  }, quote, 'entry-third-party-event', '2026-07-05');
+
+  assert.equal(trace.actions.length, 0);
+});
+
+test('DailyTraceNode recovers only explicit emotions from validated diary quotes', () => {
+  const confused = '早上想到这个月的任务时有些乱。';
+  const expected = '我表达了期待，也给彼此留了空间。';
+  const negated = '这次我并不担心结果。';
+  const trace = normalizeDailyTraceV2({
+    evidenceQuotes: [confused, expected, negated],
+    importantEvents: [], emotionTone: [], actions: [], conflicts: [], relationships: [], smallChange: null,
+    unfinishedQuestions: [], confidence: 0.9,
+  }, `${confused}${expected}${negated}`, 'entry-explicit-emotions', '2026-07-08');
+
+  assert.deepEqual(trace.emotionTone.map(item => item.text), ['混乱', '期待']);
+  assert.deepEqual(trace.emotionTone.map(item => item.evidenceIds[0]), trace.evidenceQuotes.slice(0, 2).map(item => item.id));
+  const arc = normalizeMonthlyArcV2({
+    mainArc: null, keyMoments: [], actionTrace: [], emotions: [], recurringPattern: null,
+    sideThemes: [], growthDirection: null, finalInsight: null, letter: [], confidence: 0.8,
+  }, evidenceRegistryFromTraces([trace]), [trace]);
+  assert.deepEqual(arc.emotions?.map(item => item.emotion), ['混乱', '期待']);
 });
 
 test('MonthlyArcDraft fills missing actionTrace from evidence-linked daily actions', () => {

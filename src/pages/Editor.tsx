@@ -90,6 +90,13 @@ import {
 } from '../features/editor/editorPreferences';
 
 const DAILY_ECHO_NOTIFICATION_PROMPT_KEY = 'xiang_daily_echo_notification_prompt_v1';
+const DAILY_ECHO_REVEAL_INTERVAL_MS = 35;
+const DAILY_ECHO_REVEAL_CHARS_PER_TICK = 2;
+const DAILY_ECHO_ENQUEUE_RETRY_DELAYS_MS = [2000, 5000] as const;
+
+function waitForDailyEchoEnqueueRetry(milliseconds: number): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, milliseconds));
+}
 
 const DiaryInlineImage = TiptapNode.create({
   name: 'diaryInlineImage',
@@ -1591,7 +1598,7 @@ export default function Editor() {
   const dailyEchoWatcherAbortRef = useRef<AbortController | null>(null);
   const activeDailyEchoJobIdRef = useRef<string | null>(null);
   const dailyEchoJobStartGuardRef = useRef(false);
-  const dailyEchoPreviewRef = useRef('');
+  const dailyEchoRevealTimerRef = useRef<number | null>(null);
   const persistedDailyEchoJobSignatureRef = useRef('');
   const autoSavedDailyEchoSignatureRef = useRef('');
   const insightDraftBackgroundUpdateRef = useRef('');
@@ -1622,12 +1629,22 @@ export default function Editor() {
     dailyEchoWatcherAbortRef.current?.abort();
     dailyEchoWatcherAbortRef.current = null;
     activeDailyEchoJobIdRef.current = null;
-    dailyEchoPreviewRef.current = '';
+    if (dailyEchoRevealTimerRef.current !== null) {
+      window.clearInterval(dailyEchoRevealTimerRef.current);
+      dailyEchoRevealTimerRef.current = null;
+    }
     persistedDailyEchoJobSignatureRef.current = '';
     setDailyEchoJob(null);
     setDailyEchoStreamingContent('');
     setIsDailyEchoRetrying(false);
     setIsEchoGenerating(false);
+    return () => {
+      dailyEchoWatcherAbortRef.current?.abort();
+      if (dailyEchoRevealTimerRef.current !== null) {
+        window.clearInterval(dailyEchoRevealTimerRef.current);
+        dailyEchoRevealTimerRef.current = null;
+      }
+    };
   }, [existingJournal?.id, user?.userId]);
 
   const showToast = (msg: string) => {
@@ -3017,6 +3034,41 @@ export default function Editor() {
     activeDailyEchoJobIdRef.current = null;
   }, []);
 
+  const stopDailyEchoReveal = useCallback(() => {
+    if (dailyEchoRevealTimerRef.current !== null) {
+      window.clearInterval(dailyEchoRevealTimerRef.current);
+      dailyEchoRevealTimerRef.current = null;
+    }
+  }, []);
+
+  const revealValidatedDailyEcho = useCallback((content: string) => {
+    stopDailyEchoReveal();
+    const characters = Array.from(content);
+    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    if (prefersReducedMotion || characters.length <= DAILY_ECHO_REVEAL_CHARS_PER_TICK) {
+      setDailyEchoStreamingContent('');
+      setIsEchoGenerating(false);
+      return;
+    }
+
+    let visibleCharacters = 0;
+    setDailyEchoStreamingContent('');
+    setIsDailyEchoRetrying(false);
+    setIsEchoGenerating(true);
+    dailyEchoRevealTimerRef.current = window.setInterval(() => {
+      visibleCharacters = Math.min(
+        characters.length,
+        visibleCharacters + DAILY_ECHO_REVEAL_CHARS_PER_TICK,
+      );
+      setDailyEchoStreamingContent(characters.slice(0, visibleCharacters).join(''));
+      if (visibleCharacters < characters.length) return;
+
+      stopDailyEchoReveal();
+      setDailyEchoStreamingContent('');
+      setIsEchoGenerating(false);
+    }, DAILY_ECHO_REVEAL_INTERVAL_MS);
+  }, [stopDailyEchoReveal]);
+
   const offerDailyEchoNotificationPermission = useCallback(async () => {
     if (localStorage.getItem(DAILY_ECHO_NOTIFICATION_PROMPT_KEY) === 'handled') return;
     const permission = await checkBrowserNotificationPermission().catch(() => 'unsupported' as const);
@@ -3039,6 +3091,7 @@ export default function Editor() {
 
     // A dismissed echo remains dismissed; observing a historical server job must not revive it.
     if (entry.dailyEcho?.status === 'dismissed') {
+      stopDailyEchoReveal();
       setIsEchoGenerating(false);
       setDailyEchoStreamingContent('');
       setIsDailyEchoRetrying(false);
@@ -3047,21 +3100,29 @@ export default function Editor() {
     }
 
     const active = isDailyEchoJobActive(job);
-    const previousPreview = dailyEchoPreviewRef.current;
-    const nextPreview = job.previewContent || '';
-    dailyEchoPreviewRef.current = nextPreview;
-    setDailyEchoStreamingContent(nextPreview);
-    setIsEchoGenerating(active);
 
     if (active) {
-      setIsDailyEchoRetrying(job.phase === 'retrying' || Boolean(previousPreview && !nextPreview));
+      stopDailyEchoReveal();
+      setDailyEchoStreamingContent('');
+      setIsEchoGenerating(true);
+      setIsDailyEchoRetrying(job.phase === 'retrying');
       return;
     }
 
+    const terminalTimestamp = job.generatedAt || job.updatedAt || new Date().toISOString();
+    const terminalContent = job.content?.trim() || '';
+    const terminalSignature = job.status === 'succeeded' && terminalContent
+      ? `${job.id}:${terminalTimestamp}:${terminalContent}`
+      : '';
+    // The SSE endpoint may deliver the same terminal snapshot more than once.
+    // Do not let a duplicate stop an in-progress reveal of the validated result.
+    if (terminalSignature && persistedDailyEchoJobSignatureRef.current === terminalSignature) return;
+
+    stopDailyEchoReveal();
     setIsDailyEchoRetrying(false);
     setDailyEchoStreamingContent('');
+    setIsEchoGenerating(false);
 
-    const terminalTimestamp = job.generatedAt || job.updatedAt || new Date().toISOString();
     if (job.status === 'failed') {
       setDailyEcho({
         status: 'failed',
@@ -3086,7 +3147,7 @@ export default function Editor() {
       return;
     }
 
-    const content = job.content?.trim() || '';
+    const content = terminalContent;
     if (job.status !== 'succeeded' || !content) {
       setDailyEcho({
         status: 'failed',
@@ -3124,20 +3185,24 @@ export default function Editor() {
       sourceHash: job.sourceHash,
       regenerateCount: job.regenerateCount,
     };
-    const persistSignature = `${job.id}:${nextEcho.generatedAt}:${nextEcho.content}`;
-    if (persistedDailyEchoJobSignatureRef.current === persistSignature) return;
+    const persistSignature = terminalSignature;
     persistedDailyEchoJobSignatureRef.current = persistSignature;
 
     try {
       const existingEcho = entry.dailyEcho;
-      if (
+      const alreadyPersisted = (
         existingEcho?.status === 'saved'
         && existingEcho.generatedAt === nextEcho.generatedAt
         && existingEcho.content === nextEcho.content
-      ) {
+      );
+      if (alreadyPersisted) {
         setDailyEcho(existingEcho);
       } else {
+        setIsEchoGenerating(true);
         await persistDailyEcho(nextEcho);
+        if (activeEntryIdRef.current === entry.id) {
+          revealValidatedDailyEcho(nextEcho.content);
+        }
       }
 
       void markDailyEchoMemoryEntriesUsed(
@@ -3146,16 +3211,16 @@ export default function Editor() {
       ).catch(error => console.warn('Failed to mark Daily Echo memory usage:', error));
     } catch (error) {
       persistedDailyEchoJobSignatureRef.current = '';
+      setIsEchoGenerating(false);
       throw error;
     }
-  }, [persistDailyEcho]);
+  }, [persistDailyEcho, revealValidatedDailyEcho, stopDailyEchoReveal]);
 
   const beginDailyEchoWatcher = useCallback((initialJob: DailyEchoJobSnapshot) => {
     stopDailyEchoWatcher();
     const controller = new AbortController();
     dailyEchoWatcherAbortRef.current = controller;
     activeDailyEchoJobIdRef.current = initialJob.id;
-    dailyEchoPreviewRef.current = '';
 
     void (async () => {
       await applyDailyEchoJobSnapshot(initialJob);
@@ -3231,8 +3296,9 @@ export default function Editor() {
       };
       if (activeEntryIdRef.current !== entry.id) return;
       await persistDailyEcho(echo);
-      setDailyEcho(echo);
-      setIsEchoGenerating(false);
+      if (activeEntryIdRef.current === entry.id) {
+        revealValidatedDailyEcho(echo.content);
+      }
     };
 
     dailyEchoJobStartGuardRef.current = true;
@@ -3249,7 +3315,31 @@ export default function Editor() {
         return;
       }
       const input = await buildDailyEchoJobInput(entry, nextRegenerateCount);
-      const job = await createDailyEchoJob(input);
+      let job: DailyEchoJobSnapshot | null = null;
+      let lastEnqueueError: unknown;
+      for (let enqueueAttempt = 0; enqueueAttempt <= DAILY_ECHO_ENQUEUE_RETRY_DELAYS_MS.length; enqueueAttempt += 1) {
+        try {
+          job = await createDailyEchoJob(input);
+          break;
+        } catch (error) {
+          lastEnqueueError = error;
+          const isNonRetryableApiError = error instanceof ApiError
+            && (error.status < 500 || error.status === 503);
+          if (isNonRetryableApiError) throw error;
+
+          // A lost POST response may still mean the durable task was accepted.
+          // Query latest before retrying so the server dedupe remains the authority.
+          const recovered = await getLatestDailyEchoJob(entry.id).catch(() => null);
+          if (recovered && recovered.sourceHash === currentSourceHash) {
+            job = recovered;
+            break;
+          }
+          if (enqueueAttempt >= DAILY_ECHO_ENQUEUE_RETRY_DELAYS_MS.length) throw error;
+          await waitForDailyEchoEnqueueRetry(DAILY_ECHO_ENQUEUE_RETRY_DELAYS_MS[enqueueAttempt]);
+          if (activeEntryIdRef.current !== entry.id) return;
+        }
+      }
+      if (!job) throw lastEnqueueError || new Error('Daily Echo enqueue failed');
       if (activeEntryIdRef.current !== entry.id) return;
       beginDailyEchoWatcher(job);
       void offerDailyEchoNotificationPermission();
@@ -3265,14 +3355,6 @@ export default function Editor() {
           } catch (fallbackError) {
             console.warn('Daily Echo foreground fallback failed:', fallbackError);
           }
-        }
-      } else if (!(error instanceof ApiError)) {
-        // A lost POST response may still mean the durable task was accepted.
-        // Query latest before showing failure so we never start a duplicate.
-        const recovered = await getLatestDailyEchoJob(entry.id).catch(() => null);
-        if (recovered && recovered.sourceHash === createDailyEchoSourceHash(entry.diaryDate, getDiaryPlainText(entry))) {
-          beginDailyEchoWatcher(recovered);
-          return;
         }
       }
       setDailyEcho({
@@ -3324,6 +3406,9 @@ export default function Editor() {
   };
 
   const handleDismissDailyEcho = async () => {
+    stopDailyEchoReveal();
+    setDailyEchoStreamingContent('');
+    setIsEchoGenerating(false);
     const entry = existingJournalRef.current;
     const now = new Date().toISOString();
     const dismissedEcho: DailyEcho = {
@@ -4247,7 +4332,7 @@ export default function Editor() {
         hidden={shouldHideDailyEchoCard}
         openRequestKey={echoJobQueryId || undefined}
         onSave={dailyEcho?.status === 'draft' ? handleSaveDailyEcho : undefined}
-        onRegenerate={existingJournal ? handleRegenerateDailyEcho : undefined}
+        onRegenerate={existingJournal && dailyEcho?.status !== 'failed' ? handleRegenerateDailyEcho : undefined}
         onDismiss={existingJournal ? handleDismissDailyEcho : undefined}
         onContinueChat={dailyEcho?.content ? handleContinueDailyEchoChat : undefined}
         onSaveImage={dailyEcho && (dailyEcho.status === 'draft' || dailyEcho.status === 'saved') ? handleSaveDailyEchoImage : undefined}

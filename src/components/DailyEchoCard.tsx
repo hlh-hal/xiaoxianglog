@@ -139,7 +139,7 @@ function DailyEchoPanel({
               {isSavingImage ? '保存中' : '保存图片'}
             </button>
           )}
-          {onRegenerate && (
+          {onRegenerate && !isFailed && (
             <button
               type="button"
               onClick={onRegenerate}

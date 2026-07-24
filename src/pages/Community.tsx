@@ -222,7 +222,7 @@ export default function Community() {
                 </header>
 
                 <div className="cursor-pointer active:opacity-70 transition-opacity" onClick={() => { sessionStorage.setItem('last_viewed_community_post', post.id); navigate(`/post/${post.id}`); }}>
-                  <p className="text-on-surface leading-relaxed text-[15px] font-light whitespace-pre-wrap line-clamp-5 break-words">
+                  <p className="text-on-surface leading-relaxed text-[15px] font-light whitespace-pre-wrap line-clamp-7 break-words">
                     {stripAllMarkdown(post.content || '').replace(/\n{3,}/g, '\n\n').trim()}
                   </p>
                 </div>

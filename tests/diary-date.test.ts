@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  compareDiaryEntryDesc,
   createAdjustedDiaryDateKey,
   getDiaryDateKey,
   parseDiaryDateKey,
@@ -41,4 +42,20 @@ test('date-only diary keys parse as local calendar days', () => {
 test('legacy ISO diary dates normalize by their stored calendar key', () => {
   assert.equal(getDiaryDateKey('2026-06-04T16:57:00.000Z'), '2026-06-04');
   assert.equal(toDiaryDateKey(parseDiaryDateKey('2026-06-04T16:57:00.000Z')), '2026-06-04');
+});
+
+test('same-day entries sort by creation time newest-first', () => {
+  const earlier = {
+    id: 'earlier',
+    diaryDate: '2026-07-23',
+    createdAt: '2026-07-23T08:00:00.000Z',
+  };
+  const later = {
+    id: 'later',
+    diaryDate: '2026-07-23',
+    createdAt: '2026-07-23T09:00:00.000Z',
+  };
+
+  assert.ok(compareDiaryEntryDesc(later, earlier) < 0);
+  assert.ok(compareDiaryEntryDesc(earlier, later) > 0);
 });

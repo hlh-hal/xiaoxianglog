@@ -7,7 +7,9 @@ import { diaryService, DiaryEntry } from '../services/diaryService';
 import { stripMarkdown, extractRecentDiaryKeywords, getKeywordSourceText } from '../utils/textUtils';
 import { api } from '../services/apiClient';
 import { UserAvatar } from '../components/UserAvatar';
+import { MoodTrendChart } from '../components/MoodTrendChart';
 import { getDiaryDateKey, parseDiaryDateKey } from '../utils/diaryDate';
+import type { MoodTrendDay } from '../utils/moodTrend';
 
 type ProfileStats = {
   totalEntries: number;
@@ -37,6 +39,8 @@ const emptyStats: ProfileStats = {
 
 let cachedEntries: DiaryEntry[] = [];
 let cachedStats: ProfileStats = emptyStats;
+const PROFILE_MOOD_SCROLL_KEY = 'profile_mood_scroll_top';
+const PROFILE_MOOD_DATE_KEY = 'profile_mood_selected_date';
 
 const getDiaryDayKey = (diaryDate: string) => {
   return getDiaryDateKey(diaryDate) || null;
@@ -44,6 +48,9 @@ const getDiaryDayKey = (diaryDate: string) => {
 
 export default function Profile() {
   const navigate = useNavigate();
+  const profileScrollRef = React.useRef<HTMLDivElement>(null);
+  const pendingScrollRestoreRef = React.useRef<number | null | undefined>(undefined);
+  const [restoredMoodDate] = useState(() => sessionStorage.getItem(PROFILE_MOOD_DATE_KEY) || undefined);
   const { user, loading } = useAuth();
   const { isDark } = useTheme();
   const [entries, setEntries] = useState<DiaryEntry[]>(cachedEntries);
@@ -55,6 +62,35 @@ export default function Profile() {
     x: number;
     y: number;
   } | null>(null);
+
+  if (pendingScrollRestoreRef.current === undefined) {
+    const savedValue = sessionStorage.getItem(PROFILE_MOOD_SCROLL_KEY);
+    const savedScrollTop = savedValue === null ? Number.NaN : Number(savedValue);
+    pendingScrollRestoreRef.current = Number.isFinite(savedScrollTop) && savedScrollTop >= 0 ? savedScrollTop : null;
+  }
+
+  React.useLayoutEffect(() => {
+    const scrollTop = pendingScrollRestoreRef.current;
+    const scrollElement = profileScrollRef.current;
+    if (scrollTop === null || scrollTop === undefined || !scrollElement) return;
+    if (scrollTop > 0 && entries.length === 0) return;
+
+    const restore = () => {
+      if (profileScrollRef.current) profileScrollRef.current.scrollTop = scrollTop;
+    };
+    restore();
+    const frame = requestAnimationFrame(restore);
+    const settleTimer = window.setTimeout(() => {
+      restore();
+      pendingScrollRestoreRef.current = null;
+      sessionStorage.removeItem(PROFILE_MOOD_SCROLL_KEY);
+      sessionStorage.removeItem(PROFILE_MOOD_DATE_KEY);
+    }, 350);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+    };
+  }, [entries.length]);
 
   useEffect(() => {
     const loadUnreadCount = async () => {
@@ -189,76 +225,6 @@ export default function Profile() {
     return counts;
   }, [entries]);
 
-  const moodTrend = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    const last7Days = Array.from({ length: 7 }).map((_, i) => {
-      const d = new Date(today);
-      d.setDate(d.getDate() - (6 - i));
-      return d;
-    });
-
-    const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-    const labels = last7Days.map(d => dayNames[d.getDay()]);
-
-    const points: {x: number, y: number, hasData: boolean}[] = [];
-    let lastValidY = 50;
-
-    last7Days.forEach((date, i) => {
-      const dayEntries = entries.filter(e => {
-        const ed = parseDiaryDateKey(e.diaryDate);
-        return ed.getDate() === date.getDate() && ed.getMonth() === date.getMonth() && ed.getFullYear() === date.getFullYear();
-      });
-
-      let y = 50;
-      let hasData = false;
-
-      if (dayEntries.length > 0) {
-        hasData = true;
-        const text = dayEntries.map(e => e.content + (e.blocks ? e.blocks.map((b: any) => b.content).join('') : '')).join('');
-        const positiveWords = ['开心', '快乐', '喜悦', '感谢', '宁静', '美好', '希望', '充实', '阳光', '好'];
-        const negativeWords = ['难过', '悲伤', '焦虑', '烦躁', '疲惫', '迷茫', '压力', '低落', '差', '累', '烦'];
-
-        let posCount = 0;
-        let negCount = 0;
-
-        positiveWords.forEach(w => { if (text.includes(w)) posCount++; });
-        negativeWords.forEach(w => { if (text.includes(w)) negCount++; });
-
-        if (posCount > negCount) y = 20; // Joy
-        else if (negCount > posCount) y = 80; // Thoughtful
-        else y = 50; // Calm
-        
-        lastValidY = y;
-      } else {
-        y = lastValidY;
-      }
-
-      const seed = date.getDate();
-      const variation = hasData ? ((seed % 10) - 5) : 0; 
-      
-      points.push({
-        x: i * (100 / 6),
-        y: Math.max(10, Math.min(90, y + variation)),
-        hasData
-      });
-    });
-
-    let pathD = `M ${points[0].x} ${points[0].y}`;
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1];
-      const curr = points[i];
-      const cp1x = prev.x + (curr.x - prev.x) / 2;
-      const cp1y = prev.y;
-      const cp2x = prev.x + (curr.x - prev.x) / 2;
-      const cp2y = curr.y;
-      pathD += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${curr.x} ${curr.y}`;
-    }
-
-    return { labels, points, pathD };
-  }, [entries]);
-
   const formattedWords = stats.totalWords >= 1000
     ? `${(stats.totalWords / 1000).toFixed(1)}k`
     : String(stats.totalWords);
@@ -268,8 +234,25 @@ export default function Profile() {
     ? 'min-h-[76px] justify-center gap-x-7 gap-y-3 px-6 py-5'
     : 'min-h-[108px] content-center justify-center gap-x-4 gap-y-4 px-6 py-5';
 
+  const handleOpenMoodEntries = (day: MoodTrendDay) => {
+    sessionStorage.setItem(
+      PROFILE_MOOD_SCROLL_KEY,
+      String(profileScrollRef.current?.scrollTop || 0),
+    );
+    sessionStorage.setItem(PROFILE_MOOD_DATE_KEY, day.date);
+
+    if (day.entryIds.length === 1) {
+      navigate(`/editor?id=${encodeURIComponent(day.entryIds[0])}`);
+      return;
+    }
+
+    if (day.entryIds.length > 1) {
+      navigate(`/?date=${encodeURIComponent(day.date)}`);
+    }
+  };
+
   return (
-    <div className="app-page-scroll app-reading-container min-h-0 h-full flex-1 overflow-y-auto bg-surface text-on-surface pb-[calc(7rem+var(--app-safe-bottom))] pt-[calc(var(--app-total-header-height)+16px)]">
+    <div ref={profileScrollRef} className="app-page-scroll app-reading-container min-h-0 h-full flex-1 overflow-y-auto bg-surface text-on-surface pb-[calc(7rem+var(--app-safe-bottom))] pt-[calc(var(--app-total-header-height)+16px)]">
       <header className="app-main-fixed-header app-safe-header fixed top-0 z-50 bg-surface/80 backdrop-blur-xl">
         <div className="app-reading-container flex justify-between items-center h-[var(--app-header-height)]">
           <button className="relative" onClick={() => navigate('/inbox')}>
@@ -346,46 +329,11 @@ export default function Profile() {
             </div>
             <span className="text-[10px] uppercase tracking-widest font-bold text-outline">最近 7 天</span>
           </div>
-          <div className="bg-surface-container-lowest shadow-[0_4px_20px_-2px_rgba(0,0,0,0.04)] p-6 rounded-2xl relative">
-            <div className="aspect-[16/9] w-full relative px-2">
-              <div className="absolute inset-0 flex flex-col pt-2 pb-8">
-                <div className="flex-1 relative">
-                  <span className="absolute right-2 top-2 text-[9px] text-outline/40 font-bold">喜悦</span>
-                  <div className="absolute bottom-0 w-full border-t border-dashed border-black/5"></div>
-                </div>
-                <div className="flex-1 relative">
-                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-outline/40 font-bold">平静</span>
-                  <div className="absolute bottom-0 w-full border-t border-dashed border-black/5"></div>
-                </div>
-                <div className="flex-1 relative">
-                  <span className="absolute right-2 bottom-2 text-[9px] text-outline/40 font-bold">思索</span>
-                </div>
-              </div>
-              <div className="absolute inset-0 pt-2 pb-8">
-                <svg className="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
-                  <path d={moodTrend.pathD} fill="none" stroke="#446733" strokeWidth="2" vectorEffect="non-scaling-stroke" />
-                  {moodTrend.points.map((p, i) => (
-                    <circle 
-                      key={i} 
-                      cx={p.x} 
-                      cy={p.y} 
-                      r={p.hasData ? "2.5" : "1.5"} 
-                      fill="#446733" 
-                      stroke={p.hasData ? "white" : "none"} 
-                      strokeWidth={p.hasData ? "1.5" : "0"} 
-                      vectorEffect="non-scaling-stroke" 
-                      className={p.hasData ? "opacity-100" : "opacity-40"}
-                    />
-                  ))}
-                </svg>
-              </div>
-            </div>
-            <div className="flex justify-between mt-2 px-2 text-[10px] text-outline font-medium">
-              {moodTrend.labels.map((label, i) => (
-                <span key={i}>{label}</span>
-              ))}
-            </div>
-          </div>
+          <MoodTrendChart
+            entries={entries}
+            initialSelectedDate={restoredMoodDate}
+            onOpenEntries={handleOpenMoodEntries}
+          />
         </section>
 
         <section className="space-y-4">
@@ -446,7 +394,7 @@ export default function Profile() {
                           e.stopPropagation();
                         }}
                         onTouchEnd={() => {
-                          setTimeout(() => setActiveBar(null), 1500); // 触摸后1.5秒消失
+                          setTimeout(() => setActiveBar(null), 4000); // 触摸后4秒消失
                         }}
                       ></div>
                     );

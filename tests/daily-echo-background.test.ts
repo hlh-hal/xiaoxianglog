@@ -178,16 +178,27 @@ test('successful completion creates the station notification only after the lock
   assert.match(backendServiceSource, /id: job\.id,[\s\S]*type: 'daily_echo_ready'/);
 });
 
-test('streaming previews stay transient and only a current succeeded result is persisted', () => {
-  assert.match(
-    editorSource,
-    /const nextPreview = job\.previewContent \|\| '';[\s\S]*setDailyEchoStreamingContent\(nextPreview\);[\s\S]*if \(active\) \{[\s\S]*return;/,
-  );
+test('unvalidated provider output never reaches snapshots and only a current succeeded result is replayed', () => {
+  assert.doesNotMatch(backendServiceSource, /previewContent:\s*accumulated/);
+  assert.doesNotMatch(backendServiceSource, /previewContent:\s*completion\.content/);
+  assert.match(backendServiceSource, /status: 'succeeded',[\s\S]*previewContent: content,[\s\S]*finalContent: content/);
+  assert.doesNotMatch(editorSource, /job\.previewContent/);
+  assert.match(editorSource, /setDailyEchoStreamingContent\(''\);[\s\S]*setIsEchoGenerating\(true\);[\s\S]*setIsDailyEchoRetrying\(job\.phase === 'retrying'\)/);
   assert.match(editorSource, /if \(job\.status !== 'succeeded' \|\| !content\) \{/);
   assert.match(
     editorSource,
     /const sourceStillCurrent = currentSourceHash === job\.sourceHash[\s\S]*if \(!sourceStillCurrent\) \{[\s\S]*return;/,
   );
   assert.match(editorSource, /await persistDailyEcho\(nextEcho\)/);
+  assert.match(editorSource, /revealValidatedDailyEcho\(nextEcho\.content\)/);
+  assert.match(editorSource, /DAILY_ECHO_REVEAL_INTERVAL_MS = 35/);
+  assert.match(editorSource, /DAILY_ECHO_REVEAL_CHARS_PER_TICK = 2/);
+  assert.match(editorSource, /prefers-reduced-motion: reduce/);
   assert.doesNotMatch(editorSource, /entry\.updatedAt === job\.sourceEntryUpdatedAt/);
+});
+
+test('enqueue recovery is bounded and failed cards never ask the user to regenerate', () => {
+  assert.match(editorSource, /DAILY_ECHO_ENQUEUE_RETRY_DELAYS_MS = \[2000, 5000\]/);
+  assert.match(editorSource, /getLatestDailyEchoJob\(entry\.id\)[\s\S]*recovered\.sourceHash === currentSourceHash/);
+  assert.match(editorSource, /dailyEcho\?\.status !== 'failed' \? handleRegenerateDailyEcho : undefined/);
 });

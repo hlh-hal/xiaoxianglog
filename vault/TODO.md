@@ -1,5 +1,6 @@
 # TODO
 
+- [ ] 2026-07-21 Android `1.0.27 / code 29` 已发布并通过公网 APK 校验。后端上传受 FTP 断连影响：仅剩 `C:\wwwroot\xiaoxiang-server\dist\lib\monthlyEchoV2.js` 未确认上传。先补传该文件，再在宝塔重启 Node 并确认 `/api/health` PID 变化；之后用真实登录账号重新生成七月月报，验证 `daily_trace_v2_4 / monthly_arc_v2_10 / monthly_echo_render_v2_11`。
 - [ ] 2026-07-18 月度回声 UI 已发布 Android `1.0.23 / code 25`：待用真实登录用户验证新回声信长文、行动轨迹回填/空状态和七页翻页；本次只发 UI，若需要行动识别白名单和按证据回填上线，需单独部署后端月度回声模块后再验收。
 - [ ] 2026-07-12 本地真实月报验收待 CPAMC：启动 `127.0.0.1:8317/v1` 并确认 `/models` 可访问后，用本地 `2026-06`（28 篇日志）触发 V2 生成，轮询到 ready，再核验所有日期、证据原句和昵称均来自真实数据。
 

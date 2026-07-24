@@ -5,6 +5,8 @@ import { downloadTextFile } from './exportFile';
 import { inferDateWithAI, parseWholeMarkdownWithAI } from './inferDateWithAI';
 import { localVaultService } from '../services/localVaultService';
 import { compareDiaryDateDesc, parseDiaryDateKey, toDiaryDateKey } from './diaryDate';
+import { filterDiariesByDateRange } from './exportDateRange';
+import type { DiaryExportDateRange } from './exportDateRange';
 
 export interface ParsedEntry {
   title: string;
@@ -16,8 +18,11 @@ export interface ParsedEntry {
   skip?: boolean;
 }
 
-export const exportDiariesToMarkdown = async (): Promise<number> => {
-  const entries = await diaryService.getActiveEntries();
+export const exportDiariesToMarkdown = async (
+  range: DiaryExportDateRange = { type: 'all' },
+): Promise<number> => {
+  const allEntries = await diaryService.getActiveEntries();
+  const entries = filterDiariesByDateRange(allEntries, range);
   if (entries.length === 0) {
     return 0;
   }

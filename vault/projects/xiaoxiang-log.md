@@ -411,3 +411,70 @@
 
 - 已发布 `1.0.24 / versionCode 26`：重复事件归纳、反复主题时间轴和自适应结论、关键时刻长摘要、封面清晰度与行动页箭头纹理修复；微信登录和后端 v2.5 生成链路未随此版本发布。
 - 主下载 APK 和线上更新公告已反向验证通过。FTP 对约 47MB 文件会在约 95 秒重置；可先上传得到部分文件，再在 FTP 连接冷却后使用断点续传补齐。当前备用服务器目录仍未更新，主 Nginx 下载路径可用。
+
+## 2026-07-21 Android v1.0.27 用户端发布
+
+- 已发布 `1.0.27 / versionCode 29`，主 APK 与更新公告公网验证通过。内容包括每日回声验收后展示、心情趋势当天回顾、日期范围导出和月度回声排版/历史兼容修复。
+- FTP 不稳定导致前后端只能分批上传；前端关键产物已上线。线上后端尚缺 `dist/lib/monthlyEchoV2.js` 的可靠上传确认，因此暂缓 Node 重启；补传成功后才能让月度生成 v2.10 完整接管。
+
+## 2026-07-19 月度回声第二页职责拆分
+
+- 根因确认：第二页概览和第六页反复主题此前都消费 `recurringPattern`，同时展示反复问题、出现日期和演变问题，属于信息架构重复，不是单纯视觉相似。
+- 第二页现改为独立的“情绪轨迹”职责，只展示此前已生成但未渲染的 `emotionArc`，并补充日记、关键时刻和真实行动数量；第六页继续独占反复问题时间轴和转折日期。旧 overview 字段仍随 schema v2 返回以兼容现有客户端，但不再参与第二页渲染。
+- render 版本升级为 `monthly_echo_render_v2_6`，旧报告按现有版本机制重新编译；未修改月度聚合 prompt、数据库结构或第六页数据链路。选择保留七页而不是删除第二页，以维持现有阅读节奏和翻页契约。
+- 验证通过：`npm run test:monthly-echo`（31 项）、`npm run lint`、根目录 `npm run build`、`server npm run build`；390×844 浏览器截图为 `tmp/monthly-echo-runtime/overview-emotion-v26-final-390x844.png` 和 `recurring-v26-390x844.png`。本次未发布 APK、未部署线上。
+
+## 2026-07-19 月度回声「本月情绪浮现」
+
+- 第二页由单句 `emotionArc` 再次升级为证据情绪集合：只展示日志原句明确支持的 `0–5` 个情绪，每项包含情绪名、服务端解析日期、代表性原句、克制 meaning 和 evidenceIds；同一证据、近义情绪、事件标签和无效 ID 会被过滤。
+- DailyTrace 明确禁止从加班、旅行、沟通、完成任务等事件推断情绪；月度 prompt 不再要求月初/月中/月末，也禁止默认紧绷、拉扯、松动、改善或治愈。版本为 `daily_trace_v2_2`、`monthly_arc_v2_6`、`monthly_echo_render_v2_7`，旧 JSON 字段继续兼容，无数据库迁移。
+- 参考稿与 AI 编辑后的无字底板分别为 `public/monthly-echo/monthly-echo-emotions-reference.png`、`monthly-echo-emotions-textless-v1.png`；透明撕边纸片为 `monthly-echo-emotion-card-paper.png`。固定底板保留纸纹、圆环、金色纸条、花枝、胶带和底部白纸，动态 HTML 根据 0–5 条数据切换空状态、单卡、双卡、2×2 与五卡布局。
+- 视觉预览支持 `/monthly-echo-v2-design-demo?page=2&emotionCount=0..5`。390×844 六种状态截图位于 `tmp/monthly-echo-runtime/emotions-v27-final/`，卡片内容区均满足 `clientHeight=scrollHeight`；验证通过 `npm run test:monthly-echo`（34 项）、前后端 build，未发布 APK、未部署线上。
+
+## 2026-07-19 月度情绪关联真实日志事件
+
+- 情绪卡第二行不再只显示抽象 meaning：服务端会按情绪证据所属的同一篇日志，确定性关联已校验的 `importantEvents`、行动、冲突、关系或小变化，返回 `event/eventEvidence/eventEvidenceIds`；页面优先显示“当时：具体事件”，找不到有效事件才保留 meaning，不跨日拼接、不补写。
+- DailyTrace 对“同一原句同时包含事件和明确感受”的情况，同时输出 `importantEvents` 与 `emotionTone` 并共用原句证据；月度聚合在 AI 漏掉 emotions 时，会从明确的 DailyTrace 情绪声明确定性补齐，并把单字“乱”规范为“混乱”。
+- 版本升级为 `daily_trace_v2_3`、`monthly_arc_v2_9`、`monthly_echo_render_v2_10`，旧报告按现有版本机制重建，无数据库迁移、无新增 AI 请求类型。
+- 本地 2026-07 的 11 篇真实日志已完整重建到 ready；最终严格保留 1 个情绪与 1 个同篇真实事件证据。Pixel 8 模拟器通过正式 `/monthly-echo?monthKey=2026-07` 验收，单卡无溢出、无横向滚动，正常短滑每次只前进一页。截图：`tmp/monthly-echo-real-test/android-device-real-event.png`。未发布 APK、未部署线上。
+
+## 2026-07-20 行动轨迹长标题布局
+
+- 第四条行动标题超过 18 个字符时，场景短语仍显示在标题下方；第五条日期、标题与叶子节点整体下移，左侧绿色时间线随内容延长。短标题布局、其它节点和页面总结保持不变。
+- 旧叶子节点由同源纸纹柔边遮罩清除，下移节点继续复用原图素材，避免安卓高 DPR 下出现遮罩接缝。
+- 绿色延长线最终采用从心形节点下沿到叶子节点内部的单段连续覆盖，消除原图线段与补绘线在遮罩边缘出现的细小断口。
+- 390×844 与 Pixel 8 安卓模拟器（Chrome 视口 `412×784 / DPR 2.625`）验证无重叠和横向溢出；场景短语到下一日期约 `8.87px`，第五条标题到总结卡约 `50.78px`。专项测试 37 项通过。截图：`tmp/monthly-echo-runtime/actions-long-title/actions-extended-android-verified-device.png`。未发布 APK、未部署线上。
+
+## 2026-07-20 Android v1.0.25 发布
+
+- `1.0.25 / versionCode 27` 已发布到自有服务器；更新公告聚焦“本月情绪浮现”、同篇日志事件证据和行动轨迹长标题/连续时间线。
+- 公网 APK 与本地正式签名包 SHA256 一致，包名 `com.xiaoxiang.diary`，v2/v3 签名通过，证书 MD5 为既定正式指纹；公网 manifest 为 code 27 且使用自有下载地址。GitHub 镜像按默认策略未同步。
+- 线上前端入口为 `assets/index-CN7k6y1U.js`，远端与本地 SHA256 一致。月度回声 3 个服务端源码及 12 个编译文件已最小上传，线上 `.env` 未覆盖。
+- `deploy-upload.ps1` 新增 `back-runtime`（完整 dist/src、保留 `.env`）和 `monthly-echo-runtime`（仅月度回声模块）安全目标，避免发布后端时误覆盖线上环境变量。
+- 待办：线上 Node 进程仍为 `pid 11388`，FTP 不会触发重载；需要在宝塔重启 `C:\wwwroot\xiaoxiang-server` 后再验证新 prompt/render 版本实际接管。
+
+## 2026-07-20 Android v1.0.26 月度回声兼容热修复
+
+- 真机安装 `1.0.25` 后打开历史月报会在第二页执行 `page.emotions.slice()` 时崩溃；根因是旧 report schema 没有新增的 `overview.emotions` 字段。
+- 前端新增 `normalizeOverviewEmotions()`：字段不存在、为 null 或类型错误时确定性返回空数组，第二页进入既有温和空状态；情绪条目 key 对缺失 `evidenceIds` 也做兼容。专项测试新增旧报告用例，共 38 项通过。
+- 已发布 `1.0.26 / versionCode 28`。公网 APK SHA256 为 `9F4D7CBF641942F9ECE4870FB199DDE82D1AEEFB3082C279C2B0F74CDD08131E`，包名、签名、版本与 manifest 硬校验通过。前端 FTP 因连接冷却首次失败，第二次 43/43 成功但耗时约 425 秒；APK 上传约 85 秒。GitHub 镜像未同步。
+
+## 2026-07-20 月度真实证据回填修复
+
+- 真机截图显示第二页情绪为空、第五页只有一条行动。线上健康接口仍为旧 Node `pid 11388`，是旧报告没有按新 prompt/render 版本重建的首要原因。
+- 本地真实七月链路确认：DailyTrace 已持有“有些乱、紧张、期待”等原句及清理、散步、求助、拒绝等多条行为，但模型有时把本人行动只归入 `importantEvents`，并漏掉证据原句里的明确情绪；月度 fallback 原先只消费 `trace.actions`。
+- `normalizeDailyTraceV2` 现在从已经过连续原句校验的 evidenceQuotes 中确定性恢复明确情绪，将“有些乱”规范成“混乱”，并把 importantEvents 中用户本人完成的可观察行为补入 actions；朋友/同事等第三方行为会被排除，不从普通事件推断情绪。
+- 版本升级为 `daily_trace_v2_4 / monthly_arc_v2_10 / monthly_echo_render_v2_11`，促使旧 trace、arc 和 report 重建。专项测试 41 项、lint、server build 通过；15 个目标服务端文件已上传且未覆盖线上 `.env`。待宝塔重启后做真实账号验收。
+
+## 2026-07-21 recurring lead 占位符修复（待发布）
+
+- 真机截图发现第六页显示字面量“当你……时”，根因是模型输出占位句式后服务端只校验 evidenceIds，没有校验 lead 文本。
+- 本地修复：`normalizeRecurringLead()` 拒绝 `……`、`...`、某件事等占位内容，改从第一条已校验 occurrence 的真实场景重建条件；Prompt 同步禁止占位 lead。
+- 版本升级为 `monthly_arc_v2_11 / monthly_echo_render_v2_12`；42 项月度专项测试、lint、server build 通过。用户明确暂不推送到用户端，当前仅保留本地改动。
+
+## 2026-07-24 官网白屏与原子发布修复
+
+- 官网白屏根因为线上 `assets/index-B_vqF2v_.js` 被 FTP 截断到 `2,354,070` 字节，第 2898 行停在半截字符串；用户数据和 API 未丢失，Android 因使用 APK 内置资源未受影响。
+- `deploy-upload.ps1` 已升级为带门禁的两阶段发布：所有文件上传后校验 FTP SIZE；主 JS/CSS 在入口切换前经公网下载校验字节数与 SHA256，JS 再执行 `node --check`；`index.html` / `sw.js` 使用临时文件、rollback 备份和 FTP rename 切换，失败自动恢复。
+- 当前 FTP 不允许 RNTO 直接覆盖已有文件，会返回 553；原子切换必须先把旧文件改名为备份。新增 `front-activate`，用于 payload 已验证但入口激活失败后的安全重试。
+- 线上现已引用 `assets/index-BFHyofyt.js`，大小 `2,368,928`，SHA256 `7A39CB21445089EAB397025913378C5B5754CE37A77E1DED699C829B2A934D24`。全新无缓存 Edge/Puppeteer 验证 HTTP 200、React 挂载、正文正常且控制台/page error 为 0。详细记录见 `vault/notes/daily/2026-07-24.md`。

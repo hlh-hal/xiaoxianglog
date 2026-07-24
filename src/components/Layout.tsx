@@ -19,7 +19,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { UserAvatar } from './UserAvatar';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 import { AppToast } from './AppToast';
-import { parseDiaryDateKey } from '../utils/diaryDate';
+import { getDiaryDateKey, parseDiaryDateKey } from '../utils/diaryDate';
 import { currentVersion, latestRelease as bundledRelease, type AppRelease } from '../config/appRelease';
 import {
   downloadAndInstallApkUpdate,
@@ -61,6 +61,15 @@ export default function Layout() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [journalDates, setJournalDates] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (location.pathname !== '/') return;
+
+    const dateKey = getDiaryDateKey(new URLSearchParams(location.search).get('date'));
+    if (dateKey) {
+      setSelectedDate(parseDiaryDateKey(dateKey));
+    }
+  }, [location.pathname, location.search]);
 
   // Menu and List Style State
   const [isMenuOpen, setIsMenuOpen] = useState(false);

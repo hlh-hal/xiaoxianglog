@@ -259,12 +259,14 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
       return;
     }
 
-    if (!isLongPressRef.current) {
-      if (isMultiSelectMode) {
-        toggleSelection(journal.id);
-      } else {
-        handleNavigate(`/editor?id=${journal.id}`);
-      }
+    if (!isLongPressRef.current && !isMultiSelectMode) {
+      handleNavigate(`/editor?id=${journal.id}`);
+    }
+  };
+
+  const handleJournalClick = (journal: DiaryEntry) => {
+    if (isMultiSelectMode) {
+      toggleSelection(journal.id);
     }
   };
 
@@ -403,6 +405,7 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
           handlePointerDown={handlePointerDown} 
           handlePointerMove={handlePointerMove} 
           handlePointerUp={handlePointerUp} 
+          handleClick={handleJournalClick}
         />
       )}
       {listStyle === 'card_flow' && (
@@ -413,6 +416,7 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
           handlePointerDown={handlePointerDown} 
           handlePointerMove={handlePointerMove} 
           handlePointerUp={handlePointerUp} 
+          handleClick={handleJournalClick}
         />
       )}
       {listStyle === 'briefing' && (
@@ -423,6 +427,7 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
           handlePointerDown={handlePointerDown} 
           handlePointerMove={handlePointerMove} 
           handlePointerUp={handlePointerUp} 
+          handleClick={handleJournalClick}
         />
       )}
       {listStyle === 'magazine' && (
@@ -433,6 +438,7 @@ export function HomeView({ context, isBackdrop = false }: HomeViewProps) {
           handlePointerDown={handlePointerDown} 
           handlePointerMove={handlePointerMove} 
           handlePointerUp={handlePointerUp} 
+          handleClick={handleJournalClick}
         />
       )}
 

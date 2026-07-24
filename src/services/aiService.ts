@@ -2212,7 +2212,9 @@ export async function generateDiaryEcho(
   let rejectedReason = '';
   let lastRequestError: unknown;
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  // Match the durable server job: one four-attempt round plus two automatic
+  // recovery rounds. Only a validated result ever leaves this function.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
     const promptMemoryPack = buildPromptMemoryPack(diaryText, hotMemory);
     const promptSet = buildDailyEchoPromptSet('baseline', {
       diaryText,

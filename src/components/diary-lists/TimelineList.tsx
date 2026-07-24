@@ -19,9 +19,10 @@ interface ListProps {
   handlePointerDown: (e: React.PointerEvent | React.TouchEvent, journal: DiaryEntry) => void;
   handlePointerMove: (e: React.PointerEvent | React.TouchEvent) => void;
   handlePointerUp: (journal: DiaryEntry) => void;
+  handleClick: (journal: DiaryEntry) => void;
 }
 
-export function TimelineList({ journals, isMultiSelectMode, selectedJournals, handlePointerDown, handlePointerMove, handlePointerUp }: ListProps) {
+export function TimelineList({ journals, isMultiSelectMode, selectedJournals, handlePointerDown, handlePointerMove, handlePointerUp, handleClick }: ListProps) {
   return (
     <div className="home-timeline-list relative -ml-5 md:ml-0">
       {/* Vertical Line */}
@@ -36,6 +37,7 @@ export function TimelineList({ journals, isMultiSelectMode, selectedJournals, ha
           onPointerDown={(e) => handlePointerDown(e, journal)}
           onPointerMove={handlePointerMove}
           onPointerUp={() => handlePointerUp(journal)}
+          onClick={() => handleClick(journal)}
           onPointerCancel={handlePointerMove}
           onContextMenu={(e) => e.preventDefault()}
         >

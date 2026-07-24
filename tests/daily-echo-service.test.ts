@@ -9,6 +9,9 @@ import {
 import {
   buildDailyEchoDiaryExcerpt,
   computeDailyEchoSourceHash,
+  DAILY_ECHO_ATTEMPTS_PER_ROUND,
+  DAILY_ECHO_AUTO_RETRY_ROUNDS,
+  DAILY_ECHO_MAX_ATTEMPTS,
   DAILY_ECHO_MAX_DIARY_CHARS,
 } from '../server/src/lib/dailyEchoCore';
 
@@ -91,4 +94,13 @@ test('classifies durable job states for watcher lifecycle', () => {
   assert.equal(isDailyEchoJobTerminal(snapshot('failed')), true);
   assert.equal(isDailyEchoJobTerminal(snapshot('stale')), true);
   assert.equal(isDailyEchoJobTerminal(snapshot('running')), false);
+});
+
+test('runs one generation round plus two automatic recovery rounds', () => {
+  assert.equal(DAILY_ECHO_ATTEMPTS_PER_ROUND, 4);
+  assert.equal(DAILY_ECHO_AUTO_RETRY_ROUNDS, 2);
+  assert.equal(DAILY_ECHO_MAX_ATTEMPTS, 12);
+  assert.ok(5 <= DAILY_ECHO_MAX_ATTEMPTS, 'attempt 5 must be reachable');
+  assert.ok(9 <= DAILY_ECHO_MAX_ATTEMPTS, 'attempt 9 must be reachable');
+  assert.equal(12 < DAILY_ECHO_MAX_ATTEMPTS, false, 'attempt 12 is the terminal boundary');
 });

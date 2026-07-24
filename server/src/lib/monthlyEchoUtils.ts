@@ -4,9 +4,9 @@ import { parseJsonText, stringifyJsonText } from './jsonText.js';
 
 export const DEFAULT_MONTHLY_ECHO_TIMEZONE = 'Asia/Shanghai';
 export const DEFAULT_MONTHLY_ECHO_PUSH_TIME = '20:00';
-export const MONTHLY_TRACE_PROMPT_VERSION = 'daily_trace_v2_1';
-export const MONTHLY_ARC_PROMPT_VERSION = 'monthly_arc_v2_5';
-export const MONTHLY_ECHO_PROMPT_VERSION = 'monthly_echo_render_v2_5';
+export const MONTHLY_TRACE_PROMPT_VERSION = 'daily_trace_v2_4';
+export const MONTHLY_ARC_PROMPT_VERSION = 'monthly_arc_v2_11';
+export const MONTHLY_ECHO_PROMPT_VERSION = 'monthly_echo_render_v2_12';
 export const DEFAULT_MONTHLY_PUSH_TITLE = '你这个月的回声来了';
 export const DEFAULT_MONTHLY_PUSH_BODY = '小象帮你整理好了这个月的生活轨迹。';
 

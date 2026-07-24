@@ -68,6 +68,30 @@ export function compareDiaryDateDesc(a: unknown, b: unknown): number {
   return parseDiaryDateKey(b).getTime() - parseDiaryDateKey(a).getTime();
 }
 
+function parseTimestamp(value: unknown): number {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? 0 : value.getTime();
+  if (typeof value !== 'string' && typeof value !== 'number') return 0;
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+/** Sort diary entries newest-first by calendar day, then by write time within a day. */
+export function compareDiaryEntryDesc(
+  a: { diaryDate: unknown; createdAt?: unknown; updatedAt?: unknown; id?: string },
+  b: { diaryDate: unknown; createdAt?: unknown; updatedAt?: unknown; id?: string },
+): number {
+  const dateComparison = compareDiaryDateDesc(a.diaryDate, b.diaryDate);
+  if (dateComparison !== 0) return dateComparison;
+
+  const createdComparison = parseTimestamp(b.createdAt) - parseTimestamp(a.createdAt);
+  if (createdComparison !== 0) return createdComparison;
+
+  const updatedComparison = parseTimestamp(b.updatedAt) - parseTimestamp(a.updatedAt);
+  if (updatedComparison !== 0) return updatedComparison;
+
+  return (b.id || '').localeCompare(a.id || '');
+}
+
 export function createAdjustedDiaryDateKey(now = new Date(), autoAdjustTime = false): string {
   const diaryDate = new Date(now);
   if (autoAdjustTime && diaryDate.getHours() < 12) {

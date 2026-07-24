@@ -7,7 +7,7 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import { api, isAuthenticated, uploadImages } from './apiClient';
 import { localVaultService, VaultSyncResult } from './localVaultService';
 import { createClientId } from '../utils/id';
-import { compareDiaryDateDesc, getDiaryDateKey } from '../utils/diaryDate';
+import { compareDiaryDateDesc, compareDiaryEntryDesc, getDiaryDateKey } from '../utils/diaryDate';
 import type { AnnualEchoDigest } from '../utils/annualEcho';
 import type {
   ChatSession,
@@ -1307,7 +1307,7 @@ export const diaryService = {
     const result = entries.filter((e: DiaryEntry) => isEntryForCurrentUser(e) && !e.isHidden).sort((a: DiaryEntry, b: DiaryEntry) => {
       if (a.isPinned && !b.isPinned) return -1;
       if (!a.isPinned && b.isPinned) return 1;
-      return compareDiaryDateDesc(a.diaryDate, b.diaryDate);
+      return compareDiaryEntryDesc(a, b);
     });
     // 过滤掉 images 中的空字符串/无效值，防止首页渲染空图片容器
     result.forEach(e => { e.images = filterValidImages(e.images); });

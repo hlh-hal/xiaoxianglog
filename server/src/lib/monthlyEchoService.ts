@@ -345,7 +345,7 @@ JSON 结构：
   "confidence": 0.0
 }
 
-规则：每个结论必须引用 evidenceQuotes 中的原句。情绪不是行动；写下来、停下来、表达、整理、拒绝、尝试、坚持、调整、重新开始、求助等可观察行为才是行动。具体、克制、不诊断、不贴标签、不编造。
+规则：每个结论必须引用 evidenceQuotes 中的原句。emotionTone 只提取正文明确写出的情绪或感受，text 必须是1-8字的情绪名称，例如疲惫、期待、担心、平静、混乱；不能根据加班、旅行、沟通、完成任务等事件自行推断情绪，没有明确情绪就返回空数组。如果同一原句同时写了具体事件和明确感受，要同时写入 importantEvents 与 emotionTone，并让两者引用这条原句；importantEvents 只概括其中可观察的事件，不能把情绪词本身当事件。情绪不是行动；写下来、停下来、表达、整理、拒绝、尝试、坚持、调整、重新开始、求助等可观察行为才是行动。只要 importantEvents 中概括的是用户本人已经做出的可观察行为，也必须同时写入 actions，不能只归类为事件。具体、克制、不诊断、不贴标签、不编造。
 
 日期：${entry.diaryDate}
 输入材料：
@@ -543,7 +543,8 @@ JSON 结构：
   "mainArc": {"text":"本月主线","evidenceIds":["ev_xxx"]},
   "keyMoments": [{"title":"标题","event":"发生了什么","meaning":"为什么重要","evidenceIds":["ev_xxx"]}],
   "actionTrace": [{"action":"真实行动","scene":"场景","meaning":"意义","iconHint":"express|pause|organize|refuse|try|persist|adjust|restart|askHelp|record|exercise|create|accompany|clean|repair|boundary|other","evidenceIds":["ev_xxx"]}],
-  "emotionArc": {"text":"情绪如何流动","evidenceIds":["ev_xxx"]},
+  "emotionPattern": "stable_positive|stable_low|stable_neutral|improving|declining|fluctuating|mixed|unclear",
+  "emotions": [{"emotion":"8字以内的明确情绪","meaning":"这个情绪在本月说明的具体背景，不写成长或教训","evidenceIds":["ev_xxx"]}],
   "recurringPattern": {"lead":"当你……时，你会很快开始问：","question":"反复问题","occurrences":[{"scene":"一次具体出现","evidenceIds":["ev_xxx"]}],"evolvedQuestion":{"text":"后来出现的新问题","evidenceIds":["ev_xxx"]},"conclusion":"克制总结","evidenceIds":["ev_xxx"]},
   "sideThemes": [{"title":"真实支线名称","scene":"具体场景","meaning":"它指向什么","evidenceIds":["ev_xxx"]}],
   "growthDirection": {"text":"本月变化方向","evidenceIds":["ev_xxx"]},
@@ -554,7 +555,9 @@ JSON 结构：
 
 信件要求：letter 在证据充分时严格输出 6 个段落，全文合计 350-430 个汉字。第1段用1-2句话概括本月真实状态；第2-4段分别写一个真实日期事件及用户当时如何回应；第5段承认仍未解决的问题，不强行圆满；第6段收束用户正在从什么状态慢慢走向什么状态。全文必须出现2-3个来自证据节点的日期锚点，格式为“小象记得，MM.DD 那天，……”。每段只引用输入中存在的 evidenceId，不写“你很努力”“你成长了”等空泛判断，不为了凑字重复观点。证据不足时宁可输出更少的真实段落，也不要编造内容。finalInsight 控制在28-52个汉字，写成一句可收藏但克制的洞察。
 
-规则：所有内容必须引用输入中存在的 evidenceId。不要编造日期，日期由系统从证据节点填写。recurringPattern.lead 必须使用“当你……时，你会很快开始问：”句式；evolvedQuestion 必须引用一条能够独立证明新问题出现的证据，转折日期只由该 evidenceId 解析，不能复用最后一次旧问题日期冒充。actionTrace 只写真实行为，不能把情绪当行动。keyMoments 最多3条，actionTrace 4-6条（证据不足可以更少），sideThemes 必须来自真实日志，不固定成工作/关系/自我状态。不诊断、不贴人格标签、不把短期状态写成永久结论。语气温柔、克制、具体。
+情绪规则：emotions 只收录日志原句明确支持的真实情绪，最多5个；不要把事件、行动、关系或结果硬说成情绪，不要用同一证据包装多个近义情绪。meaning 只解释该情绪出现的具体背景，不写建议、教训、性格、成长或“它在提醒你”。系统会从情绪证据所在的同一篇日志中确定性关联 importantEvents，作为卡片里的具体事件；不要在 meaning 中编造或补写事件。不要强凑月初/月中/月末，不要默认紧绷、拉扯、松动、变好、改善、治愈。improving、declining、fluctuating 只有在至少3个不同日期的情绪证据支持时间方向时才能使用；线索不足时使用 unclear 并允许 emotions 为空。
+
+规则：所有内容必须引用输入中存在的 evidenceId。不要编造日期，日期由系统从证据节点填写。recurringPattern.lead 必须使用“当你＋真实具体场景＋时，你会很快开始问：”句式，其中场景必须概括 occurrences 引用的日志证据；禁止直接输出“当你……时”“当你...时”“当你某件事时”等占位文本。evolvedQuestion 必须引用一条能够独立证明新问题出现的证据，转折日期只由该 evidenceId 解析，不能复用最后一次旧问题日期冒充。actionTrace 只写真实行为，不能把情绪当行动。keyMoments 最多3条，actionTrace 4-6条（证据不足可以更少），sideThemes 必须来自真实日志，不固定成工作/关系/自我状态。不诊断、不贴人格标签、不把短期状态写成永久结论。语气温柔、克制、具体。
 
 monthKey：${monthKey}
 entryCount：${entryCount}

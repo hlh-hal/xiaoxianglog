@@ -58,7 +58,6 @@ const DAILY_ECHO_LOCK_RENEW_MS = Math.min(
   getPositiveEnvNumber('DAILY_ECHO_LOCK_RENEW_MS', 30 * 1000),
   Math.max(1000, Math.floor(DAILY_ECHO_LOCK_MS / 2)),
 );
-const DAILY_ECHO_PREVIEW_THROTTLE_MS = getPositiveEnvNumber('DAILY_ECHO_PREVIEW_THROTTLE_MS', 250);
 const DAILY_ECHO_JOB_TIMEOUT_MS = getPositiveEnvNumber('DAILY_ECHO_JOB_TIMEOUT_MS', 180 * 1000);
 const DAILY_ECHO_MAX_WORKERS = Math.max(1, Math.min(8, getPositiveEnvNumber('DAILY_ECHO_MAX_WORKERS', 4)));
 const DAILY_ECHO_READY_CONTENT = '你的「每日回声」已经生成，点击查看。';
@@ -466,8 +465,6 @@ async function runLockedDailyEchoJob(jobId: string): Promise<boolean> {
         modelId: input.modelId,
       });
 
-      let lastPreviewPersistedAt = 0;
-      let lastPreviewContent = '';
       const attemptStartedAt = Date.now();
       let firstChunkLogged = false;
       let completion: Awaited<ReturnType<typeof streamAiText>>;
@@ -482,27 +479,15 @@ async function runLockedDailyEchoJob(jobId: string): Promise<boolean> {
             { role: 'system', content: promptSet.systemPrompt },
             { role: 'user', content: promptSet.userPrompt },
           ],
-           onDelta: async (_delta, accumulated) => {
-             if (!ownsLock) throw new Error('Daily echo job lock was lost');
-             const now = Date.now();
-             if (!firstChunkLogged) {
-               firstChunkLogged = true;
-               console.log(
-                 `[daily-echo] event=first-chunk job=${job.id} attempt=${currentAttemptCount} firstChunkMs=${now - attemptStartedAt}`,
-               );
-             }
-             if (now - lastPreviewPersistedAt < DAILY_ECHO_PREVIEW_THROTTLE_MS) return;
-            if (accumulated === lastPreviewContent) return;
-            const persisted = await updateOwnedJob(job.id, token, {
-              previewContent: accumulated,
-              lockedUntil: new Date(now + DAILY_ECHO_LOCK_MS),
-            });
-            if (!persisted) {
-              ownsLock = false;
-              throw new Error('Daily echo job became stale');
+          onDelta: async () => {
+            if (!ownsLock) throw new Error('Daily echo job lock was lost');
+            const now = Date.now();
+            if (!firstChunkLogged) {
+              firstChunkLogged = true;
+              console.log(
+                  `[daily-echo] event=first-chunk job=${job.id} attempt=${currentAttemptCount} firstChunkMs=${now - attemptStartedAt}`,
+              );
             }
-            lastPreviewPersistedAt = now;
-            lastPreviewContent = accumulated;
           },
         });
       } catch (error) {
@@ -521,15 +506,6 @@ async function runLockedDailyEchoJob(jobId: string): Promise<boolean> {
         });
         if (currentAttemptCount < DAILY_ECHO_MAX_ATTEMPTS) await waitBeforeRetry(currentAttemptCount);
         continue;
-      }
-
-      if (completion.content !== lastPreviewContent) {
-        const persisted = await updateOwnedJob(job.id, token, {
-          previewContent: completion.content,
-          model: completion.aiModel,
-          provider: completion.provider,
-        });
-        if (!persisted) return true;
       }
 
       const validation = validateDailyEchoContent(completion.content, input.diaryText, completion.finishReason);

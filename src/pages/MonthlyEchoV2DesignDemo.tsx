@@ -9,7 +9,23 @@ function getScale() {
 
 export default function MonthlyEchoV2DesignDemo() {
   const [scale, setScale] = useState(getScale);
-  const pages = buildMonthlyEchoExactPages(monthlyEchoMockReport, index => {
+  const requestedEmotionCount = Number(new URLSearchParams(window.location.search).get('emotionCount'));
+  const emotionCount = Number.isFinite(requestedEmotionCount)
+    ? Math.max(0, Math.min(5, Math.floor(requestedEmotionCount)))
+    : monthlyEchoMockReport.pages.overview.emotions.length;
+  const report = {
+    ...monthlyEchoMockReport,
+    pages: {
+      ...monthlyEchoMockReport.pages,
+      overview: {
+        ...monthlyEchoMockReport.pages.overview,
+        emotions: monthlyEchoMockReport.pages.overview.emotions.slice(0, emotionCount),
+        fallback: emotionCount === 0,
+        contentState: emotionCount === 0 ? 'fallback' as const : emotionCount >= 3 ? 'ready' as const : 'partial' as const,
+      },
+    },
+  };
+  const pages = buildMonthlyEchoExactPages(report, index => {
     document.querySelectorAll<HTMLElement>('.monthly-v2-demo-slot')[index]?.scrollIntoView({ behavior: 'smooth' });
   });
 

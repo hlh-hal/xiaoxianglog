@@ -25,6 +25,11 @@ import { startDailyReminderScheduler } from './lib/dailyReminderScheduler.js';
 import { startMonthlyEchoScheduler } from './lib/monthlyEchoScheduler.js';
 import { startDailyEchoScheduler } from './lib/dailyEchoScheduler.js';
 import { isDailyEchoBackgroundEnabled } from './lib/dailyEchoService.js';
+import {
+  MONTHLY_ARC_PROMPT_VERSION,
+  MONTHLY_ECHO_PROMPT_VERSION,
+  MONTHLY_TRACE_PROMPT_VERSION,
+} from './lib/monthlyEchoUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -151,6 +156,11 @@ app.get(['/api/health', '/health'], (_req, res) => {
     build: SERVER_BUILD_ID,
     capabilities: {
       dailyEchoBackground: isDailyEchoBackgroundEnabled(),
+      monthlyEchoVersions: {
+        trace: MONTHLY_TRACE_PROMPT_VERSION,
+        arc: MONTHLY_ARC_PROMPT_VERSION,
+        render: MONTHLY_ECHO_PROMPT_VERSION,
+      },
     },
     pid: process.pid,
   });

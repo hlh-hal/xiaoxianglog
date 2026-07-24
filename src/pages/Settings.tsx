@@ -35,6 +35,9 @@ import {
   notificationPreferenceStore,
   type NotificationStorageKey,
 } from '../features/notifications/notificationPreferences';
+import { validateExportDateRange } from '../utils/exportDateRange';
+import type { DiaryExportDateRange, ExportRangeType } from '../utils/exportDateRange';
+import { toDiaryDateKey } from '../utils/diaryDate';
 
 type PendingNotificationToggle =
   | { type: 'reminder' }
@@ -57,6 +60,10 @@ export default function Settings() {
   const [loadingMessage, setLoadingMessage] = useState('处理中...');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [importData, setImportData] = useState<ParsedEntry[] | null>(null);
+  const [exportRangeType, setExportRangeType] = useState<ExportRangeType>('all');
+  const [exportStartDate, setExportStartDate] = useState(() => toDiaryDateKey());
+  const [exportEndDate, setExportEndDate] = useState(() => toDiaryDateKey());
+  const [isExporting, setIsExporting] = useState(false);
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
   const [vaultSyncProgress, setVaultSyncProgress] = useState<{ done: number; total: number; title: string } | null>(null);
   const [permissionFeatureName, setPermissionFeatureName] = useState('通知功能');
@@ -432,21 +439,45 @@ export default function Settings() {
     }).catch(error => console.warn('Failed to sync monthly echo push time:', error));
   };
 
-  const handleExport = async (formatName: string) => {
-    if (formatName !== 'markdown') {
-      showToast('暂只支持 Markdown 导出');
-      return;
-    }
+  const openExportSheet = () => {
+    const today = toDiaryDateKey();
+    setExportRangeType('all');
+    setExportStartDate(today);
+    setExportEndDate(today);
+    setActiveSheet('export');
+  };
 
-    setActiveSheet(null);
+  const closeExportSheet = () => {
+    if (!isExporting) setActiveSheet(null);
+  };
+
+  const exportRange: DiaryExportDateRange = {
+    type: exportRangeType,
+    startDate: exportStartDate,
+    endDate: exportEndDate,
+  };
+  const exportRangeError = validateExportDateRange(exportRange);
+
+  const handleExport = async () => {
+    if (isExporting || exportRangeError) return;
+
+    setIsExporting(true);
     setIsLoading(true);
+    setLoadingMessage('正在导出日记...');
     try {
-      const count = await exportDiariesToMarkdown();
-      showToast(count > 0 ? `已导出 ${count} 篇日记` : '暂无可导出的日记');
+      const count = await exportDiariesToMarkdown(exportRange);
+      if (count === 0) {
+        showToast(exportRangeType === 'custom' ? '所选时间范围内没有日记' : '暂无可导出的日记');
+        return;
+      }
+
+      setActiveSheet(null);
+      showToast(`已导出 ${count} 篇日记`);
     } catch (error) {
       console.error(error);
       showToast('导出失败，请稍后重试');
     } finally {
+      setIsExporting(false);
       setIsLoading(false);
     }
   };
@@ -997,7 +1028,7 @@ export default function Settings() {
         <section className="space-y-3">
           <SectionTitle title="导入导出" />
           <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(47,52,46,0.02)] overflow-hidden">
-            <button onClick={() => handleExport('markdown')} className="w-full flex items-center justify-between px-5 py-4 border-b border-surface-container/50 active:bg-surface-container-low transition-colors">
+            <button onClick={openExportSheet} className="w-full flex items-center justify-between px-5 py-4 border-b border-surface-container/50 active:bg-surface-container-low transition-colors">
               <span className="text-[15px] font-medium">导出日记</span>
               <div className="flex items-center gap-2">
                 <span className="text-sm text-on-surface-variant">Markdown</span>
@@ -1115,6 +1146,95 @@ export default function Settings() {
           >
             重新申请权限
           </button>
+        </div>
+      </BottomSheet>
+
+      <BottomSheet isOpen={activeSheet === 'export'} onClose={closeExportSheet} title="导出日记">
+        <div className="flex flex-col gap-4 py-1">
+          <p className="text-sm leading-6 text-on-surface-variant">
+            选择需要导出的日记时间范围，导出格式仍为 Markdown。
+          </p>
+
+          <div className="overflow-hidden rounded-2xl border border-surface-container-high bg-surface-container-lowest">
+            <button
+              type="button"
+              aria-pressed={exportRangeType === 'all'}
+              onClick={() => setExportRangeType('all')}
+              className="flex w-full items-center gap-3 border-b border-surface-container-high px-4 py-4 text-left active:bg-surface-container-low"
+            >
+              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${exportRangeType === 'all' ? 'border-primary' : 'border-outline-variant'}`}>
+                {exportRangeType === 'all' && <span className="h-2.5 w-2.5 rounded-full bg-primary" />}
+              </span>
+              <span>
+                <span className="block text-[15px] font-medium text-on-surface">全部时间</span>
+                <span className="mt-0.5 block text-xs text-on-surface-variant">导出当前全部日记</span>
+              </span>
+            </button>
+
+            <button
+              type="button"
+              aria-pressed={exportRangeType === 'custom'}
+              onClick={() => setExportRangeType('custom')}
+              className="flex w-full items-center gap-3 px-4 py-4 text-left active:bg-surface-container-low"
+            >
+              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${exportRangeType === 'custom' ? 'border-primary' : 'border-outline-variant'}`}>
+                {exportRangeType === 'custom' && <span className="h-2.5 w-2.5 rounded-full bg-primary" />}
+              </span>
+              <span className="text-[15px] font-medium text-on-surface">自定义时间范围</span>
+            </button>
+          </div>
+
+          {exportRangeType === 'custom' && (
+            <div className="grid grid-cols-2 gap-3 rounded-2xl bg-surface-container-low p-4">
+              <label className="flex min-w-0 flex-col gap-2 text-xs font-medium text-on-surface-variant">
+                开始日期
+                <input
+                  type="date"
+                  value={exportStartDate}
+                  max={exportEndDate || toDiaryDateKey()}
+                  onChange={(event) => setExportStartDate(event.target.value)}
+                  className="min-w-0 w-full rounded-xl border border-outline/20 bg-surface px-3 py-2.5 text-sm text-on-surface outline-none focus:border-primary"
+                />
+              </label>
+              <label className="flex min-w-0 flex-col gap-2 text-xs font-medium text-on-surface-variant">
+                结束日期
+                <input
+                  type="date"
+                  value={exportEndDate}
+                  min={exportStartDate || undefined}
+                  max={toDiaryDateKey()}
+                  onChange={(event) => setExportEndDate(event.target.value)}
+                  className="min-w-0 w-full rounded-xl border border-outline/20 bg-surface px-3 py-2.5 text-sm text-on-surface outline-none focus:border-primary"
+                />
+              </label>
+            </div>
+          )}
+
+          {exportRangeType === 'custom' && exportRangeError && (
+            <p role="alert" className="rounded-xl bg-error/10 px-3 py-2.5 text-sm text-error">
+              {exportRangeError}
+            </p>
+          )}
+
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              onClick={closeExportSheet}
+              disabled={isExporting}
+              className="flex-1 rounded-xl bg-surface-container-low py-3 font-medium text-on-surface active:scale-95 disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={Boolean(exportRangeError) || isExporting}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary py-3 font-medium text-white active:scale-95 disabled:opacity-50 disabled:active:scale-100"
+            >
+              {isExporting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {isExporting ? '正在导出' : '导出'}
+            </button>
+          </div>
         </div>
       </BottomSheet>
 

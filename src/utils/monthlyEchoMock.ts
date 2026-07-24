@@ -8,6 +8,18 @@ const occurrence = (date: string, scene: string, index: number) => ({
   evidenceIds: [`mock-${index}`],
 });
 
+const emotion = (name: string, dates: string[], evidence: string, event: string, meaning: string, index: number) => ({
+  emotion: name,
+  dates,
+  evidence,
+  event,
+  eventEvidence: event,
+  eventEvidenceIds: [`mock-event-${index}`],
+  meaning,
+  text: name,
+  evidenceIds: [`mock-emotion-${index}`],
+});
+
 export const monthlyEchoMockReport: MonthlyEchoRenderPayload = {
   schemaVersion: 2,
   monthKey: '2026-06',
@@ -15,6 +27,16 @@ export const monthlyEchoMockReport: MonthlyEchoRenderPayload = {
     entrance: { contentState: 'ready', month: '六月', monthEn: 'June', diaryCount: 18 },
     overview: {
       contentState: 'ready',
+      emotionArc: '你从一开始的紧绷和反复确认，慢慢走到愿意停下来听听自己的感受，也开始把注意力放回真正想守住的事情上。',
+      emotionPattern: 'mixed',
+      emotions: [
+        emotion('疲惫', ['2026-06-08', '2026-06-10'], '这几天真的很累，只想先停一下。', '连续赶项目交付，还在整理搬家的物品。', '多件事情同时压在了一起。', 1),
+        emotion('期待', ['2026-06-16'], '写到那段关系时，我还是有一点期待。', '和那个人重新聊起了周末见面的安排。', '靠近和保护自己的需要同时存在。', 2),
+        emotion('迟疑', ['2026-06-21'], '我又在确认自己是不是做得不够。', '提交方案前反复检查了好几遍。', '对结果的在意让决定变得反复。', 3),
+        emotion('松一口气', ['2026-06-24'], '重新做起那件事时，我松了一口气。', '搁置一周后重新打开了画稿。', '这一天的记录里出现了短暂的轻松。', 4),
+        emotion('担心', ['2026-06-27'], '想到下个月的安排，我还是有些担心。', '房租续约和出差日期还没有确定。', '尚未确定的事情占据了一部分注意力。', 5),
+      ],
+      fallback: false,
       initialQuestion: '我是不是做得还不够？',
       occurrences: [
         occurrence('2026-06-05', '担心自己没有做好。', 1),
@@ -50,7 +72,7 @@ export const monthlyEchoMockReport: MonthlyEchoRenderPayload = {
         { ...occurrence('2026-06-03', '那一次很小，但你表达了自己的感受。', 10), action: '表达了一次不舒服', meaning: '没有压下感受', iconHint: 'express' },
         { ...occurrence('2026-06-10', '很累时没有继续硬撑。', 11), action: '停下来休息', meaning: '允许自己慢一点', iconHint: 'pause' },
         { ...occurrence('2026-06-18', '把混乱的计划重新排了一遍。', 12), action: '重新整理计划', meaning: '事情变得可处理', iconHint: 'organize' },
-        { ...occurrence('2026-06-22', '没有马上责怪自己。', 13), action: '没有责怪自己', meaning: '换了一种回应', iconHint: 'boundary' },
+        { ...occurrence('2026-06-22', '整理工作空间时。', 13), action: '清理桌面与待办，删除因不好意思拒绝而保留的任务', scene: '整理工作空间时', meaning: '换了一种回应', iconHint: 'boundary' },
         { ...occurrence('2026-06-27', '重新做起想做的小事。', 14), action: '重新开始', meaning: '靠近想去的方向', iconHint: 'restart' },
       ],
       summary: '这些行动都很小，但它们不是没有重量。',

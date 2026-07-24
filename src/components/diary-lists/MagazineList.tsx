@@ -19,9 +19,10 @@ interface ListProps {
   handlePointerDown: (e: React.PointerEvent | React.TouchEvent, journal: DiaryEntry) => void;
   handlePointerMove: (e: React.PointerEvent | React.TouchEvent) => void;
   handlePointerUp: (journal: DiaryEntry) => void;
+  handleClick: (journal: DiaryEntry) => void;
 }
 
-export function MagazineList({ journals, isMultiSelectMode, selectedJournals, handlePointerDown, handlePointerMove, handlePointerUp }: ListProps) {
+export function MagazineList({ journals, isMultiSelectMode, selectedJournals, handlePointerDown, handlePointerMove, handlePointerUp, handleClick }: ListProps) {
   return (
     <div className="flex flex-col gap-6">
       {journals.map((journal) => {
@@ -45,6 +46,7 @@ export function MagazineList({ journals, isMultiSelectMode, selectedJournals, ha
             onPointerDown={(e) => handlePointerDown(e, journal)}
             onPointerMove={handlePointerMove}
             onPointerUp={() => handlePointerUp(journal)}
+            onClick={() => handleClick(journal)}
             onPointerCancel={handlePointerMove}
             onContextMenu={(e) => e.preventDefault()}
           >

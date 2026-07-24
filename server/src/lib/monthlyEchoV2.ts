@@ -8,8 +8,14 @@ export const ACTION_ICON_HINTS = [
   'express', 'pause', 'organize', 'refuse', 'try', 'persist', 'adjust', 'restart',
   'askHelp', 'record', 'exercise', 'create', 'accompany', 'clean', 'repair', 'boundary', 'other',
 ] as const;
+export const EMOTION_PATTERNS = [
+  'stable_positive', 'stable_low', 'stable_neutral', 'improving',
+  'declining', 'fluctuating', 'mixed', 'unclear',
+] as const;
+export const MONTHLY_EMOTION_EMPTY_MESSAGE = '这个月更多是事件记录，情绪没有明显浮出';
 
 export type ActionIconHint = typeof ACTION_ICON_HINTS[number];
+export type EmotionPattern = typeof EMOTION_PATTERNS[number];
 export type ContentState = 'ready' | 'partial' | 'fallback';
 
 export type EvidenceQuoteV2 = {
@@ -75,12 +81,24 @@ export type RecurringOccurrenceV2 = EvidenceClaimV2 & {
   evidence: string;
 };
 
+export type MonthlyEmotionV2 = EvidenceClaimV2 & {
+  emotion: string;
+  dates: string[];
+  evidence: string;
+  event: string;
+  eventEvidence: string;
+  eventEvidenceIds: string[];
+  meaning: string;
+};
+
 export type MonthlyArcPayloadV2 = {
   schemaVersion: 2;
   mainArc: EvidenceClaimV2 | null;
   keyMoments: KeyMomentV2[];
   actionTrace: ActionTraceV2[];
   emotionArc: EvidenceClaimV2 | null;
+  emotionPattern?: EmotionPattern;
+  emotions?: MonthlyEmotionV2[];
   recurringPattern: {
     lead: string;
     question: string;
@@ -106,6 +124,10 @@ export type MonthlyEchoRenderPayloadV2 = {
   pages: {
     entrance: { month: string; monthEn: string; diaryCount: number } & PageBase;
     overview: {
+      emotionArc: string;
+      emotionPattern: EmotionPattern;
+      emotions: MonthlyEmotionV2[];
+      fallback: boolean;
       initialQuestion: string;
       occurrences: RecurringOccurrenceV2[];
       evolvedQuestion: string;
@@ -205,7 +227,8 @@ export function normalizeDailyTraceV2(
 ): DailyTracePayloadV2 {
   const quotes = exactQuotes(value.evidenceQuotes, sourceText, entryId, date);
   const lookup = evidenceLookup(quotes);
-  const actions = objectArray(value.actions)
+  const importantEvents = dailyClaims(value.importantEvents, lookup, 3, 90);
+  const explicitActions = objectArray(value.actions)
     .map(item => {
       const claim = claimFromDaily({ text: item.action, evidenceQuotes: item.evidenceQuotes }, lookup, 50);
       const action = sanitizeShortText(item.action, 32);
@@ -217,8 +240,12 @@ export function normalizeDailyTraceV2(
         iconHint: normalizeIconHint(item.iconHint),
       };
     })
-    .filter((item): item is DailyActionV2 => Boolean(item))
-    .slice(0, 6);
+    .filter((item): item is DailyActionV2 => Boolean(item));
+  const actions = mergeDailyActions(explicitActions, actionsFromImportantEvents(importantEvents, quotes)).slice(0, 6);
+  const emotionTone = mergeEvidenceClaims(
+    dailyClaims(value.emotionTone, lookup, 4, 60),
+    emotionClaimsFromEvidence(quotes),
+  ).slice(0, 4);
   const smallChangeRaw = value.smallChange && typeof value.smallChange === 'object' && !Array.isArray(value.smallChange)
     ? value.smallChange as Record<string, unknown>
     : null;
@@ -226,8 +253,8 @@ export function normalizeDailyTraceV2(
   return {
     schemaVersion: MONTHLY_ECHO_SCHEMA_VERSION,
     date,
-    importantEvents: dailyClaims(value.importantEvents, lookup, 3, 90),
-    emotionTone: dailyClaims(value.emotionTone, lookup, 4, 60),
+    importantEvents,
+    emotionTone,
     actions,
     conflicts: dailyClaims(value.conflicts, lookup, 4, 90),
     relationships: dailyClaims(value.relationships, lookup, 4, 90),
@@ -255,6 +282,198 @@ function claimFromArc(raw: Record<string, unknown>, registry: EvidenceRegistry, 
 
 function resolveEvidence(ids: string[], registry: EvidenceRegistry): EvidenceQuoteV2 | null {
   return ids.map(id => registry.get(id)).find((item): item is EvidenceQuoteV2 => Boolean(item)) || null;
+}
+
+const EMOTION_LABEL_PATTERN = /(?:开心|快乐|期待|兴奋|满足|安心|平静|轻松|松一口气|疲惫|疲倦|累|焦虑|担心|不安|紧张|难过|低落|失落|沮丧|孤独|愤怒|生气|委屈|害怕|恐惧|压抑|烦躁|迷茫|混乱|心乱|迟疑|犹豫|遗憾|感动|温暖|释然|无聊|麻木|羞愧|内疚|嫉妒|羡慕|挫败|无力|踏实|笃定|惊喜|想念|在意)/;
+const EMOTION_GROUPS: Array<[RegExp, string]> = [
+  [/(?:疲惫|疲倦|累|无力)/, 'fatigue'],
+  [/(?:焦虑|担心|不安|紧张)/, 'anxiety'],
+  [/(?:难过|低落|失落|沮丧|压抑)/, 'low'],
+  [/(?:愤怒|生气|烦躁)/, 'anger'],
+  [/(?:害怕|恐惧)/, 'fear'],
+  [/(?:迟疑|犹豫|迷茫|混乱|心乱)/, 'uncertainty'],
+  [/(?:开心|快乐|兴奋|惊喜)/, 'joy'],
+  [/(?:安心|平静|轻松|松一口气|踏实|笃定|释然)/, 'calm'],
+  [/(?:期待|在意|想念|温暖|感动)/, 'connection'],
+];
+
+function normalizeEmotionLabel(value: unknown): string {
+  const label = sanitizeShortText(value, 8);
+  return /^(?:(?:心里|心中|感觉|感到|觉得|还是)?(?:有点|有些|很)?)?乱[了。！!？?]*$/.test(label)
+    ? '混乱'
+    : label;
+}
+
+const EXPLICIT_EMOTION_EVIDENCE: Array<[RegExp, string]> = [
+  [/(?:有点|有些|心里|心中|感觉|感到|觉得|还是)乱/, '混乱'],
+  [/(?:疲惫|疲倦|(?:真的|感觉|感到|觉得|很|好|有点|有些)累)/, '疲惫'],
+  [/(?:焦虑|担心|不安|紧张|难过|低落|失落|沮丧|孤独|愤怒|生气|委屈|害怕|恐惧|压抑|烦躁|迷茫|迟疑|犹豫|遗憾|感动|温暖|释然|无聊|麻木|羞愧|内疚|嫉妒|羡慕|挫败|无力|踏实|笃定|惊喜|想念|在意|期待|兴奋|满足|安心|平静|轻松|开心|快乐)/, ''],
+  [/松一口气/, '轻松'],
+];
+
+function emotionClaimsFromEvidence(quotes: EvidenceQuoteV2[]): EvidenceClaimV2[] {
+  return quotes.flatMap(quote => {
+    for (const [pattern, canonical] of EXPLICIT_EMOTION_EVIDENCE) {
+      const match = pattern.exec(quote.quote);
+      if (!match) continue;
+      const before = quote.quote.slice(Math.max(0, match.index - 4), match.index);
+      if (/(?:不|没|没有|并不|不再)$/.test(before)) continue;
+      const text = normalizeEmotionLabel(canonical || match[0]);
+      if (isExplicitEmotionLabel(text)) return [{ text, evidenceIds: [quote.id] }];
+    }
+    return [];
+  });
+}
+
+function mergeEvidenceClaims(primary: EvidenceClaimV2[], fallback: EvidenceClaimV2[]): EvidenceClaimV2[] {
+  const seenEvidence = new Set<string>();
+  return [...primary, ...fallback].filter(item => {
+    const key = item.evidenceIds[0];
+    if (!key || seenEvidence.has(key)) return false;
+    seenEvidence.add(key);
+    return true;
+  });
+}
+
+const THIRD_PARTY_ACTION_PATTERN = /^(?:朋友|同事|老师|导师|领导|对方|家人|父母|妈妈|爸爸|他|她|他们|她们|客户|医生|室友)(?:说|问|回复|告诉|指出|建议|要求|邀请|帮助|提醒|决定|安排)/;
+
+function inferActionIcon(action: string): ActionIconHint {
+  if (/(?:清理|收拾|删除)/.test(action)) return 'clean';
+  if (/(?:整理|规划|安排|记录|写)/.test(action)) return 'organize';
+  if (/(?:拒绝|边界)/.test(action)) return 'boundary';
+  if (/(?:散步|走|跑|运动|拉伸)/.test(action)) return 'exercise';
+  if (/(?:求助|请.*帮)/.test(action)) return 'askHelp';
+  if (/(?:表达|告诉|沟通|回复)/.test(action)) return 'express';
+  if (/(?:暂停|休息|停下|合上)/.test(action)) return 'pause';
+  return 'other';
+}
+
+function actionsFromImportantEvents(events: EvidenceClaimV2[], quotes: EvidenceQuoteV2[]): DailyActionV2[] {
+  const registry = new Map(quotes.map(item => [item.id, item]));
+  return events.flatMap(event => {
+    const action = sanitizeShortText(event.text, 32);
+    const evidence = event.evidenceIds.map(id => registry.get(id)).find((item): item is EvidenceQuoteV2 => Boolean(item));
+    if (!action || !evidence || !isObservableAction(action) || THIRD_PARTY_ACTION_PATTERN.test(action)) return [];
+    return [{
+      text: action,
+      evidenceIds: event.evidenceIds,
+      action,
+      scene: sanitizeShortText(evidence.quote, 70),
+      iconHint: inferActionIcon(action),
+    }];
+  });
+}
+
+function mergeDailyActions(primary: DailyActionV2[], fallback: DailyActionV2[]): DailyActionV2[] {
+  const seenEvidence = new Set<string>();
+  return [...primary, ...fallback].filter(item => {
+    const key = item.evidenceIds[0];
+    if (!key || seenEvidence.has(key)) return false;
+    seenEvidence.add(key);
+    return true;
+  });
+}
+
+export function isExplicitEmotionLabel(value: string): boolean {
+  const label = normalizeEmotionLabel(value);
+  return Boolean(label) && EMOTION_LABEL_PATTERN.test(label) && !hasUnsafeMonthlyEchoText(label);
+}
+
+function emotionGroup(label: string): string {
+  return EMOTION_GROUPS.find(([pattern]) => pattern.test(label))?.[1] || normalizeEvidenceText(label);
+}
+
+function normalizeEmotionPattern(value: unknown, emotions: MonthlyEmotionV2[]): EmotionPattern {
+  const pattern = EMOTION_PATTERNS.includes(value as EmotionPattern) ? value as EmotionPattern : 'unclear';
+  if (emotions.length === 0) return 'unclear';
+  if (['improving', 'declining', 'fluctuating'].includes(pattern)) {
+    const distinctDates = new Set(emotions.flatMap(item => item.dates));
+    if (distinctDates.size < 3) return 'unclear';
+  }
+  return pattern;
+}
+
+function eventContextForEmotion(
+  evidenceIds: string[],
+  registry: EvidenceRegistry,
+  traces: DailyTracePayloadV2[],
+): Pick<MonthlyEmotionV2, 'event' | 'eventEvidence' | 'eventEvidenceIds'> {
+  const emotionEvidence = evidenceIds.map(id => registry.get(id)).filter((item): item is EvidenceQuoteV2 => Boolean(item));
+  const entryIds = new Set(emotionEvidence.map(item => item.entryId));
+  const emotionIdSet = new Set(evidenceIds);
+  const candidates = traces.flatMap(trace => {
+    const claims = [
+      ...trace.importantEvents.map(item => ({ text: item.text, evidenceIds: item.evidenceIds, priority: 0 })),
+      ...trace.actions.map(item => ({ text: item.scene || item.action, evidenceIds: item.evidenceIds, priority: 1 })),
+      ...trace.conflicts.map(item => ({ text: item.text, evidenceIds: item.evidenceIds, priority: 2 })),
+      ...trace.relationships.map(item => ({ text: item.text, evidenceIds: item.evidenceIds, priority: 3 })),
+      ...(trace.smallChange ? [{ text: trace.smallChange.text, evidenceIds: trace.smallChange.evidenceIds, priority: 4 }] : []),
+    ];
+    return claims.map((claim, claimIndex) => {
+    const eventEvidenceIds = validEvidenceIds(claim.evidenceIds, registry, 3);
+    const eventEvidence = resolveEvidence(eventEvidenceIds, registry);
+    const event = sanitizeShortText(claim.text, 40);
+    if (!event || !eventEvidence || !entryIds.has(eventEvidence.entryId) || hasUnsafeMonthlyEchoText(event)) return null;
+    return {
+      event,
+      eventEvidence: eventEvidence.quote,
+      eventEvidenceIds,
+      isDistinctEvidence: eventEvidenceIds.some(id => !emotionIdSet.has(id)),
+      date: eventEvidence.date,
+      priority: claim.priority,
+      claimIndex,
+    };
+    });
+  }).filter((item): item is NonNullable<typeof item> => Boolean(item))
+    .sort((a, b) => Number(b.isDistinctEvidence) - Number(a.isDistinctEvidence)
+      || a.priority - b.priority
+      || a.date.localeCompare(b.date)
+      || a.claimIndex - b.claimIndex);
+  const event = candidates[0];
+  return event
+    ? { event: event.event, eventEvidence: event.eventEvidence, eventEvidenceIds: event.eventEvidenceIds }
+    : { event: '', eventEvidence: '', eventEvidenceIds: [] };
+}
+
+function normalizeMonthlyEmotions(
+  value: unknown,
+  registry: EvidenceRegistry,
+  traces: DailyTracePayloadV2[],
+): MonthlyEmotionV2[] {
+  const seenEvidence = new Set<string>();
+  const seenGroups = new Set<string>();
+  const traceCandidates = traces.flatMap(trace => trace.emotionTone.map(item => ({
+    emotion: item.text,
+    meaning: '这份感受在这一天被明确写了下来。',
+    evidenceIds: item.evidenceIds,
+  })));
+  return [...objectArray(value), ...traceCandidates].map(item => {
+    const emotion = normalizeEmotionLabel(item.emotion);
+    const meaning = sanitizeShortText(item.meaning, 40);
+    if (!isExplicitEmotionLabel(emotion) || !meaning || hasUnsafeMonthlyEchoText(meaning)) return null;
+    const group = emotionGroup(emotion);
+    if (seenGroups.has(group)) return null;
+    const evidenceIds = validEvidenceIds(item.evidenceIds, registry, 3).filter(id => !seenEvidence.has(id));
+    const evidences = evidenceIds
+      .map(id => registry.get(id))
+      .filter((entry): entry is EvidenceQuoteV2 => Boolean(entry))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    if (evidences.length === 0) return null;
+    evidenceIds.forEach(id => seenEvidence.add(id));
+    seenGroups.add(group);
+    const eventContext = eventContextForEmotion(evidenceIds, registry, traces);
+    return {
+      text: emotion,
+      evidenceIds,
+      emotion,
+      dates: Array.from(new Set(evidences.map(entry => entry.date))),
+      evidence: evidences[0].quote,
+      ...eventContext,
+      meaning,
+    };
+  }).filter((item): item is MonthlyEmotionV2 => Boolean(item))
+    .sort((a, b) => (a.dates[0] || '').localeCompare(b.dates[0] || ''))
+    .slice(0, 5);
 }
 
 function actionTraceFromDaily(
@@ -287,6 +506,22 @@ function mergeActionTrace(primary: ActionTraceV2[], fallback: ActionTraceV2[]): 
     seen.add(key);
     return true;
   });
+}
+
+function normalizeRecurringLead(value: unknown, occurrences: RecurringOccurrenceV2[]): string {
+  const lead = sanitizeShortText(value, 110);
+  const context = /^当你(.+?)时(?:[，,].*)?$/.exec(lead)?.[1] || '';
+  const hasPlaceholder = /(?:…{2,}|\.{3,}|某件事|一些事情|某种情况|某些时候)/.test(context);
+  if (context.length >= 2 && !hasPlaceholder) return lead;
+
+  const source = sanitizeShortText(occurrences[0]?.scene || occurrences[0]?.evidence, 70)
+    .replace(/^当你/, '')
+    .replace(/^你(?:在)?/, '')
+    .replace(/^在/, '');
+  const beforeWhen = /^(.{2,36}?)时(?:[，,。.!！?？]|$)/.exec(source)?.[1];
+  const condition = sanitizeShortText(beforeWhen || source.split(/[，,。.!！?？；;]/)[0], 36)
+    .replace(/[，,。.!！?？；;：:]+$/, '');
+  return condition ? `当你${condition}时，你会很快开始问：` : '';
 }
 
 export function normalizeMonthlyArcV2(
@@ -365,7 +600,7 @@ export function normalizeMonthlyArcV2(
     : null;
   const recurringPattern = recurringRaw && recurringEvidenceIds.length > 0
     ? {
-        lead: sanitizeShortText(recurringRaw.lead, 110),
+        lead: normalizeRecurringLead(recurringRaw.lead, occurrences),
         question: sanitizeShortText(recurringRaw.question, 48),
         occurrences,
         evolvedQuestion,
@@ -376,6 +611,13 @@ export function normalizeMonthlyArcV2(
       }
     : null;
   const emotionRaw = value.emotionArc && typeof value.emotionArc === 'object' ? value.emotionArc as Record<string, unknown> : {};
+  const emotions = normalizeMonthlyEmotions(value.emotions, registry, traces);
+  const legacyEmotionArc = claimFromArc(emotionRaw, registry, 140) || (emotions.length > 0
+    ? {
+        text: `这个月浮现过${emotions.map(item => item.emotion).join('、')}`,
+        evidenceIds: Array.from(new Set(emotions.flatMap(item => item.evidenceIds))),
+      }
+    : null);
   const growthRaw = value.growthDirection && typeof value.growthDirection === 'object' ? value.growthDirection as Record<string, unknown> : {};
   const insightRaw = value.finalInsight && typeof value.finalInsight === 'object' ? value.finalInsight as Record<string, unknown> : {};
   const letter = objectArray(value.letter)
@@ -388,7 +630,9 @@ export function normalizeMonthlyArcV2(
     mainArc: claimFromArc(mainArcRaw, registry, 160),
     keyMoments,
     actionTrace,
-    emotionArc: claimFromArc(emotionRaw, registry, 140),
+    emotionArc: legacyEmotionArc,
+    emotionPattern: normalizeEmotionPattern(value.emotionPattern, emotions),
+    emotions,
     recurringPattern,
     sideThemes,
     growthDirection: claimFromArc(growthRaw, registry, 130),
@@ -416,7 +660,8 @@ export function compileMonthlyEchoReport(
   arc: MonthlyArcPayloadV2,
 ): MonthlyEchoRenderPayloadV2 {
   const monthIndex = Math.max(0, Math.min(11, Number(monthKey.slice(5, 7)) - 1));
-  const overviewState = arc.mainArc && arc.recurringPattern ? 'ready' : arc.mainArc || arc.recurringPattern ? 'partial' : 'fallback';
+  const emotions = arc.emotions || [];
+  const overviewState = emotions.length === 0 ? 'fallback' : emotions.length >= 3 ? 'ready' : 'partial';
   const mapState = state(arc.sideThemes.length, 2);
   const momentsState = state(arc.keyMoments.length, 3);
   const actionsState = state(arc.actionTrace.length, 4);
@@ -436,7 +681,14 @@ export function compileMonthlyEchoReport(
       entrance: { contentState: 'ready', month: CHINESE_MONTHS[monthIndex], monthEn: ENGLISH_MONTHS[monthIndex], diaryCount },
       overview: {
         contentState: overviewState,
-        ...pageFallback(overviewState),
+        ...(overviewState === 'fallback'
+          ? { fallbackMessage: MONTHLY_EMOTION_EMPTY_MESSAGE }
+          : pageFallback(overviewState)),
+        emotionArc: arc.emotionArc?.text || '',
+        emotionPattern: arc.emotionPattern || 'unclear',
+        emotions,
+        fallback: emotions.length === 0,
+        // 旧字段继续随 schema v2 返回，避免破坏已接入的客户端；第二页不再渲染这些反复主题数据。
         initialQuestion: recurring?.question || '',
         occurrences: recurring?.occurrences || [],
         evolvedQuestion: recurring?.evolvedQuestion || '',

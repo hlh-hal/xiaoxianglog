@@ -1,11 +1,13 @@
 export type MonthlyEchoStatus = 'disabled' | 'empty' | 'generating' | 'ready' | 'pushed' | 'stale' | 'failed';
 
 export type MonthlyEchoContentState = 'ready' | 'partial' | 'fallback';
+export type MonthlyEchoEmotionPattern = 'stable_positive' | 'stable_low' | 'stable_neutral' | 'improving' | 'declining' | 'fluctuating' | 'mixed' | 'unclear';
 export type MonthlyEchoIconHint = 'express' | 'pause' | 'organize' | 'refuse' | 'try' | 'persist' | 'adjust' | 'restart' | 'askHelp' | 'record' | 'exercise' | 'create' | 'accompany' | 'clean' | 'repair' | 'boundary' | 'other';
 export type MonthlyEchoOccurrence = { date: string; scene: string; evidence: string; text: string; evidenceIds: string[] };
 export type MonthlyEchoMoment = { date: string; title: string; event: string; meaning: string; evidence: string; text: string; evidenceIds: string[] };
 export type MonthlyEchoAction = { date: string; action: string; scene: string; meaning: string; evidence: string; iconHint: MonthlyEchoIconHint; text: string; evidenceIds: string[] };
 export type MonthlyEchoSideTheme = { date: string; title: string; scene: string; meaning: string; evidence: string; text: string; evidenceIds: string[] };
+export type MonthlyEchoEmotion = { emotion: string; dates: string[]; evidence: string; event?: string; eventEvidence?: string; eventEvidenceIds?: string[]; meaning: string; text: string; evidenceIds: string[] };
 export type MonthlyEchoPageBase = { contentState: MonthlyEchoContentState; fallbackMessage?: string };
 
 export type MonthlyEchoRenderPayload = {
@@ -13,7 +15,7 @@ export type MonthlyEchoRenderPayload = {
   monthKey: string;
   pages: {
     entrance: MonthlyEchoPageBase & { month: string; monthEn: string; diaryCount: number };
-    overview: MonthlyEchoPageBase & { initialQuestion: string; occurrences: MonthlyEchoOccurrence[]; evolvedQuestion: string; mainArc: string; conclusion: string };
+    overview: MonthlyEchoPageBase & { emotionArc: string; emotionPattern: MonthlyEchoEmotionPattern; emotions: MonthlyEchoEmotion[]; fallback: boolean; initialQuestion: string; occurrences: MonthlyEchoOccurrence[]; evolvedQuestion: string; mainArc: string; conclusion: string };
     map: MonthlyEchoPageBase & { mainArc: string; sideThemes: MonthlyEchoSideTheme[]; summary: string };
     moments: MonthlyEchoPageBase & { items: MonthlyEchoMoment[]; summary: string };
     actions: MonthlyEchoPageBase & { items: MonthlyEchoAction[]; summary: string };
